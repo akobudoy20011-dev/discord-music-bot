@@ -14,62 +14,27 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# ============================================================
-# LOGGING
-# ============================================================
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("music_bot")
 
-
-# ============================================================
-# ENVIRONMENT VARIABLES
-# ============================================================
-
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-
-# Render Secret File:
-# /etc/secrets/cookies.txt
 YTDLP_COOKIES_FILE = os.getenv("YTDLP_COOKIES_FILE")
 
 if not DISCORD_TOKEN:
     raise RuntimeError("DISCORD_TOKEN environment variable is not set.")
 
-if YTDLP_COOKIES_FILE:
-    if os.path.isfile(YTDLP_COOKIES_FILE):
-        logger.info("YouTube cookies file found.")
-    else:
-        logger.warning(
-            f"YouTube cookies file was configured but not found: "
-            f"{YTDLP_COOKIES_FILE}"
-        )
-else:
-    logger.warning(
-        "YTDLP_COOKIES_FILE is not set. "
-        "YouTube may reject requests from the Render server."
-    )
-
-
-# ============================================================
-# DISCORD BOT
-# ============================================================
-
 intents = discord.Intents.default()
 intents.message_content = True
 
-bot = commands.Bot(
-    command_prefix="!",
-    intents=intents
-)
+bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
+EMBED_COLOR = discord.Color.from_rgb(88, 101, 242)  # Discord blurple
 
-# ============================================================
-# MUSIC
-# ============================================================
+# ==================== MUSIC ====================
 
 YTDL_OPTIONS = {
-    "format": "bestaudio/best",
+    "format": "bestaudio[ext=m4a]/bestaudio/best",
     "noplaylist": True,
     "nocheckcertificate": True,
     "ignoreerrors": False,
@@ -77,1206 +42,531 @@ YTDL_OPTIONS = {
     "no_warnings": True,
     "default_search": "auto",
     "source_address": "0.0.0.0",
-
-    # YouTube client settings
+    # Pretending to be the YouTube Android app avoids the "Sign in to confirm
+    # you're not a bot" block that cloud/datacenter IPs (like Render's) often hit.
     "extractor_args": {
         "youtube": {
             "player_client": ["android", "web"],
         }
     },
 }
-
-# Add cookies only if Render provided the cookie path.
-if YTDLP_COOKIES_FILE:
+if YTDLP_COOKIES_FILE and os.path.exists(YTDLP_COOKIES_FILE):
     YTDL_OPTIONS["cookiefile"] = YTDLP_COOKIES_FILE
-
+    logger.info(f"Using YouTube cookies from {YTDLP_COOKIES_FILE}")
 
 FFMPEG_OPTIONS = {
-    "before_options": (
-        "-reconnect 1 "
-        "-reconnect_streamed 1 "
-        "-reconnect_delay_max 5"
-    ),
+    "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
     "options": "-vn",
 }
-
 
 ytdl = yt_dlp.YoutubeDL(YTDL_OPTIONS)
 
 
 class YTDLSource(discord.PCMVolumeTransformer):
-
     def __init__(self, source, *, data, volume=0.5):
         super().__init__(source, volume)
-
         self.data = data
-        self.title = data.get("title", "Unknown")
+        self.title = data.get("title")
         self.url = data.get("url")
         self.webpage_url = data.get("webpage_url")
+        self.thumbnail = data.get("thumbnail")
+        self.uploader = data.get("uploader")
+        self.duration = data.get("duration")
 
     @classmethod
     async def from_url(cls, url, *, loop=None, stream=True):
-
         loop = loop or asyncio.get_event_loop()
-
-        # If the user typed a YouTube URL, use it.
-        # Otherwise search YouTube.
-        query = (
-            url
-            if url.startswith("http")
-            else f"ytsearch1:{url}"
-        )
-
+        # "ytsearch1:" makes plain text (song name) resolve to the first search result
+        query = url if url.startswith("http") else f"ytsearch1:{url}"
         data = await loop.run_in_executor(
-            None,
-            lambda: ytdl.extract_info(
-                query,
-                download=not stream
-            )
+            None, lambda: ytdl.extract_info(query, download=not stream)
         )
-
-        if not data:
-            raise RuntimeError("No YouTube result was found.")
-
         if "entries" in data:
-            entries = data.get("entries") or []
-
-            if not entries:
-                raise RuntimeError("No YouTube result was found.")
-
-            data = entries[0]
-
-        filename = (
-            data["url"]
-            if stream
-            else ytdl.prepare_filename(data)
-        )
-
-        return cls(
-            discord.FFmpegPCMAudio(
-                filename,
-                **FFMPEG_OPTIONS
-            ),
-            data=data
-        )
+            data = data["entries"][0]
+        filename = data["url"] if stream else ytdl.prepare_filename(data)
+        return cls(discord.FFmpegPCMAudio(filename, **FFMPEG_OPTIONS), data=data)
 
 
-# ============================================================
-# BOT READY
-# ============================================================
+def format_duration(seconds):
+    if not seconds:
+        return "Live/Unknown"
+    minutes, secs = divmod(int(seconds), 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes}:{secs:02d}"
+
 
 @bot.event
 async def on_ready():
+    logger.info(f"Logged in as {bot.user} (ID: {bot.user.id})")
+    try:
+        await bot.change_presence(
+            activity=discord.Activity(type=discord.ActivityType.listening, name="!help")
+        )
+    except Exception:
+        pass
 
-    logger.info(
-        f"Logged in as {bot.user} "
-        f"(ID: {bot.user.id})"
-    )
-
-
-# ============================================================
-# JOIN
-# ============================================================
 
 @bot.command(name="join")
 async def join(ctx: commands.Context):
-
-    if (
-        ctx.author.voice is None
-        or ctx.author.voice.channel is None
-    ):
-        await ctx.send(
-            "🎤 You need to be in a voice channel first."
-        )
+    if ctx.author.voice is None or ctx.author.voice.channel is None:
+        await ctx.send(embed=error_embed("Join a voice channel first."))
         return
-
     channel = ctx.author.voice.channel
-
     if ctx.voice_client is not None:
         await ctx.voice_client.move_to(channel)
     else:
         await channel.connect()
-
-    await ctx.send(
-        f"🎤 Joined **{channel.name}**."
+    embed = discord.Embed(
+        description=f"🎤 Joined **{channel.name}**",
+        color=EMBED_COLOR,
     )
+    await ctx.send(embed=embed)
 
 
-# ============================================================
-# PLAY MUSIC
-# ============================================================
-
-async def play_song(
-    ctx: commands.Context,
-    query: str
-):
-
-    # Join user's voice channel automatically.
+async def play_song(ctx: commands.Context, query: str):
+    """Shared logic: joins voice if needed, searches/streams, and posts a now-playing embed."""
     if ctx.voice_client is None:
-
-        if (
-            ctx.author.voice is None
-            or ctx.author.voice.channel is None
-        ):
-            await ctx.send(
-                "🎤 You need to be in a voice channel, "
-                "or use `!join` first."
-            )
+        if ctx.author.voice is None or ctx.author.voice.channel is None:
+            await ctx.send(embed=error_embed("Join a voice channel first, or use `!join`."))
             return
-
         await ctx.author.voice.channel.connect()
 
     voice_client = ctx.voice_client
-
-    # Stop currently playing song.
     if voice_client.is_playing():
         voice_client.stop()
 
     async with ctx.typing():
-
         try:
-
-            player = await YTDLSource.from_url(
-                query,
-                loop=bot.loop,
-                stream=True
-            )
-
+            player = await YTDLSource.from_url(query, loop=bot.loop, stream=True)
         except Exception as e:
-
-            logger.exception(
-                "Failed to extract/stream audio"
-            )
-
-            error_text = str(e)
-
-            if (
-                "Sign in to confirm" in error_text
-                or "not a bot" in error_text
-                or "cookies" in error_text.lower()
-            ):
-
-                await ctx.send(
-                    "❌ YouTube blocked the request.\n"
-                    "Make sure the Render `cookies.txt` Secret File "
-                    "and `YTDLP_COOKIES_FILE` environment variable "
-                    "are configured correctly."
-                )
-
-            else:
-
-                await ctx.send(
-                    f"❌ Couldn't find or play that: "
-                    f"`{error_text[:500]}`"
-                )
-
+            logger.exception("Failed to extract/stream audio")
+            await ctx.send(embed=error_embed(f"Couldn't find or play that.\n`{e}`"))
             return
 
         def after_playing(error):
-
             if error:
-                logger.error(
-                    f"Player error: {error}"
-                )
+                logger.error(f"Player error: {error}")
 
-        voice_client.play(
-            player,
-            after=after_playing
-        )
+        voice_client.play(player, after=after_playing)
 
-    link = player.webpage_url or ""
-
-    await ctx.send(
-        f"🎵 **Now playing:** {player.title}\n"
-        f"{link}"
+    embed = discord.Embed(
+        title="🎵 Now Playing",
+        description=f"**[{player.title}]({player.webpage_url or ''})**",
+        color=EMBED_COLOR,
     )
+    if player.uploader:
+        embed.add_field(name="Uploader", value=player.uploader, inline=True)
+    embed.add_field(name="Duration", value=format_duration(player.duration), inline=True)
+    if player.thumbnail:
+        embed.set_thumbnail(url=player.thumbnail)
+    embed.set_footer(text=f"Requested by {ctx.author.display_name}", icon_url=ctx.author.display_avatar.url)
+    await ctx.send(embed=embed)
 
 
 @bot.command(name="play")
-async def play(
-    ctx: commands.Context,
-    *,
-    query: str
-):
-
+async def play(ctx: commands.Context, *, query: str):
     await play_song(ctx, query)
 
 
-# ============================================================
-# LEAVE
-# ============================================================
-
 @bot.command(name="leave")
 async def leave(ctx: commands.Context):
-
     if ctx.voice_client is None:
-
-        await ctx.send(
-            "I'm not connected to a voice channel."
-        )
-
+        await ctx.send(embed=error_embed("I'm not connected to a voice channel."))
         return
-
     await ctx.voice_client.disconnect()
-
-    await ctx.send(
-        "👋 Disconnected."
-    )
+    embed = discord.Embed(description="👋 Disconnected.", color=EMBED_COLOR)
+    await ctx.send(embed=embed)
 
 
-# ============================================================
-# DOWNLOAD SONG
-# ============================================================
+@bot.command(name="download", aliases=["dl", "send"])
+async def download_song(ctx: commands.Context, *, query: str):
+    """Downloads the song as an MP3 and posts it directly in chat."""
+    status_embed = discord.Embed(description=f"⏳ Fetching **{query}**...", color=EMBED_COLOR)
+    status = await ctx.send(embed=status_embed)
 
-@bot.command(
-    name="download",
-    aliases=["dl", "send"]
-)
-async def download_song(
-    ctx: commands.Context,
-    *,
-    query: str
-):
-
-    status = await ctx.send(
-        f"⏳ Fetching **{query}**..."
-    )
-
-    query_url = (
-        query
-        if query.startswith("http")
-        else f"ytsearch1:{query}"
-    )
-
-    os.makedirs(
-        "downloads",
-        exist_ok=True
-    )
-
+    query_url = query if query.startswith("http") else f"ytsearch1:{query}"
+    os.makedirs("downloads", exist_ok=True)
     dl_opts = {
-        "format": "bestaudio/best",
-
-        "outtmpl": (
-            "downloads/%(id)s.%(ext)s"
-        ),
-
-        "postprocessors": [
-            {
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "mp3",
-                "preferredquality": "192",
-            }
-        ],
-
+        "format": "bestaudio[ext=m4a]/bestaudio/best",
+        "outtmpl": "downloads/%(id)s.%(ext)s",
+        "postprocessors": [{
+            "key": "FFmpegExtractAudio",
+            "preferredcodec": "mp3",
+            "preferredquality": "192",
+        }],
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
-
-        "extractor_args": {
-            "youtube": {
-                "player_client": [
-                    "android",
-                    "web"
-                ]
-            }
-        },
+        "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
     }
-
-    # IMPORTANT:
-    # Give the download system the same cookies.
-    if YTDLP_COOKIES_FILE:
+    if YTDLP_COOKIES_FILE and os.path.exists(YTDLP_COOKIES_FILE):
         dl_opts["cookiefile"] = YTDLP_COOKIES_FILE
 
     loop = asyncio.get_event_loop()
-
     mp3_path = None
-    info = None
-
     try:
-
         with yt_dlp.YoutubeDL(dl_opts) as ydl:
-
             info = await loop.run_in_executor(
-                None,
-                lambda: ydl.extract_info(
-                    query_url,
-                    download=True
-                )
+                None, lambda: ydl.extract_info(query_url, download=True)
             )
-
-            if not info:
-                raise RuntimeError(
-                    "No YouTube result was found."
-                )
-
             if "entries" in info:
-
-                entries = info.get("entries") or []
-
-                if not entries:
-                    raise RuntimeError(
-                        "No YouTube result was found."
-                    )
-
-                info = entries[0]
-
-            base, _ = os.path.splitext(
-                ydl.prepare_filename(info)
-            )
-
+                info = info["entries"][0]
+            base, _ = os.path.splitext(ydl.prepare_filename(info))
             mp3_path = base + ".mp3"
-
     except Exception as e:
-
-        logger.exception(
-            "Download failed"
-        )
-
-        error_text = str(e)
-
-        if (
-            "Sign in to confirm" in error_text
-            or "not a bot" in error_text
-            or "cookies" in error_text.lower()
-        ):
-
-            await status.edit(
-                content=(
-                    "❌ YouTube blocked the download.\n"
-                    "Check the Render `cookies.txt` Secret File "
-                    "and `YTDLP_COOKIES_FILE` environment variable."
-                )
-            )
-
-        else:
-
-            await status.edit(
-                content=(
-                    f"❌ Couldn't download that:\n"
-                    f"`{error_text[:500]}`"
-                )
-            )
-
+        logger.exception("Download failed")
+        await status.edit(embed=error_embed(f"Couldn't download that.\n`{e}`"))
         return
 
-    # Make sure the MP3 actually exists.
-    if not mp3_path or not os.path.exists(mp3_path):
-
-        await status.edit(
-            content=(
-                "❌ The MP3 file wasn't created."
-            )
-        )
-
-        return
-
-    # Discord upload limit.
-    limit = (
-        ctx.guild.filesize_limit
-        if ctx.guild
-        else 25 * 1024 * 1024
-    )
-
+    limit = ctx.guild.filesize_limit if ctx.guild else 25 * 1024 * 1024
     size = os.path.getsize(mp3_path)
+    title = info.get("title", "audio")
 
-    title = info.get(
-        "title",
-        "audio"
-    )
-
-    # Discord file too large.
     if size > limit:
-
         await status.edit(
-            content=(
-                f"⚠️ **{title}** is too large to upload here "
-                f"({size // (1024 * 1024)}MB).\n"
-                f"Try `!play {query}` to stream it instead."
+            embed=error_embed(
+                f"**{title}** is too large to upload here "
+                f"({size // (1024*1024)}MB). Try `!play {query}` to stream it instead."
             )
         )
-
-        try:
-            os.remove(mp3_path)
-        except OSError:
-            pass
-
-        return
-
-    # Upload file.
-    await status.delete()
-
-    safe_filename = (
-        title[:80]
-        .replace("/", "_")
-        .replace("\\", "_")
-    )
-
-    await ctx.send(
-        content=f"🎵 **{title}**",
-        file=discord.File(
-            mp3_path,
-            filename=f"{safe_filename}.mp3"
-        )
-    )
-
-    # Delete temporary MP3.
-    try:
         os.remove(mp3_path)
-    except OSError:
-        pass
-
-
-# ============================================================
-# KNOWN COMMANDS
-# ============================================================
-
-KNOWN_COMMANDS = {
-    "join",
-    "play",
-    "leave",
-    "download",
-    "dl",
-    "send",
-
-    # Economy
-    "balance",
-    "bal",
-    "daily",
-    "work",
-    "coinflip",
-    "cf",
-    "slots",
-    "leaderboard",
-    "lb",
-
-    # AI
-    "chat",
-
-    # Help
-    "help",
-}
-
-
-# ============================================================
-# COMMAND ERROR HANDLER
-# ============================================================
-
-@bot.event
-async def on_command_error(
-    ctx: commands.Context,
-    error
-):
-
-    # User typed !play without a song.
-    if isinstance(
-        error,
-        commands.MissingRequiredArgument
-    ):
-
-        await ctx.send(
-            "❌ Missing something.\n"
-            "Example: `!play amatz`"
-        )
-
         return
 
-    # Unknown command = automatically search YouTube.
-    if isinstance(
-        error,
-        commands.CommandNotFound
-    ):
-
-        query = (
-            ctx.message.content[
-                len(ctx.prefix):
-            ]
-            .strip()
-        )
-
-        if (
-            query
-            and query.split()[0].lower()
-            not in KNOWN_COMMANDS
-        ):
-
-            await play_song(
-                ctx,
-                query
-            )
-
-        return
-
-    logger.error(
-        f"Command error: {error}"
+    await status.delete()
+    embed = discord.Embed(
+        title="🎵 Download Ready",
+        description=f"**{title}**",
+        color=EMBED_COLOR,
     )
+    thumb = info.get("thumbnail")
+    if thumb:
+        embed.set_thumbnail(url=thumb)
+    embed.set_footer(text=f"Requested by {ctx.author.display_name}", icon_url=ctx.author.display_avatar.url)
+    await ctx.send(
+        embed=embed,
+        file=discord.File(mp3_path, filename=f"{title[:80]}.mp3"),
+    )
+    os.remove(mp3_path)
 
 
-# ============================================================
-# ECONOMY
-# ============================================================
+# ==================== ECONOMY ====================
 
 ECONOMY_FILE = "economy.json"
-
 STARTING_BALANCE = 100
-
 DAILY_AMOUNT = 200
-
-WORK_MIN = 50
-WORK_MAX = 150
-
-WORK_COOLDOWN = timedelta(
-    hours=1
-)
-
-DAILY_COOLDOWN = timedelta(
-    hours=24
-)
+WORK_MIN, WORK_MAX = 50, 150
+WORK_COOLDOWN = timedelta(hours=1)
+DAILY_COOLDOWN = timedelta(hours=24)
 
 
 def load_economy():
-
-    if os.path.exists(
-        ECONOMY_FILE
-    ):
-
+    if os.path.exists(ECONOMY_FILE):
         try:
-
-            with open(
-                ECONOMY_FILE,
-                "r"
-            ) as f:
-
+            with open(ECONOMY_FILE, "r") as f:
                 return json.load(f)
-
-        except (
-            json.JSONDecodeError,
-            OSError
-        ):
-
+        except (json.JSONDecodeError, OSError):
             return {}
-
     return {}
 
 
 def save_economy():
-
-    with open(
-        ECONOMY_FILE,
-        "w"
-    ) as f:
-
-        json.dump(
-            economy,
-            f,
-            indent=2
-        )
+    with open(ECONOMY_FILE, "w") as f:
+        json.dump(economy, f, indent=2)
 
 
 economy = load_economy()
 
 
 def get_user(uid):
-
     uid = str(uid)
-
     if uid not in economy:
-
-        economy[uid] = {
-            "balance": STARTING_BALANCE,
-            "last_daily": None,
-            "last_work": None
-        }
-
+        economy[uid] = {"balance": STARTING_BALANCE, "last_daily": None, "last_work": None}
     return economy[uid]
 
 
-# ============================================================
-# BALANCE
-# ============================================================
+def error_embed(message):
+    return discord.Embed(description=f"❌ {message}", color=discord.Color.red())
 
-@bot.command(
-    name="balance",
-    aliases=["bal"]
-)
+
+@bot.command(name="balance", aliases=["bal"])
 async def balance(ctx):
-
-    user = get_user(
-        ctx.author.id
+    user = get_user(ctx.author.id)
+    embed = discord.Embed(
+        title="💰 Balance",
+        description=f"**{user['balance']:,}** coins",
+        color=discord.Color.gold(),
     )
+    embed.set_author(name=ctx.author.display_name, icon_url=ctx.author.display_avatar.url)
+    await ctx.send(embed=embed)
 
-    await ctx.send(
-        f"💰 {ctx.author.mention}, "
-        f"you have **{user['balance']}** coins."
-    )
-
-
-# ============================================================
-# DAILY
-# ============================================================
 
 @bot.command(name="daily")
 async def daily(ctx):
-
-    user = get_user(
-        ctx.author.id
-    )
-
-    now = datetime.now(
-        timezone.utc
-    )
-
+    user = get_user(ctx.author.id)
+    now = datetime.now(timezone.utc)
     if user["last_daily"]:
-
-        last = datetime.fromisoformat(
-            user["last_daily"]
-        )
-
-        if (
-            now - last
-            < DAILY_COOLDOWN
-        ):
-
-            remaining = (
-                DAILY_COOLDOWN
-                - (now - last)
-            )
-
-            hrs, rem = divmod(
-                int(
-                    remaining.total_seconds()
-                ),
-                3600
-            )
-
+        last = datetime.fromisoformat(user["last_daily"])
+        if now - last < DAILY_COOLDOWN:
+            remaining = DAILY_COOLDOWN - (now - last)
+            hrs, rem = divmod(int(remaining.total_seconds()), 3600)
             mins = rem // 60
-
-            await ctx.send(
-                f"⏳ Already claimed. "
-                f"Try again in **{hrs}h {mins}m**."
-            )
-
+            await ctx.send(embed=error_embed(f"Already claimed. Try again in **{hrs}h {mins}m**."))
             return
-
     user["balance"] += DAILY_AMOUNT
-
-    user["last_daily"] = (
-        now.isoformat()
-    )
-
+    user["last_daily"] = now.isoformat()
     save_economy()
-
-    await ctx.send(
-        f"✅ {ctx.author.mention} claimed "
-        f"**{DAILY_AMOUNT}** coins!\n"
-        f"💰 Balance: **{user['balance']}**."
+    embed = discord.Embed(
+        title="🎁 Daily Reward",
+        description=f"Claimed **{DAILY_AMOUNT} coins**!\nBalance: **{user['balance']:,}**",
+        color=discord.Color.gold(),
     )
+    embed.set_author(name=ctx.author.display_name, icon_url=ctx.author.display_avatar.url)
+    await ctx.send(embed=embed)
 
-
-# ============================================================
-# WORK
-# ============================================================
 
 @bot.command(name="work")
 async def work(ctx):
-
-    user = get_user(
-        ctx.author.id
-    )
-
-    now = datetime.now(
-        timezone.utc
-    )
-
+    user = get_user(ctx.author.id)
+    now = datetime.now(timezone.utc)
     if user["last_work"]:
-
-        last = datetime.fromisoformat(
-            user["last_work"]
-        )
-
-        if (
-            now - last
-            < WORK_COOLDOWN
-        ):
-
-            remaining = (
-                WORK_COOLDOWN
-                - (now - last)
-            )
-
-            mins = int(
-                remaining.total_seconds()
-                // 60
-            )
-
-            await ctx.send(
-                f"⏳ You're tired. "
-                f"Rest **{mins}m** before working again."
-            )
-
+        last = datetime.fromisoformat(user["last_work"])
+        if now - last < WORK_COOLDOWN:
+            remaining = WORK_COOLDOWN - (now - last)
+            mins = int(remaining.total_seconds() // 60)
+            await ctx.send(embed=error_embed(f"You're tired. Rest **{mins}m** before working again."))
             return
-
-    earned = random.randint(
-        WORK_MIN,
-        WORK_MAX
-    )
-
+    earned = random.randint(WORK_MIN, WORK_MAX)
     user["balance"] += earned
-
-    user["last_work"] = (
-        now.isoformat()
-    )
-
+    user["last_work"] = now.isoformat()
     save_economy()
-
-    await ctx.send(
-        f"🛠️ {ctx.author.mention} earned "
-        f"**{earned}** coins!\n"
-        f"💰 Balance: **{user['balance']}**."
+    embed = discord.Embed(
+        title="🛠️ Work Complete",
+        description=f"Earned **{earned} coins**!\nBalance: **{user['balance']:,}**",
+        color=discord.Color.gold(),
     )
+    embed.set_author(name=ctx.author.display_name, icon_url=ctx.author.display_avatar.url)
+    await ctx.send(embed=embed)
 
 
-# ============================================================
-# COINFLIP
-# ============================================================
-
-@bot.command(
-    name="coinflip",
-    aliases=["cf"]
-)
-async def coinflip(
-    ctx,
-    amount: int,
-    choice: str
-):
-
+@bot.command(name="coinflip", aliases=["cf"])
+async def coinflip(ctx, amount: int, choice: str):
     choice = choice.lower()
-
-    if choice not in (
-        "heads",
-        "tails"
-    ):
-
-        await ctx.send(
-            "Choose `heads` or `tails`.\n"
-            "Usage: `!coinflip <amount> <heads/tails>`"
-        )
-
+    if choice not in ("heads", "tails"):
+        await ctx.send(embed=error_embed("Choose `heads` or `tails`. Usage: `!coinflip <amount> <heads/tails>`"))
         return
-
-    user = get_user(
-        ctx.author.id
-    )
-
-    if (
-        amount <= 0
-        or amount > user["balance"]
-    ):
-
-        await ctx.send(
-            "❌ Invalid bet amount."
-        )
-
+    user = get_user(ctx.author.id)
+    if amount <= 0 or amount > user["balance"]:
+        await ctx.send(embed=error_embed("Invalid bet amount."))
         return
-
-    result = random.choice(
-        [
-            "heads",
-            "tails"
-        ]
-    )
-
-    if result == choice:
-
+    result = random.choice(["heads", "tails"])
+    won = result == choice
+    if won:
         user["balance"] += amount
-
-        outcome = (
-            f"🎉 It landed on **{result}**!\n"
-            f"You won **{amount}** coins."
-        )
-
     else:
-
         user["balance"] -= amount
-
-        outcome = (
-            f"💀 It landed on **{result}**!\n"
-            f"You lost **{amount}** coins."
-        )
-
     save_economy()
-
-    await ctx.send(
-        f"{outcome}\n"
-        f"💰 Balance: **{user['balance']}**."
+    embed = discord.Embed(
+        title="🪙 Coin Flip",
+        description=(
+            f"Landed on **{result}**!\n"
+            f"{'🎉 You won' if won else '💀 You lost'} **{amount:,} coins**\n"
+            f"Balance: **{user['balance']:,}**"
+        ),
+        color=discord.Color.green() if won else discord.Color.red(),
     )
+    embed.set_author(name=ctx.author.display_name, icon_url=ctx.author.display_avatar.url)
+    await ctx.send(embed=embed)
 
-
-# ============================================================
-# SLOTS
-# ============================================================
 
 @bot.command(name="slots")
-async def slots(
-    ctx,
-    amount: int
-):
-
-    user = get_user(
-        ctx.author.id
-    )
-
-    if (
-        amount <= 0
-        or amount > user["balance"]
-    ):
-
-        await ctx.send(
-            "❌ Invalid bet amount.\n"
-            "Usage: `!slots <amount>`"
-        )
-
+async def slots(ctx, amount: int):
+    user = get_user(ctx.author.id)
+    if amount <= 0 or amount > user["balance"]:
+        await ctx.send(embed=error_embed("Invalid bet amount. Usage: `!slots <amount>`"))
         return
-
-    symbols = [
-        "🍒",
-        "🍋",
-        "🍇",
-        "💎",
-        "7️⃣"
-    ]
-
-    spin = [
-        random.choice(symbols)
-        for _ in range(3)
-    ]
-
+    symbols = ["🍒", "🍋", "🍇", "💎", "7️⃣"]
+    spin = [random.choice(symbols) for _ in range(3)]
     display = " | ".join(spin)
-
-    # Jackpot
-    if (
-        spin[0]
-        == spin[1]
-        == spin[2]
-    ):
-
+    if spin[0] == spin[1] == spin[2]:
         winnings = amount * 5
-
         user["balance"] += winnings
-
-        result = (
-            f"🎰 {display}\n"
-            f"🎉 **JACKPOT!** "
-            f"You won **{winnings}** coins."
-        )
-
-    # Two matching
-    elif (
-        spin[0] == spin[1]
-        or spin[1] == spin[2]
-    ):
-
+        result_text = f"🎉 **JACKPOT!** You won **{winnings:,} coins**"
+        color = discord.Color.gold()
+    elif spin[0] == spin[1] or spin[1] == spin[2]:
         winnings = amount * 2
-
         user["balance"] += winnings
-
-        result = (
-            f"🎰 {display}\n"
-            f"✨ Nice! "
-            f"You won **{winnings}** coins."
-        )
-
-    # Lose
+        result_text = f"✨ **Nice!** You won **{winnings:,} coins**"
+        color = discord.Color.green()
     else:
-
         user["balance"] -= amount
-
-        result = (
-            f"🎰 {display}\n"
-            f"💀 No match. "
-            f"You lost **{amount}** coins."
-        )
-
+        result_text = f"💀 No match. You lost **{amount:,} coins**"
+        color = discord.Color.red()
     save_economy()
-
-    await ctx.send(
-        f"{result}\n"
-        f"💰 Balance: **{user['balance']}**."
+    embed = discord.Embed(
+        title="🎰 Slots",
+        description=f"**{display}**\n\n{result_text}\nBalance: **{user['balance']:,}**",
+        color=color,
     )
+    embed.set_author(name=ctx.author.display_name, icon_url=ctx.author.display_avatar.url)
+    await ctx.send(embed=embed)
 
 
-# ============================================================
-# LEADERBOARD
-# ============================================================
-
-@bot.command(
-    name="leaderboard",
-    aliases=["lb"]
-)
+@bot.command(name="leaderboard", aliases=["lb"])
 async def leaderboard(ctx):
-
-    top = sorted(
-        economy.items(),
-        key=lambda x: x[1]["balance"],
-        reverse=True
-    )[:10]
-
+    top = sorted(economy.items(), key=lambda x: x[1]["balance"], reverse=True)[:10]
     if not top:
-
-        await ctx.send(
-            "No economy data yet."
-        )
-
+        await ctx.send(embed=error_embed("No data yet."))
         return
-
+    medals = ["🥇", "🥈", "🥉"]
     lines = []
-
-    for i, (uid, data) in enumerate(
-        top,
-        start=1
-    ):
-
-        member = (
-            ctx.guild.get_member(
-                int(uid)
-            )
-            if ctx.guild
-            else None
-        )
-
-        name = (
-            member.display_name
-            if member
-            else f"User {uid}"
-        )
-
-        lines.append(
-            f"**{i}.** {name} — "
-            f"💰 {data['balance']} coins"
-        )
-
-    await ctx.send(
-        "🏆 **Leaderboard**\n"
-        + "\n".join(lines)
+    for i, (uid, data) in enumerate(top, start=1):
+        member = ctx.guild.get_member(int(uid))
+        name = member.display_name if member else f"User {uid}"
+        prefix = medals[i - 1] if i <= 3 else f"**{i}.**"
+        lines.append(f"{prefix} {name} — `{data['balance']:,}` coins")
+    embed = discord.Embed(
+        title="🏆 Coin Leaderboard",
+        description="\n".join(lines),
+        color=discord.Color.gold(),
     )
+    await ctx.send(embed=embed)
 
 
-# ============================================================
-# AI CHAT / CLAUDE
-# ============================================================
+# ==================== AI CHAT ====================
 
-CLAUDE_API_URL = (
-    "https://api.anthropic.com/v1/messages"
-)
+CLAUDE_API_URL = "https://api.anthropic.com/v1/messages"
+CLAUDE_MODEL = "claude-haiku-4-5-20251001"  # fast + cheap; swap to "claude-sonnet-5" for smarter replies
 
-CLAUDE_MODEL = (
-    "claude-haiku-4-5-20251001"
-)
-
-# Keeps the last few messages per channel.
 chat_history = {}
-
 MAX_HISTORY = 6
 
 
 @bot.command(name="chat")
-async def chat(
-    ctx: commands.Context,
-    *,
-    message: str
-):
-
+async def chat(ctx: commands.Context, *, message: str):
     if not ANTHROPIC_API_KEY:
-
-        await ctx.send(
-            "🤖 AI chat isn't set up yet — "
-            "missing `ANTHROPIC_API_KEY`."
-        )
-
+        await ctx.send(embed=error_embed("AI chat isn't set up yet — missing `ANTHROPIC_API_KEY`."))
         return
 
-    channel_id = str(
-        ctx.channel.id
-    )
-
-    history = chat_history.setdefault(
-        channel_id,
-        []
-    )
-
-    history.append(
-        {
-            "role": "user",
-            "content": message
-        }
-    )
-
-    history[:] = history[
-        -MAX_HISTORY:
-    ]
+    channel_id = str(ctx.channel.id)
+    history = chat_history.setdefault(channel_id, [])
+    history.append({"role": "user", "content": message})
+    history[:] = history[-MAX_HISTORY:]
 
     async with ctx.typing():
-
         try:
-
             async with aiohttp.ClientSession() as session:
-
                 async with session.post(
                     CLAUDE_API_URL,
-
                     headers={
-                        "x-api-key":
-                            ANTHROPIC_API_KEY,
-
-                        "anthropic-version":
-                            "2023-06-01",
-
-                        "content-type":
-                            "application/json",
+                        "x-api-key": ANTHROPIC_API_KEY,
+                        "anthropic-version": "2023-06-01",
+                        "content-type": "application/json",
                     },
-
                     json={
-                        "model":
-                            CLAUDE_MODEL,
-
-                        "max_tokens":
-                            500,
-
-                        "system":
-                            (
-                                "You are a friendly, "
-                                "concise Discord bot "
-                                "assistant. Keep replies "
-                                "short and casual, "
-                                "fitting for a chat message."
-                            ),
-
-                        "messages":
-                            history,
+                        "model": CLAUDE_MODEL,
+                        "max_tokens": 500,
+                        "system": "You are a friendly, concise Discord bot assistant. Keep replies short and casual, fitting for a chat message.",
+                        "messages": history,
                     },
-
                 ) as resp:
-
                     data = await resp.json()
-
                     if resp.status != 200:
-
-                        logger.error(
-                            f"Claude API error: {data}"
-                        )
-
-                        await ctx.send(
-                            "❌ Sorry, I couldn't "
-                            "get a response right now."
-                        )
-
+                        logger.error(f"Claude API error: {data}")
+                        await ctx.send(embed=error_embed("Sorry, I couldn't get a response right now."))
                         return
-
-                    reply = (
-                        data["content"][0]["text"]
-                    )
-
+                    reply = data["content"][0]["text"]
         except Exception:
-
-            logger.exception(
-                "Claude API call failed"
-            )
-
-            await ctx.send(
-                "❌ Something went wrong "
-                "reaching the AI."
-            )
-
+            logger.exception("Claude API call failed")
+            await ctx.send(embed=error_embed("Something went wrong reaching the AI."))
             return
 
-    history.append(
-        {
-            "role": "assistant",
-            "content": reply
-        }
+    history.append({"role": "assistant", "content": reply})
+    history[:] = history[-MAX_HISTORY:]
+
+    embed = discord.Embed(description=reply[:4000], color=EMBED_COLOR)
+    embed.set_author(name="🤖 Music Delivery", icon_url=bot.user.display_avatar.url if bot.user else None)
+    await ctx.send(embed=embed)
+
+
+# ==================== HELP ====================
+
+@bot.command(name="help", aliases=["commands"])
+async def help_command(ctx: commands.Context):
+    embed = discord.Embed(
+        title="🎵 Music Delivery — Commands",
+        color=EMBED_COLOR,
     )
-
-    history[:] = history[
-        -MAX_HISTORY:
-    ]
-
-    # Discord messages have a 2000-character limit.
-    for i in range(
-        0,
-        len(reply),
-        2000
-    ):
-
-        await ctx.send(
-            reply[i:i + 2000]
-        )
-
-
-# ============================================================
-# RENDER KEEP-ALIVE / HEALTH SERVER
-# ============================================================
-
-async def health(
-    request
-):
-
-    return web.Response(
-        text="Bot is running."
+    embed.add_field(
+        name="🎶 Music",
+        value="`!play <song>`\n`!download <song>`\n`!join` • `!leave`\n"
+              "_Tip: just type `!<song name>` to play instantly_",
+        inline=False,
     )
+    embed.add_field(
+        name="💰 Economy",
+        value="`!balance` `!daily` `!work`\n`!leaderboard`",
+        inline=False,
+    )
+    embed.add_field(
+        name="🎮 Games",
+        value="`!coinflip <amount> heads/tails`\n`!slots <amount>`",
+        inline=False,
+    )
+    embed.add_field(
+        name="🤖 AI Chat",
+        value="`!chat <message>`",
+        inline=False,
+    )
+    embed.set_footer(text="Music Delivery Bot")
+    await ctx.send(embed=embed)
+
+
+# Lets people just type "!<song name>" instead of "!play <song name>"
+KNOWN_COMMANDS = {"join", "play", "leave", "download", "dl", "send", "balance",
+                   "bal", "daily", "work", "coinflip", "cf", "slots",
+                   "leaderboard", "lb", "chat", "help", "commands"}
+
+
+@bot.event
+async def on_command_error(ctx: commands.Context, error):
+    if isinstance(error, commands.CommandNotFound):
+        query = ctx.message.content[len(ctx.prefix):].strip()
+        if query and query.split()[0].lower() not in KNOWN_COMMANDS:
+            await play_song(ctx, query)
+        return
+    if isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send(embed=error_embed(f"Missing something. Try `!help` for usage."))
+        return
+    logger.error(f"Command error: {error}")
+
+
+# ==================== KEEP-ALIVE WEB SERVER ====================
+# Render's free Web Service tier requires an open port to detect the app as
+# "running." The bot itself doesn't need one (it only talks to Discord), so
+# this starts a tiny server alongside it just to satisfy that health check.
+
+async def health(request):
+    return web.Response(text="Bot is running.")
 
 
 async def start_web_server():
-
     app = web.Application()
-
-    app.router.add_get(
-        "/",
-        health
-    )
-
-    runner = web.AppRunner(
-        app
-    )
-
+    app.router.add_get("/", health)
+    runner = web.AppRunner(app)
     await runner.setup()
-
-    port = int(
-        os.getenv(
-            "PORT",
-            10000
-        )
-    )
-
-    site = web.TCPSite(
-        runner,
-        "0.0.0.0",
-        port
-    )
-
+    port = int(os.getenv("PORT", 10000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
+    logger.info(f"Health check server listening on port {port}")
 
-    logger.info(
-        f"Health check server listening "
-        f"on port {port}"
-    )
-
-
-# ============================================================
-# MAIN
-# ============================================================
 
 async def main():
-
     await start_web_server()
-
     async with bot:
-
-        await bot.start(
-            DISCORD_TOKEN
-        )
+        await bot.start(DISCORD_TOKEN)
 
 
 if __name__ == "__main__":
-
-    asyncio.run(
-        main()
-    )
+    asyncio.run(main())
