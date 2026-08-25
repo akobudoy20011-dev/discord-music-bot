@@ -38,6 +38,13 @@ YTDL_OPTIONS = {
     "no_warnings": True,
     "default_search": "auto",
     "source_address": "0.0.0.0",
+    # Pretending to be the YouTube Android app avoids the "Sign in to confirm
+    # you're not a bot" block that cloud/datacenter IPs (like Render's) often hit.
+    "extractor_args": {
+        "youtube": {
+            "player_client": ["android", "web"],
+        }
+    },
 }
 
 FFMPEG_OPTIONS = {
