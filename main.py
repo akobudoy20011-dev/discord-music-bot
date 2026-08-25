@@ -9,6 +9,7 @@ import discord
 from discord.ext import commands
 import yt_dlp
 import aiohttp
+from aiohttp import web
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -347,5 +348,31 @@ async def chat(ctx: commands.Context, *, message: str):
         await ctx.send(reply[i:i + 2000])
 
 
+# ==================== KEEP-ALIVE WEB SERVER ====================
+# Render's free Web Service tier requires an open port to detect the app as
+# "running." The bot itself doesn't need one (it only talks to Discord), so
+# this starts a tiny server alongside it just to satisfy that health check.
+
+async def health(request):
+    return web.Response(text="Bot is running.")
+
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get("/", health)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.getenv("PORT", 10000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logger.info(f"Health check server listening on port {port}")
+
+
+async def main():
+    await start_web_server()
+    async with bot:
+        await bot.start(DISCORD_TOKEN)
+
+
 if __name__ == "__main__":
-    bot.run(DISCORD_TOKEN)
+    asyncio.run(main())
