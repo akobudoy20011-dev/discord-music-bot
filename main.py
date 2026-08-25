@@ -26,10 +26,78 @@ if not DISCORD_TOKEN:
 
 intents = discord.Intents.default()
 intents.message_content = True
+intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 EMBED_COLOR = discord.Color.from_rgb(88, 101, 242)  # Discord blurple
+
+# ==================== BARTENDER PERSONALITY ====================
+# Shared flavor text so games, 8-ball, etc. don't all sound like a form letter.
+
+EIGHTBALL_RESPONSES = {
+    "positive": [
+        "I'd put money on it.",
+        "Honestly? Yeah.",
+        "Looks good from where I'm standing.",
+        "I'd say you've got this.",
+        "The odds are weirdly in your favor.",
+        "Yeah. Don't overthink it.",
+    ],
+    "negative": [
+        "I'd leave that one alone.",
+        "Yeah... I wouldn't.",
+        "That's looking rough.",
+        "Probably not the hill you wanna die on.",
+        "My professional opinion? Absolutely not.",
+        "You already know the answer to that.",
+    ],
+    "uncertain": [
+        "Could go either way.",
+        "That's a dangerous coin toss.",
+        "Ask me after another drink.",
+        "The universe is being suspiciously quiet on this one.",
+        "I genuinely don't know on that one.",
+        "You're asking me to gamble with information I don't have.",
+    ],
+    "sarcastic": [
+        "Bold question for someone who already made up their mind.",
+        "You came here for validation, didn't you?",
+        "Interesting. Very interesting. I'm choosing not to elaborate.",
+        "You want the honest answer or the one that'll make you feel better?",
+        "You already know better than to ask me that.",
+        "That's between you and whatever decision led you here.",
+    ],
+}
+
+COINFLIP_WIN_LINES = [
+    "Beginner's luck. Don't get used to it.",
+    "Look at that. The house lost one.",
+    "I'll allow it.",
+    "Someone's feeling lucky tonight.",
+]
+COINFLIP_LOSE_LINES = [
+    "Tough luck. Try not to take it personally.",
+    "The coin has spoken. It's not on your side.",
+    "That's rough. Want a napkin for that L?",
+    "Statistically expected, honestly.",
+]
+SLOTS_JACKPOT_LINES = [
+    "Okay, NOW I'm paying attention.",
+    "Alright, big winner over here. Everyone look.",
+    "I don't know how you did that, but I'm impressed.",
+]
+SLOTS_WIN_LINES = [
+    "Not bad. Not bad at all.",
+    "Two out of three ain't nothing.",
+    "The machine likes you tonight. Suspicious, but I'll allow it.",
+]
+SLOTS_LOSE_LINES = [
+    "That spin was rough. I'm not even charging you emotionally.",
+    "The house always wins eventually. Today was 'eventually.'",
+    "Painful. Truly painful to watch.",
+    "That's one for the memory book. Not a good one.",
+]
 
 # ==================== MUSIC ====================
 
@@ -290,6 +358,151 @@ def error_embed(message):
     return discord.Embed(description=f"❌ {message}", color=discord.Color.red())
 
 
+# ==================== LEVELING & RANKS ====================
+
+LEVEL_FILE = "levels.json"
+XP_MIN, XP_MAX = 8, 18
+XP_COOLDOWN_SECONDS = 45
+
+levels = {}
+if os.path.exists(LEVEL_FILE):
+    try:
+        with open(LEVEL_FILE, "r") as f:
+            levels = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        levels = {}
+
+xp_cooldowns = {}
+
+RANK_TITLES = [
+    (1, "Newcomer"), (5, "Regular"), (10, "Regular+"), (20, "Veteran"),
+    (35, "Elite"), (50, "Legend"), (100, "Mythic"),
+]
+
+
+def save_levels():
+    with open(LEVEL_FILE, "w") as f:
+        json.dump(levels, f, indent=2)
+
+
+def get_level_data(guild_id, user_id):
+    guild_id, user_id = str(guild_id), str(user_id)
+    levels.setdefault(guild_id, {})
+    levels[guild_id].setdefault(user_id, {"xp": 0, "level": 1})
+    return levels[guild_id][user_id]
+
+
+def xp_required(level):
+    return level * 100
+
+
+def rank_title(level):
+    title = RANK_TITLES[0][1]
+    for threshold, name in RANK_TITLES:
+        if level >= threshold:
+            title = name
+    return title
+
+
+def add_xp(guild_id, user_id, amount=None):
+    data = get_level_data(guild_id, user_id)
+    old_level = data["level"]
+    if amount is None:
+        amount = random.randint(XP_MIN, XP_MAX)
+    data["xp"] += amount
+    while data["xp"] >= xp_required(data["level"]):
+        data["xp"] -= xp_required(data["level"])
+        data["level"] += 1
+    save_levels()
+    return amount, old_level, data["level"]
+
+
+def make_xp_bar(current, maximum, length=12):
+    if maximum <= 0:
+        return "█" * length
+    filled = int(length * min(current / maximum, 1))
+    return "█" * filled + "░" * (length - filled)
+
+
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        await bot.process_commands(message)
+        return
+
+    if message.guild:
+        key = f"{message.guild.id}:{message.author.id}"
+        now = asyncio.get_event_loop().time()
+        if now - xp_cooldowns.get(key, 0) >= XP_COOLDOWN_SECONDS:
+            xp_cooldowns[key] = now
+            amount, old_level, new_level = add_xp(message.guild.id, message.author.id)
+            if new_level > old_level:
+                embed = discord.Embed(
+                    description=(
+                        f"🎉 {message.author.mention} just hit **Level {new_level}** "
+                        f"— **{rank_title(new_level)}** now.\nKeep it up."
+                    ),
+                    color=discord.Color.gold(),
+                )
+                try:
+                    await message.channel.send(embed=embed)
+                except discord.Forbidden:
+                    pass
+
+    await bot.process_commands(message)
+
+
+@bot.command(name="rank", aliases=["level", "lvl"])
+async def rank(ctx, member: discord.Member = None):
+    member = member or ctx.author
+    data = get_level_data(ctx.guild.id, member.id)
+    guild_data = levels.get(str(ctx.guild.id), {})
+    ranking = sorted(guild_data.items(), key=lambda x: (x[1]["level"], x[1]["xp"]), reverse=True)
+    position = next((i for i, (uid, _) in enumerate(ranking, 1) if uid == str(member.id)), len(ranking))
+
+    needed = xp_required(data["level"])
+    bar = make_xp_bar(data["xp"], needed)
+
+    embed = discord.Embed(title=f"⭐ {member.display_name}'s Rank", color=EMBED_COLOR)
+    embed.set_thumbnail(url=member.display_avatar.url)
+    embed.add_field(name="Level", value=f"**{data['level']}** — {rank_title(data['level'])}", inline=True)
+    embed.add_field(name="XP", value=f"**{data['xp']:,} / {needed:,}**", inline=True)
+    embed.add_field(name="Server Rank", value=f"**#{position}**", inline=True)
+    embed.add_field(name="Progress", value=f"`{bar}`", inline=False)
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="xpleaderboard", aliases=["xplb", "levels"])
+async def xp_leaderboard(ctx):
+    guild_data = levels.get(str(ctx.guild.id), {})
+    if not guild_data:
+        await ctx.send(embed=error_embed("Nobody's earned XP yet."))
+        return
+    ranking = sorted(guild_data.items(), key=lambda x: (x[1]["level"], x[1]["xp"]), reverse=True)[:10]
+    medals = ["🥇", "🥈", "🥉"]
+    lines = []
+    for i, (uid, data) in enumerate(ranking, 1):
+        member = ctx.guild.get_member(int(uid))
+        name = member.display_name if member else f"User {uid}"
+        prefix = medals[i - 1] if i <= 3 else f"**{i}.**"
+        lines.append(f"{prefix} **{name}** — Level `{data['level']}` • `{data['xp']} XP`")
+    embed = discord.Embed(title="🏆 XP Leaderboard", description="\n".join(lines), color=discord.Color.gold())
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="profile", aliases=["me"])
+async def profile(ctx, member: discord.Member = None):
+    member = member or ctx.author
+    user = get_user(member.id)
+    level_data = get_level_data(ctx.guild.id, member.id)
+    embed = discord.Embed(title=f"👤 {member.display_name}", color=EMBED_COLOR)
+    embed.set_thumbnail(url=member.display_avatar.url)
+    embed.add_field(name="⭐ Level", value=f"{level_data['level']} — {rank_title(level_data['level'])}", inline=True)
+    embed.add_field(name="✨ XP", value=f"{level_data['xp']:,}", inline=True)
+    embed.add_field(name="💰 Coins", value=f"{user['balance']:,}", inline=True)
+    await ctx.send(embed=embed)
+
+
 @bot.command(name="balance", aliases=["bal"])
 async def balance(ctx):
     user = get_user(ctx.author.id)
@@ -364,15 +577,18 @@ async def coinflip(ctx, amount: int, choice: str):
     won = result == choice
     if won:
         user["balance"] += amount
+        flavor = random.choice(COINFLIP_WIN_LINES)
     else:
         user["balance"] -= amount
+        flavor = random.choice(COINFLIP_LOSE_LINES)
     save_economy()
     embed = discord.Embed(
         title="🪙 Coin Flip",
         description=(
             f"Landed on **{result}**!\n"
             f"{'🎉 You won' if won else '💀 You lost'} **{amount:,} coins**\n"
-            f"Balance: **{user['balance']:,}**"
+            f"Balance: **{user['balance']:,}**\n\n"
+            f"*\"{flavor}\"*"
         ),
         color=discord.Color.green() if won else discord.Color.red(),
     )
@@ -394,23 +610,128 @@ async def slots(ctx, amount: int):
         user["balance"] += winnings
         result_text = f"🎉 **JACKPOT!** You won **{winnings:,} coins**"
         color = discord.Color.gold()
+        flavor = random.choice(SLOTS_JACKPOT_LINES)
     elif spin[0] == spin[1] or spin[1] == spin[2]:
         winnings = amount * 2
         user["balance"] += winnings
         result_text = f"✨ **Nice!** You won **{winnings:,} coins**"
         color = discord.Color.green()
+        flavor = random.choice(SLOTS_WIN_LINES)
     else:
         user["balance"] -= amount
         result_text = f"💀 No match. You lost **{amount:,} coins**"
         color = discord.Color.red()
+        flavor = random.choice(SLOTS_LOSE_LINES)
     save_economy()
     embed = discord.Embed(
         title="🎰 Slots",
-        description=f"**{display}**\n\n{result_text}\nBalance: **{user['balance']:,}**",
+        description=f"**{display}**\n\n{result_text}\nBalance: **{user['balance']:,}**\n\n*\"{flavor}\"*",
         color=color,
     )
     embed.set_author(name=ctx.author.display_name, icon_url=ctx.author.display_avatar.url)
     await ctx.send(embed=embed)
+
+
+@bot.command(name="8ball", aliases=["8b"])
+async def eightball(ctx, *, question: str):
+    category = random.choice(list(EIGHTBALL_RESPONSES.keys()))
+    reply = random.choice(EIGHTBALL_RESPONSES[category])
+    embed = discord.Embed(
+        title="🎱",
+        description=f"**{question}**\n\n{reply}",
+        color=EMBED_COLOR,
+    )
+    await ctx.send(embed=embed)
+
+
+RPS_CHOICES = ["rock", "paper", "scissors"]
+RPS_EMOJI = {"rock": "🪨", "paper": "📄", "scissors": "✂️"}
+
+
+def rps_outcome(player, opp):
+    if player == opp:
+        return "tie"
+    wins = {"rock": "scissors", "paper": "rock", "scissors": "paper"}
+    return "win" if wins[player] == opp else "lose"
+
+
+@bot.command(name="rps")
+async def rps(ctx, choice: str):
+    choice = choice.lower()
+    if choice not in RPS_CHOICES:
+        await ctx.send(embed=error_embed("Use `rock`, `paper`, or `scissors`."))
+        return
+    bot_choice = random.choice(RPS_CHOICES)
+    outcome = rps_outcome(choice, bot_choice)
+    user = get_user(ctx.author.id)
+    if outcome == "win":
+        reward = 50
+        user["balance"] += reward
+        save_economy()
+        text = f"🎉 **You win!** +{reward} coins"
+        color = discord.Color.green()
+    elif outcome == "tie":
+        text = "🤝 Tie. Nobody's buying a round for that."
+        color = EMBED_COLOR
+    else:
+        text = "💀 You lose. Try again."
+        color = discord.Color.red()
+    embed = discord.Embed(
+        title="✊ Rock Paper Scissors",
+        description=f"You: {RPS_EMOJI[choice]}  vs  Bot: {RPS_EMOJI[bot_choice]}\n\n{text}",
+        color=color,
+    )
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="roll", aliases=["dice"])
+async def roll(ctx, sides: int = 6):
+    if sides < 2 or sides > 1000:
+        await ctx.send(embed=error_embed("Choose between 2 and 1000 sides."))
+        return
+    result = random.randint(1, sides)
+    embed = discord.Embed(
+        description=f"🎲 {ctx.author.mention} rolled **{result}** (1-{sides})",
+        color=EMBED_COLOR,
+    )
+    await ctx.send(embed=embed)
+
+
+class GameMenuView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=120)
+
+    @discord.ui.button(label="🎲 Roll", style=discord.ButtonStyle.primary)
+    async def roll_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message(f"🎲 Rolled **{random.randint(1, 6)}**!")
+
+    @discord.ui.button(label="✊ RPS", style=discord.ButtonStyle.success)
+    async def rps_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        choice = random.choice(RPS_CHOICES)
+        await interaction.response.send_message(f"✊ Random opponent throws {RPS_EMOJI[choice]}!")
+
+    @discord.ui.button(label="🎱 8-Ball", style=discord.ButtonStyle.secondary)
+    async def ball_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        category = random.choice(list(EIGHTBALL_RESPONSES.keys()))
+        await interaction.response.send_message(f"🎱 {random.choice(EIGHTBALL_RESPONSES[category])}")
+
+
+@bot.command(name="games")
+async def games_menu(ctx):
+    embed = discord.Embed(
+        title="🎮 Game Center",
+        description=(
+            "**Commands**\n"
+            "`!coinflip <amount> heads/tails`\n"
+            "`!slots <amount>`\n"
+            "`!rps rock/paper/scissors`\n"
+            "`!roll [sides]`\n"
+            "`!8ball <question>`\n\n"
+            "Or just tap a button below 👇"
+        ),
+        color=discord.Color.green(),
+    )
+    await ctx.send(embed=embed, view=GameMenuView())
 
 
 @bot.command(name="leaderboard", aliases=["lb"])
@@ -442,6 +763,68 @@ CLAUDE_MODEL = "claude-haiku-4-5-20251001"  # fast + cheap; swap to "claude-sonn
 chat_history = {}
 MAX_HISTORY = 6
 
+BASE_PERSONALITY = (
+    "You are not an assistant that exists only to answer questions — you're a recurring "
+    "character who hangs around this Discord server. Talk naturally. You don't need to "
+    "give a complete explanation every time — sometimes a short sentence is better. Don't "
+    "constantly use emojis or slang, don't call everyone 'bro', don't start every reply the "
+    "same way, and don't sound like customer support. If someone is joking, joke back. If "
+    "someone is venting, listen. If someone asks something serious, become more sincere. "
+    "Keep replies short — a sentence or two, like a real chat message, not an essay."
+)
+
+CHAT_MODES = {
+    "bartender": (
+        "You're the bartender of this server. Relaxed, witty, slightly sarcastic, observant, "
+        "and occasionally unexpectedly thoughtful. You can occasionally use bartender-style "
+        "language naturally, but don't force the metaphor into every message. "
+        + BASE_PERSONALITY
+    ),
+    "casino": (
+        "You run the casino floor of this server. Cocky, playful, always ready with a gambling "
+        "line or a bet, but not obnoxious about it. " + BASE_PERSONALITY
+    ),
+    "dj": (
+        "You're the DJ of this server. Laid-back, music-obsessed, drops the occasional music "
+        "reference or opinion, chill energy. " + BASE_PERSONALITY
+    ),
+    "menace": (
+        "You're the resident troublemaker of this server. Teasing, playfully chaotic, quick "
+        "with a roast, but never actually mean or crossing into real insults. " + BASE_PERSONALITY
+    ),
+    "normal": (
+        "You're a straightforward, friendly regular in this server. Clear and direct, still "
+        "warm and conversational, no persona gimmick. " + BASE_PERSONALITY
+    ),
+}
+DEFAULT_MODE = "bartender"
+channel_modes = {}
+
+
+@bot.command(name="mode")
+async def mode(ctx: commands.Context, choice: str = None):
+    channel_id = str(ctx.channel.id)
+    if choice is None:
+        current = channel_modes.get(channel_id, DEFAULT_MODE)
+        embed = discord.Embed(
+            title="🎭 Current Mode",
+            description=(
+                f"This channel's bot personality is set to **{current}**.\n\n"
+                f"Options: {', '.join(f'`{m}`' for m in CHAT_MODES)}\n"
+                f"Usage: `!mode <name>`"
+            ),
+            color=EMBED_COLOR,
+        )
+        await ctx.send(embed=embed)
+        return
+    choice = choice.lower()
+    if choice not in CHAT_MODES:
+        await ctx.send(embed=error_embed(f"Unknown mode. Options: {', '.join(CHAT_MODES)}"))
+        return
+    channel_modes[channel_id] = choice
+    embed = discord.Embed(description=f"🎭 Mode switched to **{choice}** for this channel.", color=EMBED_COLOR)
+    await ctx.send(embed=embed)
+
 
 @bot.command(name="chat")
 async def chat(ctx: commands.Context, *, message: str):
@@ -453,6 +836,7 @@ async def chat(ctx: commands.Context, *, message: str):
     history = chat_history.setdefault(channel_id, [])
     history.append({"role": "user", "content": message})
     history[:] = history[-MAX_HISTORY:]
+    system_prompt = CHAT_MODES.get(channel_modes.get(channel_id, DEFAULT_MODE), CHAT_MODES[DEFAULT_MODE])
 
     async with ctx.typing():
         try:
@@ -467,7 +851,7 @@ async def chat(ctx: commands.Context, *, message: str):
                     json={
                         "model": CLAUDE_MODEL,
                         "max_tokens": 500,
-                        "system": "You are a friendly, concise Discord bot assistant. Keep replies short and casual, fitting for a chat message.",
+                        "system": system_prompt,
                         "messages": history,
                     },
                 ) as resp:
@@ -505,17 +889,28 @@ async def help_command(ctx: commands.Context):
         inline=False,
     )
     embed.add_field(
+        name="⭐ Leveling",
+        value="`!rank` `!profile`\n`!xpleaderboard`",
+        inline=False,
+    )
+    embed.add_field(
         name="💰 Economy",
         value="`!balance` `!daily` `!work`\n`!leaderboard`",
         inline=False,
     )
     embed.add_field(
         name="🎮 Games",
-        value="`!coinflip <amount> heads/tails`\n`!slots <amount>`",
+        value="`!games` (interactive menu)\n`!coinflip <amount> heads/tails`\n"
+              "`!slots <amount>`\n`!rps rock/paper/scissors`\n`!roll [sides]`\n`!8ball <question>`",
         inline=False,
     )
     embed.add_field(
-        name="🤖 AI Chat",
+        name="🎭 Bot Personality",
+        value="`!mode` — see/set the bot's vibe (bartender, casino, dj, menace, normal)",
+        inline=False,
+    )
+    embed.add_field(
+        name="🤖 Chat with the bot",
         value="`!chat <message>`",
         inline=False,
     )
@@ -525,8 +920,10 @@ async def help_command(ctx: commands.Context):
 
 # Lets people just type "!<song name>" instead of "!play <song name>"
 KNOWN_COMMANDS = {"join", "play", "leave", "download", "dl", "send", "balance",
-                   "bal", "daily", "work", "coinflip", "cf", "slots",
-                   "leaderboard", "lb", "chat", "help", "commands"}
+                   "bal", "daily", "work", "coinflip", "cf", "slots", "8ball",
+                   "8b", "leaderboard", "lb", "chat", "help", "commands",
+                   "rank", "level", "lvl", "xpleaderboard", "xplb", "levels",
+                   "profile", "me", "mode", "rps", "roll", "dice", "games"}
 
 
 @bot.event
