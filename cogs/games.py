@@ -1,435 +1,810 @@
 """
 cogs/games.py
-=============
-All mini-games. Each game that awards coins/XP goes through the same
-`record_game()` helper so stats, coins, and achievements stay
-consistent no matter which game was played.
+================
+Full collection of mini-games: trivia, rps, roll, guess, coinflip, slots, blackjack, and 8ball.
+Integrated with server coin economy (bot.db).
 """
 
 import asyncio
 import random
+import time
+from typing import Union
 
 import discord
 from discord.ext import commands
 
-from constants import COLOR_PRIMARY, COLOR_GOLD, footer, check_achievements
+from constants import COLOR_PRIMARY, COLOR_GOLD, footer
 
-
-async def record_game(db, ctx, member, *, won, coins=0, xp=0):
-    """Increments games/wins/balance/xp for `member` and checks achievements."""
-
-    user = await db.get_user(ctx.guild.id, member.id)
-
-    updates = {
-        "games": user["games"] + 1,
-        "wins": user["wins"] + (1 if won else 0)
+# ------------------------------------------------------------
+# 🎯 TRIVIA DATA & VIEW
+# ------------------------------------------------------------
+TRIVIA_QUESTIONS = [
+    {
+        "q": "Which element has the chemical symbol 'O'?",
+        "options": ["Gold", "Oxygen", "Osmium", "Silver"],
+        "answer": 1,
+        "reward": 250
+    },
+    {
+        "q": "How many sides does a hexagon have?",
+        "options": ["5", "6", "7", "8"],
+        "answer": 1,
+        "reward": 200
+    },
+    {
+        "q": "What year was Discord officially released?",
+        "options": ["2013", "2015", "2017", "2019"],
+        "answer": 1,
+        "reward": 300
+    },
+    {
+        "q": "Which planet in our solar system is known as the Red Planet?",
+        "options": ["Venus", "Jupiter", "Mars", "Saturn"],
+        "answer": 2,
+        "reward": 200
+    },
+    {
+        "q": "In gaming, what does 'NPC' stand for?",
+        "options": ["Non-Playable Character", "New Player Character", "Next Level Player", "Non-Point Character"],
+        "answer": 0,
+        "reward": 150
     }
+]
 
-    await db.update_user(ctx.guild.id, member.id, **updates)
+class TriviaView(discord.ui.View):
+    def __init__(self, cog, ctx, question_data):
+        super().__init__(timeout=30)
+        self.cog = cog
+        self.ctx = ctx
+        self.qdata = question_data
+        self.answered = False
 
-    if coins:
-        await db.add_balance(ctx.guild.id, member.id, coins)
+        labels = ["A", "B", "C", "D"]
+        styles = [discord.ButtonStyle.primary] * 4
 
-    if xp:
-        await db.add_xp(ctx.guild.id, member.id, xp)
+        for idx, option in enumerate(question_data["options"]):
+            button = discord.ui.Button(
+                label=f"{labels[idx]}: {option}",
+                style=styles[idx],
+                custom_id=str(idx)
+            )
+            button.callback = self.make_callback(idx)
+            self.add_item(button)
 
-    fresh = await db.get_user(ctx.guild.id, member.id)
-    await check_achievements(db, ctx, member, fresh)
+    def make_callback(self, chosen_idx):
+        async def callback(interaction: discord.Interaction):
+            if interaction.user.id != self.ctx.author.id:
+                await interaction.response.send_message("❌ This trivia isn't for you!", ephemeral=True)
+                return
+
+            if self.answered:
+                return
+
+            self.answered = True
+            self.stop()
+
+            correct_idx = self.qdata["answer"]
+
+            for item in self.children:
+                item.disabled = True
+                if int(item.custom_id) == correct_idx:
+                    item.style = discord.ButtonStyle.green
+                elif int(item.custom_id) == chosen_idx:
+                    item.style = discord.ButtonStyle.red
+
+            if chosen_idx == correct_idx:
+                reward = self.qdata["reward"]
+                new_bal = await self.cog.db.add_balance(self.ctx.guild.id, self.ctx.author.id, reward)
+                embed = discord.Embed(
+                    title="🎉 Correct Answer!",
+                    description=(
+                        f"**Question:** {self.qdata['q']}\n"
+                        f"✅ You picked: **{self.qdata['options'][chosen_idx]}**\n\n"
+                        f"💰 Earned: **+{reward:,} coins**\n"
+                        f"💳 Balance: **{new_bal:,}**"
+                    ),
+                    color=discord.Color.green()
+                )
+            else:
+                embed = discord.Embed(
+                    title="❌ Wrong Answer!",
+                    description=(
+                        f"**Question:** {self.qdata['q']}\n"
+                        f"❌ You picked: {self.qdata['options'][chosen_idx]}\n"
+                        f"✅ Correct answer: **{self.qdata['options'][correct_idx]}**"
+                    ),
+                    color=discord.Color.red()
+                )
+
+            await interaction.response.edit_message(embed=embed, view=self)
+
+        return callback
+
+# ------------------------------------------------------------
+# 🪨 ROCK PAPER SCISSORS VIEW
+# ------------------------------------------------------------
+class RPSView(discord.ui.View):
+    def __init__(self, cog, ctx, bet: int = 0):
+        super().__init__(timeout=30)
+        self.cog = cog
+        self.ctx = ctx
+        self.bet = bet
+
+    @discord.ui.button(label="Rock 🪨", style=discord.ButtonStyle.secondary)
+    async def rock(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.play_game(interaction, "rock")
+
+    @discord.ui.button(label="Paper 📄", style=discord.ButtonStyle.secondary)
+    async def paper(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.play_game(interaction, "paper")
+
+    @discord.ui.button(label="Scissors ✂️", style=discord.ButtonStyle.secondary)
+    async def scissors(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.play_game(interaction, "scissors")
+
+    async def play_game(self, interaction: discord.Interaction, player_choice: str):
+        if interaction.user.id != self.ctx.author.id:
+            await interaction.response.send_message("❌ This is not your game!", ephemeral=True)
+            return
+
+        self.stop()
+        for item in self.children:
+            item.disabled = True
+
+        choices = ["rock", "paper", "scissors"]
+        emojis = {"rock": "🪨", "paper": "📄", "scissors": "✂️"}
+        bot_choice = random.choice(choices)
+
+        if player_choice == bot_choice:
+            result = "tie"
+        elif (
+            (player_choice == "rock" and bot_choice == "scissors") or
+            (player_choice == "paper" and bot_choice == "rock") or
+            (player_choice == "scissors" and bot_choice == "paper")
+        ):
+            result = "win"
+        else:
+            result = "loss"
+
+        if self.bet > 0:
+            if result == "win":
+                winnings = self.bet * 2
+                new_bal = await self.cog.db.add_balance(self.ctx.guild.id, self.ctx.author.id, winnings)
+                desc = f"🎉 **You won {self.bet:,} coins!**\n💰 Balance: **{new_bal:,}**"
+                color = discord.Color.green()
+            elif result == "tie":
+                new_bal = await self.cog.db.add_balance(self.ctx.guild.id, self.ctx.author.id, self.bet)
+                desc = f"👔 **It's a tie!** Bet returned.\n💰 Balance: **{new_bal:,}**"
+                color = COLOR_GOLD
+            else:
+                new_bal = (await self.cog.db.get_user(self.ctx.guild.id, self.ctx.author.id))["balance"]
+                desc = f"❌ **You lost {self.bet:,} coins.**\n💰 Balance: **{new_bal:,}**"
+                color = discord.Color.red()
+        else:
+            if result == "win":
+                desc = "🎉 **You won!** Good job!"
+                color = discord.Color.green()
+            elif result == "tie":
+                desc = "👔 **It's a tie!**"
+                color = COLOR_GOLD
+            else:
+                desc = "❌ **You lost!** Better luck next time!"
+                color = discord.Color.red()
+
+        embed = discord.Embed(
+            title="🎮 Rock, Paper, Scissors",
+            description=(
+                f"You chose: {emojis[player_choice]} **{player_choice.capitalize()}**\n"
+                f"Bot chose: {emojis[bot_choice]} **{bot_choice.capitalize()}**\n\n"
+                f"{desc}"
+            ),
+            color=color
+        )
+        await interaction.response.edit_message(embed=embed, view=self)
+
+# ------------------------------------------------------------
+# 🃏 BLACKJACK VIEW
+# ------------------------------------------------------------
+class BlackjackView(discord.ui.View):
+    def __init__(self, cog, ctx, bet, player_hand, dealer_hand, deck):
+        super().__init__(timeout=60)
+        self.cog = cog
+        self.ctx = ctx
+        self.bet = bet
+        self.player_hand = player_hand
+        self.dealer_hand = dealer_hand
+        self.deck = deck
+
+    def calc_score(self, hand):
+        score = 0
+        aces = 0
+        for rank, suit in hand:
+            if rank in ["J", "Q", "K"]:
+                score += 10
+            elif rank == "A":
+                aces += 1
+                score += 11
+            else:
+                score += int(rank)
+        while score > 21 and aces:
+            score -= 10
+            aces -= 1
+        return score
+
+    def render_hand(self, hand, hide_dealer=False):
+        if hide_dealer:
+            return f"`{hand[0][0]}{hand[0][1]}` `🂠`"
+        return " ".join([f"`{rank}{suit}`" for rank, suit in hand])
+
+    @discord.ui.button(label="Hit 🃏", style=discord.ButtonStyle.green)
+    async def hit_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.ctx.author.id:
+            await interaction.response.send_message("❌ This is not your game!", ephemeral=True)
+            return
+
+        self.player_hand.append(self.deck.pop())
+        p_score = self.calc_score(self.player_hand)
+
+        if p_score > 21:
+            self.stop()
+            for item in self.children:
+                item.disabled = True
+
+            new_bal = (await self.cog.db.get_user(self.ctx.guild.id, self.ctx.author.id))["balance"]
+            embed = discord.Embed(
+                title="🃏 Blackjack - BUST!",
+                description=(
+                    f"**Dealer's Hand:** {self.render_hand(self.dealer_hand)} ({self.calc_score(self.dealer_hand)})\n"
+                    f"**Your Hand:** {self.render_hand(self.player_hand)} (**{p_score}**)\n\n"
+                    f"💥 You busted and lost **{self.bet:,} coins**!\n"
+                    f"💰 Balance: **{new_bal:,}**"
+                ),
+                color=discord.Color.red()
+            )
+            await interaction.response.edit_message(embed=embed, view=self)
+            return
+
+        embed = discord.Embed(
+            title="🃏 Blackjack",
+            description=(
+                f"**Dealer's Hand:** {self.render_hand(self.dealer_hand, hide_dealer=True)}\n"
+                f"**Your Hand:** {self.render_hand(self.player_hand)} (**{p_score}**)\n\n"
+                f"Choose your action below!"
+            ),
+            color=COLOR_PRIMARY
+        )
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    @discord.ui.button(label="Stand 🛑", style=discord.ButtonStyle.red)
+    async def stand_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.ctx.author.id:
+            await interaction.response.send_message("❌ This is not your game!", ephemeral=True)
+            return
+
+        self.stop()
+        for item in self.children:
+            item.disabled = True
+
+        p_score = self.calc_score(self.player_hand)
+        d_score = self.calc_score(self.dealer_hand)
+
+        while d_score < 17:
+            self.dealer_hand.append(self.deck.pop())
+            d_score = self.calc_score(self.dealer_hand)
+
+        if d_score > 21 or p_score > d_score:
+            winnings = self.bet * 2
+            new_bal = await self.cog.db.add_balance(self.ctx.guild.id, self.ctx.author.id, winnings)
+            embed = discord.Embed(
+                title="🃏 Blackjack - WIN!",
+                description=(
+                    f"**Dealer's Hand:** {self.render_hand(self.dealer_hand)} ({d_score})\n"
+                    f"**Your Hand:** {self.render_hand(self.player_hand)} ({p_score})\n\n"
+                    f"🎉 You won **{self.bet:,} coins**!\n"
+                    f"💰 Balance: **{new_bal:,}**"
+                ),
+                color=discord.Color.green()
+            )
+        elif p_score == d_score:
+            new_bal = await self.cog.db.add_balance(self.ctx.guild.id, self.ctx.author.id, self.bet)
+            embed = discord.Embed(
+                title="🃏 Blackjack - PUSH!",
+                description=(
+                    f"**Dealer's Hand:** {self.render_hand(self.dealer_hand)} ({d_score})\n"
+                    f"**Your Hand:** {self.render_hand(self.player_hand)} ({p_score})\n\n"
+                    f"👔 It's a tie! Your bet was returned.\n"
+                    f"💰 Balance: **{new_bal:,}**"
+                ),
+                color=COLOR_GOLD
+            )
+        else:
+            new_bal = (await self.cog.db.get_user(self.ctx.guild.id, self.ctx.author.id))["balance"]
+            embed = discord.Embed(
+                title="🃏 Blackjack - LOSS!",
+                description=(
+                    f"**Dealer's Hand:** {self.render_hand(self.dealer_hand)} ({d_score})\n"
+                    f"**Your Hand:** {self.render_hand(self.player_hand)} ({p_score})\n\n"
+                    f"❌ Dealer won! You lost **{self.bet:,} coins**.\n"
+                    f"💰 Balance: **{new_bal:,}**"
+                ),
+                color=discord.Color.red()
+            )
+
+        await interaction.response.edit_message(embed=embed, view=self)
 
 
+# ------------------------------------------------------------
+# 🎮 MAIN GAMES COG
+# ------------------------------------------------------------
 class Games(commands.Cog):
-    """Mini-games: dice, RPS, guessing, 8-ball, trivia, coinflip, slots, blackjack."""
-
-    TRIVIA = [
-        ("What planet is known as the Red Planet?", ["mars"]),
-        ("How many bones are in an adult human body?", ["206"]),
-        ("What is the largest ocean on Earth?", ["pacific", "pacific ocean"]),
-        ("What gas do humans need to breathe?", ["oxygen"]),
-        ("What is 12 × 12?", ["144"]),
-        ("How many continents are there?", ["7", "seven"]),
-        ("What is the capital of Japan?", ["tokyo"]),
-    ]
-
-    EIGHTBALL_ANSWERS = [
-        "Absolutely.", "Definitely.", "Most likely.", "Yes.", "Probably.",
-        "Ask me again later.", "Maybe.", "Probably not.", "No.", "Absolutely not."
-    ]
+    """Interactive mini-games and gambling hub."""
 
     def __init__(self, bot):
         self.bot = bot
         self.db = bot.db
 
-    # ------------------------------------------------------------
+    # 1. GAMES HUB MENU
     @commands.command(name="games")
-    async def games_menu(self, ctx):
+    async def games(self, ctx):
+        """Displays available mini-games and rules."""
         embed = discord.Embed(
-            title="🎮 Game Center",
+            title="🎮 Mini-Games Hub",
             description=(
-                "🧠 `!trivia`\n"
-                "✊ `!rps rock`\n"
-                "🎲 `!roll [sides]`\n"
-                "🔢 `!guess <1-10>`\n"
-                "🪙 `!coinflip <heads/tails> <bet>`\n"
-                "🎰 `!slots <bet>`\n"
-                "🃏 `!blackjack <bet>`\n"
-                "🎱 `!8ball <question>`"
+                "Test your luck and skills to earn coins!\n\n"
+                "🧠 `!trivia` — Answer questions for bonus coins.\n"
+                "🪨 `!rps [choice] [bet]` — Play Rock, Paper, Scissors.\n"
+                "🎲 `!roll <bet>` — Roll a die (55+ wins 2x).\n"
+                "🔢 `!guess <1-10> <bet>` — Guess secret number (5x payout!).\n"
+                "🪙 `!coinflip <heads/tails> <bet>` — Flip a coin (2x payout).\n"
+                "🎰 `!slots <bet>` — Spin the slot machine reels.\n"
+                "🃏 `!blackjack <bet>` — Interactive card table.\n"
+                "🎱 `!8ball <question>` — Ask the magic 8-ball."
             ),
-            color=discord.Color.green()
-        )
-        await ctx.send(embed=embed, view=GameMenuView(self))
-
-    # ------------------------------------------------------------
-    @commands.command(name="rps")
-    @commands.cooldown(1, 3, commands.BucketType.user)
-    async def rps(self, ctx, choice: str):
-        choice = choice.lower()
-        choices = ["rock", "paper", "scissors"]
-
-        if choice not in choices:
-            await ctx.send("Use `rock`, `paper`, or `scissors`.")
-            return
-
-        bot_choice = random.choice(choices)
-
-        beats = {"rock": "scissors", "paper": "rock", "scissors": "paper"}
-
-        if choice == bot_choice:
-            won, reward, result = False, 0, "🤝 **Tie!**"
-        elif beats[choice] == bot_choice:
-            won, reward = True, 50
-            result = f"🎉 **You win!**\n💰 +{reward} coins"
-        else:
-            won, reward, result = False, 0, "💀 **You lose!**"
-
-        await record_game(self.db, ctx, ctx.author, won=won, coins=reward)
-
-        embed = discord.Embed(
-            title="✊ Rock Paper Scissors",
-            description=f"You: `{choice}`\nBot: `{bot_choice}`\n\n{result}",
             color=COLOR_PRIMARY
         )
-        await ctx.send(embed=embed)
+        await ctx.send(embed=footer(embed, ctx))
 
-    # ------------------------------------------------------------
-    @commands.command(name="roll", aliases=["dice"])
-    async def roll(self, ctx, sides: int = 6):
-        if sides < 2 or sides > 1000:
-            await ctx.send("🎲 Choose between 2 and 1000 sides.")
-            return
-
-        result = random.randint(1, sides)
-        await ctx.send(f"🎲 {ctx.author.mention} rolled **{result}** (1-{sides})")
-
-    # ------------------------------------------------------------
-    @commands.command(name="guess")
-    @commands.cooldown(1, 3, commands.BucketType.user)
-    async def guess(self, ctx, number: int):
-        if number < 1 or number > 10:
-            await ctx.send("🔢 Choose a number from **1 to 10**.")
-            return
-
-        answer = random.randint(1, 10)
-        won = number == answer
-        reward = 100 if won else 0
-
-        await record_game(self.db, ctx, ctx.author, won=won, coins=reward)
-
-        if won:
-            await ctx.send(f"🎉 **Correct!**\n💰 +{reward} coins")
-        else:
-            await ctx.send(f"❌ Wrong! I picked **{answer}**.")
-
-    # ------------------------------------------------------------
-    @commands.command(name="8ball", aliases=["8b"])
-    async def eightball(self, ctx, *, question: str):
-        embed = discord.Embed(title="🎱 Magic 8-Ball", color=discord.Color.purple())
-        embed.add_field(name="Question", value=question, inline=False)
-        embed.add_field(
-            name="Answer", value=random.choice(self.EIGHTBALL_ANSWERS), inline=False
-        )
-        await ctx.send(embed=embed)
-
-    # ------------------------------------------------------------
+    # 2. TRIVIA
     @commands.command(name="trivia")
-    @commands.cooldown(1, 5, commands.BucketType.channel)
+    @commands.cooldown(1, 10, commands.BucketType.user)
     async def trivia(self, ctx):
-        question, answers = random.choice(self.TRIVIA)
+        """Play a random trivia question for coins."""
+        qdata = random.choice(TRIVIA_QUESTIONS)
+        view = TriviaView(self, ctx, qdata)
 
         embed = discord.Embed(
-            title="🧠 Trivia", description=question, color=discord.Color.orange()
+            title="🧠 Trivia Challenge",
+            description=f"**{qdata['q']}**\n\n*Select your answer below within 30 seconds!*",
+            color=COLOR_PRIMARY
         )
-        embed.set_footer(text="You have 20 seconds!")
-        await ctx.send(embed=embed)
+        await ctx.send(embed=embed, view=view)
 
-        def check(message):
-            return message.channel == ctx.channel and not message.author.bot
+    # 3. ROCK PAPER SCISSORS
+    @commands.command(name="rps")
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def rps(self, ctx, choice: str = None, bet: int = 0):
+        """Play Rock Paper Scissors. Usage: !rps [rock/paper/scissors] [bet]"""
+        if choice and choice.isdigit() and bet == 0:
+            bet = int(choice)
+            choice = None
 
-        try:
-            answer = await self.bot.wait_for("message", timeout=20, check=check)
-        except asyncio.TimeoutError:
-            await ctx.send(f"⏰ Time's up! The answer was **{answers[0].title()}**.")
+        if bet < 0:
+            await ctx.send("❌ Bet cannot be negative.")
             return
 
-        if answer.content.lower().strip() in answers:
-            await record_game(
-                self.db, ctx, answer.author, won=True, coins=100, xp=50
+        if bet > 0:
+            user = await self.db.get_user(ctx.guild.id, ctx.author.id)
+            if user["balance"] < bet:
+                await ctx.send(f"💸 You only have **{user['balance']:,} coins**.")
+                return
+            await self.db.add_balance(ctx.guild.id, ctx.author.id, -bet)
+
+        view = RPSView(self, ctx, bet)
+
+        if choice and choice.lower() in ["rock", "paper", "scissors"]:
+            # If user provided choice in command arguments
+            choices = ["rock", "paper", "scissors"]
+            emojis = {"rock": "🪨", "paper": "📄", "scissors": "✂️"}
+            player_choice = choice.lower()
+            bot_choice = random.choice(choices)
+
+            if player_choice == bot_choice:
+                result = "tie"
+            elif (
+                (player_choice == "rock" and bot_choice == "scissors") or
+                (player_choice == "paper" and bot_choice == "rock") or
+                (player_choice == "scissors" and bot_choice == "paper")
+            ):
+                result = "win"
+            else:
+                result = "loss"
+
+            if bet > 0:
+                if result == "win":
+                    winnings = bet * 2
+                    new_bal = await self.db.add_balance(ctx.guild.id, ctx.author.id, winnings)
+                    desc = f"🎉 **You won {bet:,} coins!**\n💰 Balance: **{new_bal:,}**"
+                    color = discord.Color.green()
+                elif result == "tie":
+                    new_bal = await self.db.add_balance(ctx.guild.id, ctx.author.id, bet)
+                    desc = f"👔 **It's a tie!** Bet returned.\n💰 Balance: **{new_bal:,}**"
+                    color = COLOR_GOLD
+                else:
+                    new_bal = (await self.db.get_user(ctx.guild.id, ctx.author.id))["balance"]
+                    desc = f"❌ **You lost {bet:,} coins.**\n💰 Balance: **{new_bal:,}**"
+                    color = discord.Color.red()
+            else:
+                if result == "win":
+                    desc = "🎉 **You won!** Good job!"
+                    color = discord.Color.green()
+                elif result == "tie":
+                    desc = "👔 **It's a tie!**"
+                    color = COLOR_GOLD
+                else:
+                    desc = "❌ **You lost!**"
+                    color = discord.Color.red()
+
+            embed = discord.Embed(
+                title="🎮 Rock, Paper, Scissors",
+                description=(
+                    f"You chose: {emojis[player_choice]} **{player_choice.capitalize()}**\n"
+                    f"Bot chose: {emojis[bot_choice]} **{bot_choice.capitalize()}**\n\n"
+                    f"{desc}"
+                ),
+                color=color
             )
-            await ctx.send(
-                f"🎉 {answer.author.mention} **CORRECT!**\n💰 +100 coins\n⭐ +50 XP"
+            await ctx.send(embed=embed)
+        else:
+            embed = discord.Embed(
+                title="🎮 Rock, Paper, Scissors",
+                description=f"Choose your move below! {'(Bet: ' + f'{bet:,} coins)' if bet > 0 else ''}",
+                color=COLOR_PRIMARY
+            )
+            await ctx.send(embed=embed, view=view)
+
+    # 4. ROLL
+    @commands.command(name="roll", aliases=["dice"])
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def roll(self, ctx, arg1: int = 100, arg2: int = None):
+        """Roll a die! Usage: !roll <bet> OR !roll <sides>"""
+        bet = None
+        sides = 100
+
+        # Determine if user is gambling bet or custom sides
+        if arg2 is not None:
+            sides = arg1
+            bet = arg2
+        else:
+            bet = arg1
+
+        if bet <= 0:
+            await ctx.send("❌ Bet/Sides must be positive.")
+            return
+
+        user = await self.db.get_user(ctx.guild.id, ctx.author.id)
+        if user["balance"] < bet:
+            await ctx.send(f"💸 You only have **{user['balance']:,} coins**.")
+            return
+
+        await self.db.add_balance(ctx.guild.id, ctx.author.id, -bet)
+
+        embed = discord.Embed(
+            title="🎲 Dice Roll",
+            description="Rolling the dice... 🎲",
+            color=COLOR_PRIMARY
+        )
+        msg = await ctx.send(embed=embed)
+
+        for _ in range(2):
+            await asyncio.sleep(0.5)
+            embed.description = f"Rolling the dice... **{random.randint(1, sides)}** 🎲"
+            await msg.edit(embed=embed)
+
+        await asyncio.sleep(0.6)
+        roll_val = random.randint(1, sides)
+
+        if roll_val >= int(sides * 0.55):
+            winnings = bet * 2
+            new_bal = await self.db.add_balance(ctx.guild.id, ctx.author.id, winnings)
+            embed.color = discord.Color.green()
+            embed.description = (
+                f"🎲 You rolled a **{roll_val}** out of {sides}!\n"
+                f"🎉 You won **{bet:,} coins**!\n"
+                f"💰 Balance: **{new_bal:,}**"
             )
         else:
-            await ctx.send(f"❌ Wrong! The answer was **{answers[0].title()}**.")
+            new_bal = (await self.db.get_user(ctx.guild.id, ctx.author.id))["balance"]
+            embed.color = discord.Color.red()
+            embed.description = (
+                f"🎲 You rolled a **{roll_val}** out of {sides}!\n"
+                f"❌ You lost **{bet:,} coins**.\n"
+                f"💰 Balance: **{new_bal:,}**"
+            )
 
-    # ------------------------------------------------------------
+        await msg.edit(embed=embed)
+
+    # 5. GUESS NUMBER
+    @commands.command(name="guess")
+    @commands.cooldown(1, 4, commands.BucketType.user)
+    async def guess(self, ctx, number: int, bet: int = 100):
+        """Guess secret number between 1 and 10! Usage: !guess <1-10> [bet]"""
+        if number < 1 or number > 10:
+            await ctx.send("❌ Guess must be between 1 and 10.")
+            return
+
+        if bet <= 0:
+            await ctx.send("❌ Bet must be positive.")
+            return
+
+        user = await self.db.get_user(ctx.guild.id, ctx.author.id)
+        if user["balance"] < bet:
+            await ctx.send(f"💸 You only have **{user['balance']:,} coins**.")
+            return
+
+        await self.db.add_balance(ctx.guild.id, ctx.author.id, -bet)
+
+        secret = random.randint(1, 10)
+
+        embed = discord.Embed(
+            title="🔢 Guess the Number",
+            description=f"Picking a secret number between 1 and 10...",
+            color=COLOR_PRIMARY
+        )
+        msg = await ctx.send(embed=embed)
+
+        await asyncio.sleep(1.2)
+
+        if number == secret:
+            winnings = bet * 5
+            new_bal = await self.db.add_balance(ctx.guild.id, ctx.author.id, winnings)
+            embed.color = discord.Color.green()
+            embed.description = (
+                f"🎯 **EXACT MATCH!** The number was **{secret}**!\n"
+                f"🎉 You won **{winnings:,} coins** (5x Multiplier)!\n"
+                f"💰 Balance: **{new_bal:,}**"
+            )
+        else:
+            new_bal = (await self.db.get_user(ctx.guild.id, ctx.author.id))["balance"]
+            embed.color = discord.Color.red()
+            embed.description = (
+                f"❌ Wrong! The secret number was **{secret}** (You guessed {number}).\n"
+                f"💸 You lost **{bet:,} coins**.\n"
+                f"💰 Balance: **{new_bal:,}**"
+            )
+
+        await msg.edit(embed=embed)
+
+    # 6. COINFLIP
     @commands.command(name="coinflip", aliases=["cf"])
-    @commands.cooldown(1, 3, commands.BucketType.user)
-    async def coinflip(self, ctx, side: str, bet: int):
-        side = side.lower()
+    @commands.cooldown(1, 4, commands.BucketType.user)
+    async def coinflip(self, ctx, arg1: str, arg2: str):
+        """Flip a coin! Usage: !coinflip <heads/tails> <bet>"""
+        bet, choice = None, None
 
-        if side not in ("heads", "tails"):
-            await ctx.send("🪙 Choose `heads` or `tails`.")
+        if arg1.isdigit():
+            bet = int(arg1)
+            choice = arg2.lower()
+        elif arg2.isdigit():
+            bet = int(arg2)
+            choice = arg1.lower()
+        else:
+            await ctx.send("❌ Usage: `!coinflip <bet> <heads/tails>`")
             return
 
+        if choice not in ["heads", "tails", "h", "t"]:
+            await ctx.send("❌ Choose either `heads` or `tails`.")
+            return
+
+        choice = "heads" if choice in ["heads", "h"] else "tails"
+
         if bet <= 0:
-            await ctx.send("🪙 Bet must be positive.")
+            await ctx.send("❌ Bet must be positive.")
             return
 
         user = await self.db.get_user(ctx.guild.id, ctx.author.id)
-
         if user["balance"] < bet:
             await ctx.send(f"💸 You only have **{user['balance']:,} coins**.")
             return
 
-        result = random.choice(("heads", "tails"))
-        won = result == side
-        net = bet if won else -bet
-
-        await record_game(self.db, ctx, ctx.author, won=won, coins=net)
-
-        emoji = "🪙"
-        if won:
-            await ctx.send(
-                f"{emoji} It landed on **{result}** — **you win {bet:,} coins!**"
-            )
-        else:
-            await ctx.send(
-                f"{emoji} It landed on **{result}** — you lost **{bet:,} coins**."
-            )
-
-    # ------------------------------------------------------------
-    SLOT_SYMBOLS = ["🍒", "🍋", "🍇", "🔔", "💎", "7️⃣"]
-    SLOT_PAYOUTS = {"7️⃣": 10, "💎": 6, "🔔": 4, "🍇": 3, "🍋": 2, "🍒": 2}
-
-    @commands.command(name="slots", aliases=["slot"])
-    @commands.cooldown(1, 3, commands.BucketType.user)
-    async def slots(self, ctx, bet: int):
-        if bet <= 0:
-            await ctx.send("🎰 Bet must be positive.")
-            return
-
-        user = await self.db.get_user(ctx.guild.id, ctx.author.id)
-
-        if user["balance"] < bet:
-            await ctx.send(f"💸 You only have **{user['balance']:,} coins**.")
-            return
-
-        spin = [random.choice(self.SLOT_SYMBOLS) for _ in range(3)]
-        display = " | ".join(spin)
-
-        if spin[0] == spin[1] == spin[2]:
-            multiplier = self.SLOT_PAYOUTS[spin[0]]
-            net = bet * multiplier
-            result = f"🎉 **JACKPOT!** All three match — you win **{net:,} coins**!"
-            won = True
-        elif spin[0] == spin[1] or spin[1] == spin[2] or spin[0] == spin[2]:
-            net = bet
-            result = f"✨ Two matched — you win **{net:,} coins**!"
-            won = True
-        else:
-            net = -bet
-            result = f"💀 No match — you lost **{bet:,} coins**."
-            won = False
-
-        await record_game(self.db, ctx, ctx.author, won=won, coins=net)
+        await self.db.add_balance(ctx.guild.id, ctx.author.id, -bet)
 
         embed = discord.Embed(
-            title="🎰 Slots",
-            description=f"**[ {display} ]**\n\n{result}",
-            color=COLOR_GOLD
+            title="🪙 Coinflip",
+            description="Flipping coin... 🟡",
+            color=COLOR_PRIMARY
         )
-        await ctx.send(embed=embed)
+        msg = await ctx.send(embed=embed)
 
-    # ------------------------------------------------------------
+        await asyncio.sleep(0.6)
+        embed.description = "Flipping coin... 🪙"
+        await msg.edit(embed=embed)
+
+        await asyncio.sleep(0.6)
+        outcome = random.choice(["heads", "tails"])
+
+        if outcome == choice:
+            winnings = bet * 2
+            new_bal = await self.db.add_balance(ctx.guild.id, ctx.author.id, winnings)
+            embed.color = discord.Color.green()
+            embed.description = (
+                f"🪙 It landed on **{outcome.capitalize()}**!\n"
+                f"🎉 You won **{bet:,} coins**!\n"
+                f"💰 Balance: **{new_bal:,}**"
+            )
+        else:
+            new_bal = (await self.db.get_user(ctx.guild.id, ctx.author.id))["balance"]
+            embed.color = discord.Color.red()
+            embed.description = (
+                f"🪙 It landed on **{outcome.capitalize()}**!\n"
+                f"❌ You lost **{bet:,} coins**.\n"
+                f"💰 Balance: **{new_bal:,}**"
+            )
+
+        await msg.edit(embed=embed)
+
+    # 7. SLOTS
+    @commands.command(name="slots")
+    @commands.cooldown(1, 5, commands.BucketType.user)
+    async def slots(self, ctx, bet: int):
+        """Play slot machine! Usage: !slots <bet>"""
+        if bet <= 0:
+            await ctx.send("❌ Bet must be positive.")
+            return
+
+        user = await self.db.get_user(ctx.guild.id, ctx.author.id)
+        if user["balance"] < bet:
+            await ctx.send(f"💸 You only have **{user['balance']:,} coins**.")
+            return
+
+        symbols = ["🍋", "🍒", "🍇", "🔔", "💎", "7️⃣"]
+
+        await self.db.add_balance(ctx.guild.id, ctx.author.id, -bet)
+
+        embed = discord.Embed(
+            title="🎰 Slot Machine",
+            description=f"**[ 🎰 | 🎰 | 🎰 ]**\n\n*Spinning reels...*",
+            color=COLOR_PRIMARY
+        )
+        msg = await ctx.send(embed=embed)
+
+        for _ in range(3):
+            await asyncio.sleep(0.6)
+            r1, r2, r3 = random.choice(symbols), random.choice(symbols), random.choice(symbols)
+            embed.description = f"**[ {r1} | {r2} | {r3} ]**\n\n*Spinning reels...*"
+            await msg.edit(embed=embed)
+
+        r1, r2, r3 = random.choice(symbols), random.choice(symbols), random.choice(symbols)
+        await asyncio.sleep(0.7)
+
+        if r1 == r2 == r3:
+            multiplier = 5 if r1 in ["💎", "7️⃣"] else 3
+            winnings = bet * multiplier
+            new_bal = await self.db.add_balance(ctx.guild.id, ctx.author.id, winnings)
+            embed.color = discord.Color.gold()
+            embed.description = (
+                f"**[ {r1} | {r2} | {r3} ]**\n\n"
+                f"🎉 **JACKPOT!** You won **{winnings:,} coins** ({multiplier}x)!\n"
+                f"💰 Balance: **{new_bal:,}**"
+            )
+        elif r1 == r2 or r2 == r3 or r1 == r3:
+            winnings = int(bet * 1.5)
+            new_bal = await self.db.add_balance(ctx.guild.id, ctx.author.id, winnings)
+            embed.color = discord.Color.green()
+            embed.description = (
+                f"**[ {r1} | {r2} | {r3} ]**\n\n"
+                f"✨ **SMALL WIN!** You won **{winnings:,} coins** (1.5x)!\n"
+                f"💰 Balance: **{new_bal:,}**"
+            )
+        else:
+            new_bal = (await self.db.get_user(ctx.guild.id, ctx.author.id))["balance"]
+            embed.color = discord.Color.red()
+            embed.description = (
+                f"**[ {r1} | {r2} | {r3} ]**\n\n"
+                f"❌ You lost **{bet:,} coins**.\n"
+                f"💰 Balance: **{new_bal:,}**"
+            )
+
+        await msg.edit(embed=embed)
+
+    # 8. BLACKJACK
     @commands.command(name="blackjack", aliases=["bj"])
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def blackjack(self, ctx, bet: int):
+        """Play Blackjack! Usage: !blackjack <bet>"""
         if bet <= 0:
-            await ctx.send("🃏 Bet must be positive.")
+            await ctx.send("❌ Bet must be positive.")
             return
 
         user = await self.db.get_user(ctx.guild.id, ctx.author.id)
-
         if user["balance"] < bet:
             await ctx.send(f"💸 You only have **{user['balance']:,} coins**.")
             return
 
-        def draw():
-            return random.randint(1, 11)
+        await self.db.add_balance(ctx.guild.id, ctx.author.id, -bet)
 
-        def hand_value(cards):
-            return sum(cards)
+        suits = ["♠️", "♥️", "♦️", "♣️"]
+        ranks = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"]
+        deck = [(rank, suit) for suit in suits for rank in ranks]
+        random.shuffle(deck)
 
-        player = [draw(), draw()]
-        dealer = [draw(), draw()]
+        player_hand = [deck.pop(), deck.pop()]
+        dealer_hand = [deck.pop(), deck.pop()]
 
-        view = BlackjackView(ctx.author.id)
+        view = BlackjackView(self, ctx, bet, player_hand, dealer_hand, deck)
+        p_score = view.calc_score(player_hand)
+
+        if p_score == 21:
+            winnings = int(bet * 2.5)
+            new_bal = await self.db.add_balance(ctx.guild.id, ctx.author.id, winnings)
+            embed = discord.Embed(
+                title="🃏 BLACKJACK!",
+                description=(
+                    f"**Dealer's Hand:** {view.render_hand(dealer_hand)}\n"
+                    f"**Your Hand:** {view.render_hand(player_hand)} (**21**)\n\n"
+                    f"🎉 **Natural Blackjack!** You won **{winnings:,} coins**!\n"
+                    f"💰 Balance: **{new_bal:,}**"
+                ),
+                color=discord.Color.gold()
+            )
+            await ctx.send(embed=embed)
+            return
 
         embed = discord.Embed(
             title="🃏 Blackjack",
             description=(
-                f"Your hand: {player} = **{hand_value(player)}**\n"
-                f"Dealer shows: {dealer[0]}\n\n"
-                f"Hit or stand? (30s)"
+                f"**Dealer's Hand:** {view.render_hand(dealer_hand, hide_dealer=True)}\n"
+                f"**Your Hand:** {view.render_hand(player_hand)} (**{p_score}**)\n\n"
+                f"Choose your action below!"
             ),
-            color=discord.Color.dark_green()
+            color=COLOR_PRIMARY
         )
-        msg = await ctx.send(embed=embed, view=view)
+        await ctx.send(embed=embed, view=view)
 
-        while True:
-            await view.wait()
+    # 9. 8BALL
+    @commands.command(name="8ball")
+    async def eightball(self, ctx, *, question: str):
+        """Ask the Magic 8-Ball a question!"""
+        responses = [
+            "🟢 It is certain.",
+            "🟢 Without a doubt.",
+            "🟢 Yes definitely.",
+            "🟢 You may rely on it.",
+            "🟢 As I see it, yes.",
+            "🟡 Reply hazy, try again.",
+            "🟡 Ask again later.",
+            "🟡 Better not tell you now.",
+            "🟡 Cannot predict now.",
+            "🔴 Don't count on it.",
+            "🔴 My reply is no.",
+            "🔴 My sources say no.",
+            "🔴 Very doubtful."
+        ]
 
-            if view.timed_out or view.choice is None:
-                await msg.edit(content="⏰ Timed out.", view=None)
-                return
+        embed = discord.Embed(
+            title="🎱 Magic 8-Ball",
+            description=(
+                f"**Question:** {question}\n"
+                f"**Answer:** {random.choice(responses)}"
+            ),
+            color=COLOR_PRIMARY
+        )
+        await ctx.send(embed=footer(embed, ctx))
 
-            if view.choice == "hit":
-                player.append(draw())
-
-                if hand_value(player) > 21:
-                    await record_game(self.db, ctx, ctx.author, won=False, coins=-bet)
-                    embed = discord.Embed(
-                        title="🃏 Blackjack — Bust!",
-                        description=(
-                            f"Your hand: {player} = **{hand_value(player)}**\n"
-                            f"💀 You busted and lost **{bet:,} coins**."
-                        ),
-                        color=discord.Color.red()
-                    )
-                    await msg.edit(embed=embed, view=None)
-                    return
-
-                view = BlackjackView(ctx.author.id)
-                embed = discord.Embed(
-                    title="🃏 Blackjack",
-                    description=(
-                        f"Your hand: {player} = **{hand_value(player)}**\n"
-                        f"Dealer shows: {dealer[0]}\n\nHit or stand? (30s)"
-                    ),
-                    color=discord.Color.dark_green()
-                )
-                await msg.edit(embed=embed, view=view)
-                continue
-
-            # stand — dealer plays
-            while hand_value(dealer) < 17:
-                dealer.append(draw())
-
-            player_total = hand_value(player)
-            dealer_total = hand_value(dealer)
-
-            if dealer_total > 21 or player_total > dealer_total:
-                won, net = True, bet
-                outcome = f"🎉 You win **{bet:,} coins**!"
-            elif player_total == dealer_total:
-                won, net = False, 0
-                outcome = "🤝 Push — bet returned."
-            else:
-                won, net = False, -bet
-                outcome = f"💀 You lost **{bet:,} coins**."
-
-            await record_game(self.db, ctx, ctx.author, won=won, coins=net)
-
-            embed = discord.Embed(
-                title="🃏 Blackjack — Result",
-                description=(
-                    f"Your hand: {player} = **{player_total}**\n"
-                    f"Dealer hand: {dealer} = **{dealer_total}**\n\n{outcome}"
-                ),
-                color=discord.Color.dark_green()
-            )
-            await msg.edit(embed=embed, view=None)
-            return
-
-    # ------------------------------------------------------------
-    @rps.error
-    @guess.error
+    # Error handling
     @trivia.error
+    @rps.error
+    @roll.error
+    @guess.error
     @coinflip.error
     @slots.error
     @blackjack.error
     async def on_game_error(self, ctx, error):
         if isinstance(error, commands.CommandOnCooldown):
             await ctx.send(f"⏳ Slow down — try again in {error.retry_after:.1f}s.")
+        elif isinstance(error, commands.MissingRequiredArgument):
+            await ctx.send("❌ Missing required argument. Use `!games` to see how to play.")
         elif isinstance(error, commands.BadArgument):
-            await ctx.send("❌ That doesn't look right — check `!help` for usage.")
-
-
-class BlackjackView(discord.ui.View):
-    def __init__(self, player_id):
-        super().__init__(timeout=30)
-        self.player_id = player_id
-        self.choice = None
-        self.timed_out = False
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.player_id:
-            await interaction.response.send_message(
-                "This isn't your game!", ephemeral=True
-            )
-            return False
-        return True
-
-    async def on_timeout(self):
-        self.timed_out = True
-        self.stop()
-
-    @discord.ui.button(label="Hit", style=discord.ButtonStyle.success, emoji="🃏")
-    async def hit(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.choice = "hit"
-        await interaction.response.defer()
-        self.stop()
-
-    @discord.ui.button(label="Stand", style=discord.ButtonStyle.secondary, emoji="✋")
-    async def stand(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.choice = "stand"
-        await interaction.response.defer()
-        self.stop()
-
-
-class GameMenuView(discord.ui.View):
-    def __init__(self, cog):
-        super().__init__(timeout=120)
-        self.cog = cog
-
-    @discord.ui.button(label="🎲 Dice", style=discord.ButtonStyle.primary)
-    async def dice_button(self, interaction: discord.Interaction, button):
-        result = random.randint(1, 6)
-        await interaction.response.send_message(
-            f"🎲 {interaction.user.mention} rolled **{result}**!"
-        )
-
-    @discord.ui.button(label="✊ RPS", style=discord.ButtonStyle.success)
-    async def rps_button(self, interaction: discord.Interaction, button):
-        choice = random.choice(["rock", "paper", "scissors"])
-        await interaction.response.send_message(
-            f"✊ Your random opponent chose **{choice}**! "
-            f"Use `!rps <choice>` to actually play for coins."
-        )
-
-    @discord.ui.button(label="🎱 8-Ball", style=discord.ButtonStyle.secondary)
-    async def ball_button(self, interaction: discord.Interaction, button):
-        answer = random.choice(Games.EIGHTBALL_ANSWERS)
-        await interaction.response.send_message(f"🎱 **{answer}**")
+            await ctx.send("❌ Invalid argument. Please enter numbers and choices correctly.")
 
 
 async def setup(bot):
