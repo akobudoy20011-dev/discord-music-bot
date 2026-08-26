@@ -280,6 +280,26 @@ class Economy(commands.Cog):
         await ctx.send(embed=footer(embed, ctx))
 
     # ------------------------------------------------------------
+    @commands.command(name="setbalance")
+    @commands.is_owner()
+    async def setbalance(self, ctx, member: discord.Member, amount: int):
+        """Owner-only: directly set a user's balance."""
+
+        if amount < 0:
+            await ctx.send("❌ Balance cannot be negative.")
+            return
+
+        await self.db.update_user(
+            ctx.guild.id,
+            member.id,
+            balance=amount
+        )
+
+        await ctx.send(
+            f"💰 Set {member.mention}'s balance to **{amount:,} coins**."
+        )
+
+    # ------------------------------------------------------------
     @daily.error
     @work.error
     @pay.error
