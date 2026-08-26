@@ -2,22 +2,27 @@
 cogs/games.py
 ================
 Full collection of mini-games: trivia, rps, roll, guess, coinflip, slots, blackjack, and 8ball.
-Integrated with server coin economy (bot.db).
+Integrated with server coin economy (bot.db) and AI-powered 8-ball responses.
 """
 
 import asyncio
+import os
 import random
 import time
-from typing import Union
 
 import discord
 from discord.ext import commands
 
 from constants import COLOR_PRIMARY, COLOR_GOLD, footer
 
-# ------------------------------------------------------------
-# 🎯 TRIVIA DATA & VIEW
-# ------------------------------------------------------------
+# Optional Gemini import for AI-powered 8ball
+try:
+    from google import genai
+    from google.genai import types
+    HAS_GENAI = True
+except ImportError:
+    HAS_GENAI = False
+
 TRIVIA_QUESTIONS = [
     {
         "q": "Which element has the chemical symbol 'O'?",
@@ -51,6 +56,7 @@ TRIVIA_QUESTIONS = [
     }
 ]
 
+
 class TriviaView(discord.ui.View):
     def __init__(self, cog, ctx, question_data):
         super().__init__(timeout=30)
@@ -60,12 +66,10 @@ class TriviaView(discord.ui.View):
         self.answered = False
 
         labels = ["A", "B", "C", "D"]
-        styles = [discord.ButtonStyle.primary] * 4
-
         for idx, option in enumerate(question_data["options"]):
             button = discord.ui.Button(
                 label=f"{labels[idx]}: {option}",
-                style=styles[idx],
+                style=discord.ButtonStyle.primary,
                 custom_id=str(idx)
             )
             button.callback = self.make_callback(idx)
@@ -120,9 +124,7 @@ class TriviaView(discord.ui.View):
 
         return callback
 
-# ------------------------------------------------------------
-# 🪨 ROCK PAPER SCISSORS VIEW
-# ------------------------------------------------------------
+
 class RPSView(discord.ui.View):
     def __init__(self, cog, ctx, bet: int = 0):
         super().__init__(timeout=30)
@@ -188,7 +190,7 @@ class RPSView(discord.ui.View):
                 desc = "👔 **It's a tie!**"
                 color = COLOR_GOLD
             else:
-                desc = "❌ **You lost!** Better luck next time!"
+                desc = "❌ **You lost!**"
                 color = discord.Color.red()
 
         embed = discord.Embed(
@@ -202,9 +204,7 @@ class RPSView(discord.ui.View):
         )
         await interaction.response.edit_message(embed=embed, view=self)
 
-# ------------------------------------------------------------
-# 🃏 BLACKJACK VIEW
-# ------------------------------------------------------------
+
 class BlackjackView(discord.ui.View):
     def __init__(self, cog, ctx, bet, player_hand, dealer_hand, deck):
         super().__init__(timeout=60)
@@ -333,17 +333,19 @@ class BlackjackView(discord.ui.View):
         await interaction.response.edit_message(embed=embed, view=self)
 
 
-# ------------------------------------------------------------
-# 🎮 MAIN GAMES COG
-# ------------------------------------------------------------
 class Games(commands.Cog):
     """Interactive mini-games and gambling hub."""
 
     def __init__(self, bot):
         self.bot = bot
         self.db = bot.db
+        
+        # Setup AI client for intelligent 8ball answers if API key exists
+        self.ai_client = None
+        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("ANTHROPIC_API_KEY")
+        if HAS_GENAI and api_key:
+            self.ai_client = genai.Client(api_key=api_key)
 
-    # 1. GAMES HUB MENU
     @commands.command(name="games")
     async def games(self, ctx):
         """Displays available mini-games and rules."""
@@ -358,13 +360,12 @@ class Games(commands.Cog):
                 "🪙 `!coinflip <heads/tails> <bet>` — Flip a coin (2x payout).\n"
                 "🎰 `!slots <bet>` — Spin the slot machine reels.\n"
                 "🃏 `!blackjack <bet>` — Interactive card table.\n"
-                "🎱 `!8ball <question>` — Ask the magic 8-ball."
+                "🎱 `!8ball <question>` — Ask the mysterious magic 8-ball."
             ),
             color=COLOR_PRIMARY
         )
         await ctx.send(embed=footer(embed, ctx))
 
-    # 2. TRIVIA
     @commands.command(name="trivia")
     @commands.cooldown(1, 10, commands.BucketType.user)
     async def trivia(self, ctx):
@@ -379,7 +380,6 @@ class Games(commands.Cog):
         )
         await ctx.send(embed=embed, view=view)
 
-    # 3. ROCK PAPER SCISSORS
     @commands.command(name="rps")
     @commands.cooldown(1, 3, commands.BucketType.user)
     async def rps(self, ctx, choice: str = None, bet: int = 0):
@@ -402,7 +402,6 @@ class Games(commands.Cog):
         view = RPSView(self, ctx, bet)
 
         if choice and choice.lower() in ["rock", "paper", "scissors"]:
-            # If user provided choice in command arguments
             choices = ["rock", "paper", "scissors"]
             emojis = {"rock": "🪨", "paper": "📄", "scissors": "✂️"}
             player_choice = choice.lower()
@@ -462,15 +461,11 @@ class Games(commands.Cog):
             )
             await ctx.send(embed=embed, view=view)
 
-    # 4. ROLL
     @commands.command(name="roll", aliases=["dice"])
     @commands.cooldown(1, 3, commands.BucketType.user)
     async def roll(self, ctx, arg1: int = 100, arg2: int = None):
-        """Roll a die! Usage: !roll <bet> OR !roll <sides>"""
-        bet = None
+        """Roll a die! Usage: !roll <bet> OR !roll <sides> <bet>"""
         sides = 100
-
-        # Determine if user is gambling bet or custom sides
         if arg2 is not None:
             sides = arg1
             bet = arg2
@@ -523,7 +518,6 @@ class Games(commands.Cog):
 
         await msg.edit(embed=embed)
 
-    # 5. GUESS NUMBER
     @commands.command(name="guess")
     @commands.cooldown(1, 4, commands.BucketType.user)
     async def guess(self, ctx, number: int, bet: int = 100):
@@ -574,7 +568,6 @@ class Games(commands.Cog):
 
         await msg.edit(embed=embed)
 
-    # 6. COINFLIP
     @commands.command(name="coinflip", aliases=["cf"])
     @commands.cooldown(1, 4, commands.BucketType.user)
     async def coinflip(self, ctx, arg1: str, arg2: str):
@@ -642,7 +635,6 @@ class Games(commands.Cog):
 
         await msg.edit(embed=embed)
 
-    # 7. SLOTS
     @commands.command(name="slots")
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def slots(self, ctx, bet: int):
@@ -706,7 +698,6 @@ class Games(commands.Cog):
 
         await msg.edit(embed=embed)
 
-    # 8. BLACKJACK
     @commands.command(name="blackjack", aliases=["bj"])
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def blackjack(self, ctx, bet: int):
@@ -760,51 +751,64 @@ class Games(commands.Cog):
         )
         await ctx.send(embed=embed, view=view)
 
-    # 9. 8BALL
     @commands.command(name="8ball")
     async def eightball(self, ctx, *, question: str):
-        """Ask the Magic 8-Ball a question!"""
-        responses = [
-            "🟢 It is certain.",
-            "🟢 Without a doubt.",
-            "🟢 Yes definitely.",
-            "🟢 You may rely on it.",
-            "🟢 As I see it, yes.",
-            "🟡 Reply hazy, try again.",
-            "🟡 Ask again later.",
-            "🟡 Better not tell you now.",
-            "🟡 Cannot predict now.",
-            "🔴 Don't count on it.",
-            "🔴 My reply is no.",
-            "🔴 My sources say no.",
-            "🔴 Very doubtful."
-        ]
+        """Ask the Magic 8-Ball a question! Gives a statement-aware prediction."""
+        async with ctx.typing():
+            answer = None
 
-        embed = discord.Embed(
-            title="🎱 Magic 8-Ball",
-            description=(
-                f"**Question:** {question}\n"
-                f"**Answer:** {random.choice(responses)}"
-            ),
-            color=COLOR_PRIMARY
-        )
-        await ctx.send(embed=footer(embed, ctx))
+            # Try AI generation first for context-aware 8-ball statement responses
+            if self.ai_client:
+                for model_name in ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.0-flash"]:
+                    try:
+                        res = await self.bot.loop.run_in_executor(
+                            None,
+                            lambda m=model_name: self.ai_client.models.generate_content(
+                                model=m,
+                                contents=f"Answer this 8ball question directly based on the statement. Give a short, mystical 1-sentence prediction with an appropriate emoji: '{question}'",
+                                config=types.GenerateContentConfig(
+                                    system_instruction="You are a fortune-telling Magic 8-Ball. Give concise, direct 1-sentence answers tailored specifically to what the user asks or states.",
+                                    temperature=0.8,
+                                    max_output_tokens=100,
+                                )
+                            )
+                        )
+                        if res and res.text:
+                            answer = res.text.strip()
+                            break
+                    except Exception:
+                        continue
 
-    # Error handling
-    @trivia.error
-    @rps.error
-    @roll.error
-    @guess.error
-    @coinflip.error
-    @slots.error
-    @blackjack.error
-    async def on_game_error(self, ctx, error):
-        if isinstance(error, commands.CommandOnCooldown):
-            await ctx.send(f"⏳ Slow down — try again in {error.retry_after:.1f}s.")
-        elif isinstance(error, commands.MissingRequiredArgument):
-            await ctx.send("❌ Missing required argument. Use `!games` to see how to play.")
-        elif isinstance(error, commands.BadArgument):
-            await ctx.send("❌ Invalid argument. Please enter numbers and choices correctly.")
+            # Fallback: Deterministic seed based on question string so identical questions get consistent answers
+            if not answer:
+                responses = [
+                    "🟢 It is certain based on what you said.",
+                    "🟢 Without a doubt, the signs point to yes.",
+                    "🟢 Yes, definitely looks favorable.",
+                    "🟢 You may rely on it happening.",
+                    "🟢 As I see it, yes.",
+                    "🟡 Reply hazy, state it differently and ask again.",
+                    "🟡 Ask again later when the future is clearer.",
+                    "🟡 Better not tell you now.",
+                    "🟡 Cannot predict this outcome yet.",
+                    "🔴 Don't count on it at all.",
+                    "🔴 My reply is a clear no.",
+                    "🔴 My sources say no.",
+                    "🔴 Very doubtful that will happen."
+                ]
+                # Seed with question hash for statement consistency
+                q_seed = sum(ord(c) for c in question.lower())
+                answer = responses[q_seed % len(responses)]
+
+            embed = discord.Embed(
+                title="🎱 Magic 8-Ball",
+                description=(
+                    f"**Question:** {question}\n\n"
+                    f"🔮 **Answer:** {answer}"
+                ),
+                color=COLOR_PRIMARY
+            )
+            await ctx.send(embed=footer(embed, ctx))
 
 
 async def setup(bot):
