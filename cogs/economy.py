@@ -8,6 +8,7 @@ other members, a shop, coin leaderboard, and animated mini-games (slots, coinfli
 import asyncio
 import random
 import time
+from typing import Union
 
 import discord
 from discord.ext import commands
@@ -43,6 +44,9 @@ def fmt_time(seconds):
     return f"{minutes}m"
 
 
+# ------------------------------------------------------------
+# 🃏 BLACKJACK INTERACTIVE BUTTON VIEW
+# ------------------------------------------------------------
 class BlackjackView(discord.ui.View):
     def __init__(self, cog, ctx, bet, player_hand, dealer_hand, deck):
         super().__init__(timeout=60)
@@ -56,15 +60,14 @@ class BlackjackView(discord.ui.View):
     def calc_score(self, hand):
         score = 0
         aces = 0
-        for card in hand:
-            val = card[:-1]
-            if val in ["J", "Q", "K"]:
+        for rank, suit in hand:
+            if rank in ["J", "Q", "K"]:
                 score += 10
-            elif val == "A":
+            elif rank == "A":
                 aces += 1
                 score += 11
             else:
-                score += int(val)
+                score += int(rank)
         while score > 21 and aces:
             score -= 10
             aces -= 1
@@ -72,8 +75,8 @@ class BlackjackView(discord.ui.View):
 
     def render_hand(self, hand, hide_dealer=False):
         if hide_dealer:
-            return f"`{hand[0]}` `🂠`"
-        return " ".join([f"`{card}`" for card in hand])
+            return f"`{hand[0][0]}{hand[0][1]}` `🂠`"
+        return " ".join([f"`{rank}{suit}`" for rank, suit in hand])
 
     @discord.ui.button(label="Hit 🃏", style=discord.ButtonStyle.green)
     async def hit_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -564,7 +567,9 @@ class Economy(commands.Cog):
 
         suits = ["♠️", "♥️", "♦️", "♣️"]
         ranks = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"]
-        deck = [f"{rank}{suit}" for suit in suits for rank in ranks]
+        
+        # Build deck as (rank, suit) tuples to avoid emoji string slicing issues
+        deck = [(rank, suit) for suit in suits for rank in ranks]
         random.shuffle(deck)
 
         player_hand = [deck.pop(), deck.pop()]
@@ -658,8 +663,18 @@ class Economy(commands.Cog):
     # ------------------------------------------------------------
     @commands.command(name="setbalance")
     @commands.is_owner()
-    async def setbalance(self, ctx, member: discord.Member, amount: int):
-        """Owner-only: directly set a user's balance."""
+    async def setbalance(self, ctx, member_or_amount: Union[discord.Member, int], amount: int = None):
+        """Owner-only: directly set a user's balance.
+        Usage: !setbalance 500000  OR  !setbalance @User 500000
+        """
+        if isinstance(member_or_amount, int):
+            amount = member_or_amount
+            member = ctx.author
+        else:
+            member = member_or_amount
+            if amount is None:
+                await ctx.send("❌ Please specify an amount: `!setbalance @User <amount>` or `!setbalance <amount>`")
+                return
 
         if amount < 0:
             await ctx.send("❌ Balance cannot be negative.")
@@ -684,6 +699,7 @@ class Economy(commands.Cog):
     @coinflip.error
     @blackjack.error
     @rob.error
+    @setbalance.error
     async def on_cooldown_error(self, ctx, error):
         if isinstance(error, commands.CommandOnCooldown):
             await ctx.send(
@@ -693,6 +709,8 @@ class Economy(commands.Cog):
             await ctx.send("❌ I couldn't find that member.")
         elif isinstance(error, commands.BadArgument):
             await ctx.send("❌ Invalid argument provided. Check numbers and inputs.")
+        elif isinstance(error, commands.MissingRequiredArgument):
+            await ctx.send("❌ Missing required arguments. Use `!help` to check usage.")
 
 
 async def setup(bot):
