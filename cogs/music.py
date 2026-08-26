@@ -60,6 +60,8 @@ YTDL_OPTIONS = {
     "no_warnings": True,
     "default_search": "auto",
     "source_address": "0.0.0.0",
+    "extractor_args": {"youtube": {"player_client": ["android"]}},
+
 }
 
 if YTDLP_COOKIES_FILE:
@@ -127,6 +129,7 @@ async def fetch_song_mp3(query):
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
+        "extractor_args": {"youtube": {"player_client": ["android"]}},
     
     }
 
