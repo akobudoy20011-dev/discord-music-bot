@@ -2,7 +2,7 @@
 cogs/ai.py
 ================
 AI Chat command powered by Google Gemini API.
-Supports asking questions and smart chat responses.
+Supports asking questions with automatic model fallback.
 """
 
 import os
@@ -11,7 +11,11 @@ from discord.ext import commands
 from google import genai
 from google.genai import types
 
-from constants import COLOR_PRIMARY
+try:
+    from constants import COLOR_PRIMARY
+except ImportError:
+    COLOR_PRIMARY = discord.Color.blue()
+
 
 class AI(commands.Cog):
     """AI Chat functionality using Google Gemini."""
@@ -35,37 +39,52 @@ class AI(commands.Cog):
             return
 
         async with ctx.typing():
-            try:
-                # Runs the API call using gemini-2.5-flash-preview-09-2025
-                response = await self.bot.loop.run_in_executor(
-                    None,
-                    lambda: self.client.models.generate_content(
-                        model="gemini-2.5-flash-preview-09-2025",
-                        contents=question,
-                        config=types.GenerateContentConfig(
-                            system_instruction="You are a friendly, helpful Discord bot assistant. Keep answers clear, concise, and formatted for Discord markdown.",
-                            temperature=0.7,
-                            max_output_tokens=1000,
+            # List of model names to attempt in order
+            models_to_try = [
+                "gemini-2.5-flash",
+                "gemini-1.5-flash",
+                "gemini-2.0-flash",
+                "gemini-flash"
+            ]
+
+            response_text = None
+            last_error = None
+
+            for model_name in models_to_try:
+                try:
+                    res = await self.bot.loop.run_in_executor(
+                        None,
+                        lambda m=model_name: self.client.models.generate_content(
+                            model=m,
+                            contents=question,
+                            config=types.GenerateContentConfig(
+                                system_instruction="You are a friendly, helpful Discord bot assistant. Keep answers clear, concise, and formatted for Discord markdown.",
+                                temperature=0.7,
+                                max_output_tokens=1000,
+                            )
                         )
                     )
-                )
+                    if res and res.text:
+                        response_text = res.text
+                        break
+                except Exception as e:
+                    last_error = e
+                    continue
 
-                reply_text = response.text if response.text else "Sorry, I couldn't generate a response."
+            if not response_text:
+                await ctx.send(f"❌ Error communicating with AI: `{last_error}`")
+                return
 
-                # Discord 2000 character limit check
-                if len(reply_text) > 1950:
-                    reply_text = reply_text[:1950] + "...\n*(response truncated)*"
+            if len(response_text) > 1950:
+                response_text = response_text[:1950] + "...\n*(response truncated)*"
 
-                embed = discord.Embed(
-                    title="🤖 AI Response",
-                    description=reply_text,
-                    color=COLOR_PRIMARY
-                )
-                embed.set_footer(text=f"Asked by {ctx.author.display_name}")
-                await ctx.send(embed=embed)
-
-            except Exception as e:
-                await ctx.send(f"❌ Error communicating with AI: `{e}`")
+            embed = discord.Embed(
+                title="🤖 AI Response",
+                description=response_text,
+                color=COLOR_PRIMARY
+            )
+            embed.set_footer(text=f"Asked by {ctx.author.display_name}")
+            await ctx.send(embed=embed)
 
     @chat.error
     async def chat_error(self, ctx, error):
