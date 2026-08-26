@@ -2,7 +2,6 @@
 cogs/ai.py
 ================
 AI Chat command powered by Google Gemini API.
-Supports asking questions with automatic model fallback.
 """
 
 import os
@@ -39,12 +38,11 @@ class AI(commands.Cog):
             return
 
         async with ctx.typing():
-            # List of model names to attempt in order
+            # Standard, valid model names for the google-genai package
             models_to_try = [
                 "gemini-2.5-flash",
                 "gemini-1.5-flash",
-                "gemini-2.0-flash",
-                "gemini-flash"
+                "gemini-2.0-flash"
             ]
 
             response_text = None
