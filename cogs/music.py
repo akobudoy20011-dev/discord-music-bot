@@ -13,6 +13,7 @@ import asyncio
 import logging
 import os
 import random
+import shutil
 from collections import deque
 
 import discord
@@ -24,6 +25,31 @@ from constants import COLOR_MUSIC, footer
 logger = logging.getLogger("music_bot")
 
 YTDLP_COOKIES_FILE = os.getenv("YTDLP_COOKIES_FILE")
+
+# yt-dlp rewrites the cookie file after every request (YouTube rotates
+# session cookies), so it needs a writable path. Render (and similar
+# hosts) mount "Secret Files" read-only at /etc/secrets/..., which
+# breaks that write with "[Errno 30] Read-only file system". Copy the
+# secret to a writable location once at startup and use that copy
+# instead — this is invisible to everything else in this module since
+# they all reference the YTDLP_COOKIES_FILE name below.
+if YTDLP_COOKIES_FILE and os.path.exists(YTDLP_COOKIES_FILE):
+    if not os.access(YTDLP_COOKIES_FILE, os.W_OK):
+        try:
+            writable_copy = os.path.join(
+                os.getenv("TMPDIR", "/tmp"), "yt_cookies.txt"
+            )
+            shutil.copyfile(YTDLP_COOKIES_FILE, writable_copy)
+            logger.info(
+                f"YTDLP_COOKIES_FILE ({YTDLP_COOKIES_FILE}) is read-only — "
+                f"using a writable copy at {writable_copy} instead."
+            )
+            YTDLP_COOKIES_FILE = writable_copy
+        except OSError:
+            logger.exception(
+                "Could not copy YTDLP_COOKIES_FILE to a writable location — "
+                "downloads will likely fail with a read-only file system error."
+            )
 
 YTDL_OPTIONS = {
     "format": "bestaudio/best",
