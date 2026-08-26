@@ -2,7 +2,7 @@
 cogs/ai.py
 ================
 AI Chat command powered by Google Gemini API.
-Supports asking questions, web search grounding, and smart chat responses.
+Supports asking questions and smart chat responses.
 """
 
 import os
@@ -11,7 +11,7 @@ from discord.ext import commands
 from google import genai
 from google.genai import types
 
-from constants import COLOR_PRIMARY, footer
+from constants import COLOR_PRIMARY
 
 class AI(commands.Cog):
     """AI Chat functionality using Google Gemini."""
@@ -36,11 +36,11 @@ class AI(commands.Cog):
 
         async with ctx.typing():
             try:
-                # Runs the API call in an executor to avoid blocking Discord bot loop
+                # Runs the API call using gemini-2.5-flash-preview-09-2025
                 response = await self.bot.loop.run_in_executor(
                     None,
                     lambda: self.client.models.generate_content(
-                        model="gemini-2.5-flash",
+                        model="gemini-2.5-flash-preview-09-2025",
                         contents=question,
                         config=types.GenerateContentConfig(
                             system_instruction="You are a friendly, helpful Discord bot assistant. Keep answers clear, concise, and formatted for Discord markdown.",
