@@ -8,7 +8,6 @@ other members, a shop, coin leaderboard, and animated mini-games (slots, coinfli
 import asyncio
 import random
 import time
-from typing import Union
 
 import discord
 from discord.ext import commands
@@ -44,9 +43,6 @@ def fmt_time(seconds):
     return f"{minutes}m"
 
 
-# ------------------------------------------------------------
-# 🃏 BLACKJACK VIEW WITH BUTTONS
-# ------------------------------------------------------------
 class BlackjackView(discord.ui.View):
     def __init__(self, cog, ctx, bet, player_hand, dealer_hand, deck):
         super().__init__(timeout=60)
@@ -131,7 +127,6 @@ class BlackjackView(discord.ui.View):
         p_score = self.calc_score(self.player_hand)
         d_score = self.calc_score(self.dealer_hand)
 
-        # Dealer draws to 17
         while d_score < 17:
             self.dealer_hand.append(self.deck.pop())
             d_score = self.calc_score(self.dealer_hand)
@@ -485,7 +480,6 @@ class Economy(commands.Cog):
     @commands.cooldown(1, 4, commands.BucketType.user)
     async def coinflip(self, ctx, arg1: str, arg2: str):
         """Flip a coin! Usage: !coinflip <bet> <heads/tails> OR !coinflip <heads/tails> <bet>"""
-        # Parse inputs regardless of argument order
         bet, choice = None, None
         
         if arg1.isdigit():
@@ -566,7 +560,6 @@ class Economy(commands.Cog):
             await ctx.send(f"💸 You only have **{user['balance']:,} coins**.")
             return
 
-        # Deduct initial bet
         await self.db.add_balance(ctx.guild.id, ctx.author.id, -bet)
 
         suits = ["♠️", "♥️", "♦️", "♣️"]
@@ -580,7 +573,6 @@ class Economy(commands.Cog):
         view = BlackjackView(self, ctx, bet, player_hand, dealer_hand, deck)
         p_score = view.calc_score(player_hand)
 
-        # Check natural blackjack
         if p_score == 21:
             winnings = int(bet * 2.5)
             new_bal = await self.db.add_balance(ctx.guild.id, ctx.author.id, winnings)
