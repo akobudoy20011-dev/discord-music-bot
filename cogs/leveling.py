@@ -1,7 +1,8 @@
 """
 cogs/leveling.py
 =================
-XP-on-message leveling, !rank, !profile, and the XP leaderboard.
+XP-on-message leveling, !rank, !profile, XP leaderboard,
+and owner-only level management.
 """
 
 import random
@@ -19,16 +20,24 @@ XP_MIN = 8
 XP_MAX = 18
 XP_COOLDOWN = 45  # seconds between XP awards per user, anti-spam
 
+# ============================================================
+# BOT OWNER
+# ============================================================
+
+OWNER_ID = 1416702999421784104
+
 
 def xp_bar(current, maximum, length=14):
     if maximum <= 0:
         return "█" * length
+
     filled = int(length * min(current / maximum, 1))
+
     return "█" * filled + "░" * (length - filled)
 
 
 class Leveling(commands.Cog):
-    """Chat XP, levels, ranks, and profiles."""
+    """Chat XP, levels, ranks, profiles, and level management."""
 
     def __init__(self, bot):
         self.bot = bot
@@ -36,6 +45,9 @@ class Leveling(commands.Cog):
         self._xp_cooldowns = {}
 
     # ------------------------------------------------------------
+    # XP ON MESSAGE
+    # ------------------------------------------------------------
+
     @commands.Cog.listener()
     async def on_message(self, message):
         if message.author.bot or not message.guild:
@@ -117,6 +129,9 @@ class Leveling(commands.Cog):
             )
 
     # ------------------------------------------------------------
+    # RANK
+    # ------------------------------------------------------------
+
     @commands.command(name="rank", aliases=["level", "lvl", "xp"])
     async def rank(
         self,
@@ -137,7 +152,11 @@ class Leveling(commands.Cog):
         )
 
         needed = user["level"] * 100
-        bar = xp_bar(user["xp"], needed)
+
+        bar = xp_bar(
+            user["xp"],
+            needed
+        )
 
         embed = discord.Embed(
             title=f"⭐ {member.display_name}'s Rank",
@@ -183,6 +202,9 @@ class Leveling(commands.Cog):
         )
 
     # ------------------------------------------------------------
+    # PROFILE
+    # ------------------------------------------------------------
+
     @commands.command(name="profile", aliases=["me"])
     async def profile(
         self,
@@ -283,11 +305,66 @@ class Leveling(commands.Cog):
         )
 
     # ------------------------------------------------------------
+    # OWNER-ONLY SET LEVEL
+    # ------------------------------------------------------------
+
+    @commands.command(name="setlevel")
+    async def set_level(
+        self,
+        ctx,
+        member: discord.Member,
+        level: int
+    ):
+        """
+        Owner-only command.
+
+        Usage:
+        !setlevel @user 10
+        """
+
+        # Only the bot owner ID can use this command.
+        if ctx.author.id != OWNER_ID:
+            await ctx.send(
+                "❌ You don't have permission to use this command."
+            )
+            return
+
+        # Prevent invalid levels.
+        if level < 1:
+            await ctx.send(
+                "❌ Level must be 1 or higher."
+            )
+            return
+
+        # Make sure the user's database entry exists.
+        await self.db.get_user(
+            ctx.guild.id,
+            member.id
+        )
+
+        # Set the level directly.
+        await self.db.update_user(
+            ctx.guild.id,
+            member.id,
+            level=level,
+            xp=0
+        )
+
+        await ctx.send(
+            f"✅ Set {member.mention}'s level to **{level}** "
+            f"— *{rank_title(level)}*"
+        )
+
+    # ------------------------------------------------------------
+    # XP LEADERBOARD
+    # ------------------------------------------------------------
+
     @commands.command(
         name="xpleaderboard",
         aliases=["xplb", "levels", "levelboard"]
     )
     async def xp_leaderboard(self, ctx):
+
         top = await self.db.leaderboard(
             ctx.guild.id,
             order_by="level",
@@ -304,6 +381,7 @@ class Leveling(commands.Cog):
         lines = []
 
         for i, data in enumerate(top, start=1):
+
             member = ctx.guild.get_member(
                 int(data["user_id"])
             )
@@ -337,61 +415,9 @@ class Leveling(commands.Cog):
         )
 
     # ------------------------------------------------------------
-    # OWNER LEVEL CONTROL
+    # ACHIEVEMENTS
     # ------------------------------------------------------------
 
-    @commands.command(name="setlevel")
-    @commands.is_owner()
-    async def set_level(
-        self,
-        ctx,
-        member: discord.Member,
-        level: int
-    ):
-        """
-        Manually set a user's level.
-        Bot owner only.
-        """
-
-        if level < 1:
-            await ctx.send(
-                "❌ Level must be 1 or higher."
-            )
-            return
-
-        if level > 1000:
-            await ctx.send(
-                "❌ Maximum level is 1000."
-            )
-            return
-
-        await self.db.update_user(
-            ctx.guild.id,
-            member.id,
-            level=level,
-            xp=0
-        )
-
-        embed = discord.Embed(
-            title="⭐ Level Updated",
-            description=(
-                f"{member.mention} is now "
-                f"**Level {level}**.\n\n"
-                f"🎖️ Title: **{rank_title(level)}**\n"
-                f"✨ XP: **0 / {level * 100}**"
-            ),
-            color=COLOR_GOLD
-        )
-
-        embed.set_thumbnail(
-            url=member.display_avatar.url
-        )
-
-        await ctx.send(
-            embed=footer(embed, ctx)
-        )
-
-    # ------------------------------------------------------------
     @commands.command(
         name="achievements",
         aliases=["badges"]
@@ -411,6 +437,7 @@ class Leveling(commands.Cog):
         lines = []
 
         for name, data in ACHIEVEMENTS.items():
+
             status = (
                 "✅"
                 if name in user["achievements"]
