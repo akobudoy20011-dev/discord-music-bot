@@ -2,9 +2,11 @@
 cogs/economy.py
 ================
 Per-guild coin economy: balance, daily (with streaks), work, paying
-other members, a shop, and a coin leaderboard.
+other members, a shop, coin leaderboard, and animated mini-games (slots, coinflip, rob).
 """
 
+import asyncio
+import random
 import time
 
 import discord
@@ -42,7 +44,7 @@ def fmt_time(seconds):
 
 
 class Economy(commands.Cog):
-    """Coins, daily rewards, work, shop, and the coin leaderboard."""
+    """Coins, daily rewards, work, shop, games, and the coin leaderboard."""
 
     def __init__(self, bot):
         self.bot = bot
@@ -115,8 +117,6 @@ class Economy(commands.Cog):
     @commands.command(name="work")
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def work(self, ctx):
-        import random
-
         user = await self.db.get_user(ctx.guild.id, ctx.author.id)
         now = time.time()
         last = user["last_work"]
@@ -280,6 +280,196 @@ class Economy(commands.Cog):
         await ctx.send(embed=footer(embed, ctx))
 
     # ------------------------------------------------------------
+    # 🎰 ANIMATED MINI-GAMES
+    # ------------------------------------------------------------
+
+    @commands.command(name="slots")
+    @commands.cooldown(1, 5, commands.BucketType.user)
+    async def slots(self, ctx, bet: int):
+        """Play animated slot machine with your coins!"""
+        if bet <= 0:
+            await ctx.send("❌ Bet must be a positive integer.")
+            return
+
+        user = await self.db.get_user(ctx.guild.id, ctx.author.id)
+
+        if user["balance"] < bet:
+            await ctx.send(f"💸 You only have **{user['balance']:,} coins**.")
+            return
+
+        symbols = ["🍋", "🍒", "🍇", "🔔", "💎", "7️⃣"]
+
+        # Deduct bet initial
+        await self.db.add_balance(ctx.guild.id, ctx.author.id, -bet)
+
+        embed = discord.Embed(
+            title="🎰 Slot Machine",
+            description=f"**[ 🎰 | 🎰 | 🎰 ]**\n\n*Spinning the reels...*",
+            color=COLOR_PRIMARY
+        )
+        msg = await ctx.send(embed=embed)
+
+        # Animated reel spinning sequence
+        for _ in range(3):
+            await asyncio.sleep(0.7)
+            r1, r2, r3 = random.choice(symbols), random.choice(symbols), random.choice(symbols)
+            embed.description = f"**[ {r1} | {r2} | {r3} ]**\n\n*Reels spinning...*"
+            await msg.edit(embed=embed)
+
+        # Final Outcome
+        r1, r2, r3 = random.choice(symbols), random.choice(symbols), random.choice(symbols)
+        await asyncio.sleep(0.8)
+
+        if r1 == r2 == r3:
+            multiplier = 5 if r1 == "💎" or r1 == "7️⃣" else 3
+            winnings = bet * multiplier
+            new_bal = await self.db.add_balance(ctx.guild.id, ctx.author.id, winnings)
+            
+            embed.color = discord.Color.gold()
+            embed.description = (
+                f"**[ {r1} | {r2} | {r3} ]**\n\n"
+                f"🎉 **JACKPOT!** You won **{winnings:,} coins** ({multiplier}x)!\n"
+                f"💰 Balance: **{new_bal:,}**"
+            )
+        elif r1 == r2 or r2 == r3 or r1 == r3:
+            winnings = int(bet * 1.5)
+            new_bal = await self.db.add_balance(ctx.guild.id, ctx.author.id, winnings)
+
+            embed.color = discord.Color.green()
+            embed.description = (
+                f"**[ {r1} | {r2} | {r3} ]**\n\n"
+                f"✨ **SMALL WIN!** You won **{winnings:,} coins** (1.5x)!\n"
+                f"💰 Balance: **{new_bal:,}**"
+            )
+        else:
+            new_bal = (await self.db.get_user(ctx.guild.id, ctx.author.id))["balance"]
+            embed.color = discord.Color.red()
+            embed.description = (
+                f"**[ {r1} | {r2} | {r3} ]**\n\n"
+                f"❌ You lost **{bet:,} coins**.\n"
+                f"💰 Balance: **{new_bal:,}**"
+            )
+
+        await msg.edit(embed=embed)
+
+    @commands.command(name="coinflip", aliases=["cf"])
+    @commands.cooldown(1, 4, commands.BucketType.user)
+    async def coinflip(self, ctx, bet: int, choice: str):
+        """Flip a coin! Usage: !coinflip <bet> <heads/tails>"""
+        choice = choice.lower()
+        if choice not in ["heads", "tails", "h", "t"]:
+            await ctx.send("❌ Choose either `heads` or `tails`.")
+            return
+
+        choice = "heads" if choice in ["heads", "h"] else "tails"
+
+        if bet <= 0:
+            await ctx.send("❌ Bet must be positive.")
+            return
+
+        user = await self.db.get_user(ctx.guild.id, ctx.author.id)
+        if user["balance"] < bet:
+            await ctx.send(f"💸 You only have **{user['balance']:,} coins**.")
+            return
+
+        await self.db.add_balance(ctx.guild.id, ctx.author.id, -bet)
+
+        embed = discord.Embed(
+            title="🪙 Coinflip",
+            description="Flipping coin... 🟡",
+            color=COLOR_PRIMARY
+        )
+        msg = await ctx.send(embed=embed)
+
+        # Animation sequence
+        await asyncio.sleep(0.6)
+        embed.description = "Flipping coin... 🪙"
+        await msg.edit(embed=embed)
+
+        await asyncio.sleep(0.6)
+        embed.description = "Flipping coin... 🟡"
+        await msg.edit(embed=embed)
+
+        await asyncio.sleep(0.6)
+        outcome = random.choice(["heads", "tails"])
+
+        if outcome == choice:
+            winnings = bet * 2
+            new_bal = await self.db.add_balance(ctx.guild.id, ctx.author.id, winnings)
+            embed.color = discord.Color.green()
+            embed.description = (
+                f"🪙 It landed on **{outcome.capitalize()}**!\n"
+                f"🎉 You won **{bet:,} coins**!\n"
+                f"💰 Balance: **{new_bal:,}**"
+            )
+        else:
+            new_bal = (await self.db.get_user(ctx.guild.id, ctx.author.id))["balance"]
+            embed.color = discord.Color.red()
+            embed.description = (
+                f"🪙 It landed on **{outcome.capitalize()}**!\n"
+                f"❌ You lost **{bet:,} coins**.\n"
+                f"💰 Balance: **{new_bal:,}**"
+            )
+
+        await msg.edit(embed=embed)
+
+    @commands.command(name="rob")
+    @commands.cooldown(1, 30, commands.BucketType.user)
+    async def rob(self, ctx, member: discord.Member):
+        """Attempt to rob coins from another user (30s cooldown)."""
+        if member.bot:
+            await ctx.send("❌ You can't rob a bot.")
+            return
+        if member.id == ctx.author.id:
+            await ctx.send("❌ You can't rob yourself!")
+            return
+
+        robber = await self.db.get_user(ctx.guild.id, ctx.author.id)
+        victim = await self.db.get_user(ctx.guild.id, member.id)
+
+        if robber["balance"] < 100:
+            await ctx.send("❌ You need at least **100 coins** to risk robbing someone.")
+            return
+
+        if victim["balance"] < 100:
+            await ctx.send(f"❌ {member.display_name} doesn't have enough coins to rob.")
+            return
+
+        embed = discord.Embed(
+            title="🥷 Attempting Heist...",
+            description=f"Sneaking up on {member.mention}...",
+            color=COLOR_PRIMARY
+        )
+        msg = await ctx.send(embed=embed)
+
+        await asyncio.sleep(1.5)
+
+        # 45% chance of success
+        if random.random() <= 0.45:
+            stolen = random.randint(int(victim["balance"] * 0.1), int(victim["balance"] * 0.35))
+            await self.db.add_balance(ctx.guild.id, member.id, -stolen)
+            new_bal = await self.db.add_balance(ctx.guild.id, ctx.author.id, stolen)
+
+            embed.color = discord.Color.green()
+            embed.title = "🥷 Successful Robbery!"
+            embed.description = (
+                f"You snuck away with **{stolen:,} coins** from {member.mention}!\n"
+                f"💰 Your Balance: **{new_bal:,}**"
+            )
+        else:
+            fine = random.randint(50, min(200, robber["balance"]))
+            new_bal = await self.db.add_balance(ctx.guild.id, ctx.author.id, -fine)
+
+            embed.color = discord.Color.red()
+            embed.title = "🚨 Caught by Police!"
+            embed.description = (
+                f"You were caught trying to rob {member.mention} and fined **{fine:,} coins**!\n"
+                f"💰 Your Balance: **{new_bal:,}**"
+            )
+
+        await msg.edit(embed=embed)
+
+    # ------------------------------------------------------------
     @commands.command(name="setbalance")
     @commands.is_owner()
     async def setbalance(self, ctx, member: discord.Member, amount: int):
@@ -304,6 +494,9 @@ class Economy(commands.Cog):
     @work.error
     @pay.error
     @buy.error
+    @slots.error
+    @coinflip.error
+    @rob.error
     async def on_cooldown_error(self, ctx, error):
         if isinstance(error, commands.CommandOnCooldown):
             await ctx.send(
@@ -312,7 +505,7 @@ class Economy(commands.Cog):
         elif isinstance(error, commands.MemberNotFound):
             await ctx.send("❌ I couldn't find that member.")
         elif isinstance(error, commands.BadArgument):
-            await ctx.send("❌ That amount needs to be a whole number.")
+            await ctx.send("❌ Invalid argument provided. Check numbers and inputs.")
 
 
 async def setup(bot):
