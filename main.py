@@ -8,6 +8,7 @@ and starts the Render health-check server alongside the Discord client.
 import asyncio
 import logging
 import os
+import traceback
 
 import discord
 from discord.ext import commands
@@ -65,8 +66,9 @@ async def setup_hook():
         try:
             await bot.load_extension(cog)
             logger.info(f"Loaded {cog}")
-        except Exception:
-            logger.exception(f"Failed to load {cog}")
+        except Exception as e:
+            logger.error(f"❌ Failed to load {cog}: {e}")
+            logger.error(traceback.format_exc())
 
     asyncio.create_task(start_web_server())
 
@@ -108,9 +110,7 @@ async def guild_only_globally(ctx):
 async def on_command_error(ctx, error):
     error = getattr(error, "original", error)
 
-    # If the command (or its cog) already has its own error handler,
-    # let that handle it — don't also fire this generic one and
-    # double-message the user.
+    # If the command (or its cog) already has its own error handler, let that handle it.
     if ctx.command and (
         ctx.command.has_error_handler() or
         (ctx.cog and ctx.cog.has_error_handler())
@@ -118,22 +118,7 @@ async def on_command_error(ctx, error):
         return
 
     if isinstance(error, commands.CommandNotFound):
-        # Only fall back to a music search for genuinely unknown input —
-        # never for a typo of a real command — and only inside a
-        # server (not DMs) where voice makes sense.
-        if ctx.guild is None:
-            return
-
-        query = ctx.message.content[len(ctx.prefix):].strip()
-        first_word = query.split()[0].lower() if query else ""
-
-        if not query or bot.get_command(first_word) is not None:
-            return
-
-        music_cog = bot.get_cog("Music")
-        if music_cog:
-            await music_cog.enqueue(ctx, query)
-
+        # Ignored to prevent treating game commands or unknown input as music searches
         return
 
     if isinstance(error, commands.MissingRequiredArgument):
