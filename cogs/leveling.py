@@ -43,9 +43,14 @@ class Leveling(commands.Cog):
 
         config = await self.db.get_guild_config(message.guild.id)
 
-        user = await self.db.get_user(message.guild.id, message.author.id)
+        user = await self.db.get_user(
+            message.guild.id,
+            message.author.id
+        )
+
         await self.db.update_user(
-            message.guild.id, message.author.id,
+            message.guild.id,
+            message.author.id,
             messages=user["messages"] + 1
         )
 
@@ -61,8 +66,11 @@ class Leveling(commands.Cog):
         self._xp_cooldowns[key] = now
 
         amount = random.randint(XP_MIN, XP_MAX)
+
         old_level, new_level, _ = await self.db.add_xp(
-            message.guild.id, message.author.id, amount
+            message.guild.id,
+            message.author.id,
+            amount
         )
 
         if new_level > old_level and config["level_announce"]:
@@ -72,6 +80,7 @@ class Leveling(commands.Cog):
                 configured = message.guild.get_channel(
                     int(config["level_channel_id"])
                 )
+
                 if configured:
                     channel = configured
 
@@ -84,10 +93,12 @@ class Leveling(commands.Cog):
                 ),
                 color=COLOR_GOLD
             )
+
             await channel.send(embed=embed)
 
             fresh_user = await self.db.get_user(
-                message.guild.id, message.author.id
+                message.guild.id,
+                message.author.id
             )
 
             class _FakeCtx:
@@ -98,14 +109,32 @@ class Leveling(commands.Cog):
             fake_ctx.channel = channel
             fake_ctx.author = message.author
 
-            await check_achievements(self.db, fake_ctx, message.author, fresh_user)
+            await check_achievements(
+                self.db,
+                fake_ctx,
+                message.author,
+                fresh_user
+            )
 
     # ------------------------------------------------------------
     @commands.command(name="rank", aliases=["level", "lvl", "xp"])
-    async def rank(self, ctx, member: discord.Member = None):
+    async def rank(
+        self,
+        ctx,
+        member: discord.Member = None
+    ):
         member = member or ctx.author
-        user = await self.db.get_user(ctx.guild.id, member.id)
-        position = await self.db.rank_position(ctx.guild.id, member.id, "level")
+
+        user = await self.db.get_user(
+            ctx.guild.id,
+            member.id
+        )
+
+        position = await self.db.rank_position(
+            ctx.guild.id,
+            member.id,
+            "level"
+        )
 
         needed = user["level"] * 100
         bar = xp_bar(user["xp"], needed)
@@ -114,78 +143,186 @@ class Leveling(commands.Cog):
             title=f"⭐ {member.display_name}'s Rank",
             color=COLOR_PRIMARY
         )
-        embed.set_thumbnail(url=member.display_avatar.url)
-        embed.add_field(name="⭐ Level", value=f"**{user['level']}**", inline=True)
-        embed.add_field(
-            name="🎖️ Title", value=f"**{rank_title(user['level'])}**", inline=True
-        )
-        embed.add_field(name="🏆 Server Rank", value=f"**#{position}**", inline=True)
-        embed.add_field(
-            name="✨ XP", value=f"**{user['xp']:,} / {needed:,}**", inline=False
-        )
-        embed.add_field(name="Progress", value=f"`{bar}`", inline=False)
 
-        await ctx.send(embed=footer(embed, ctx))
+        embed.set_thumbnail(
+            url=member.display_avatar.url
+        )
+
+        embed.add_field(
+            name="⭐ Level",
+            value=f"**{user['level']}**",
+            inline=True
+        )
+
+        embed.add_field(
+            name="🎖️ Title",
+            value=f"**{rank_title(user['level'])}**",
+            inline=True
+        )
+
+        embed.add_field(
+            name="🏆 Server Rank",
+            value=f"**#{position}**",
+            inline=True
+        )
+
+        embed.add_field(
+            name="✨ XP",
+            value=f"**{user['xp']:,} / {needed:,}**",
+            inline=False
+        )
+
+        embed.add_field(
+            name="Progress",
+            value=f"`{bar}`",
+            inline=False
+        )
+
+        await ctx.send(
+            embed=footer(embed, ctx)
+        )
 
     # ------------------------------------------------------------
     @commands.command(name="profile", aliases=["me"])
-    async def profile(self, ctx, member: discord.Member = None):
+    async def profile(
+        self,
+        ctx,
+        member: discord.Member = None
+    ):
         member = member or ctx.author
-        user = await self.db.get_user(ctx.guild.id, member.id)
-        position = await self.db.rank_position(ctx.guild.id, member.id, "level")
+
+        user = await self.db.get_user(
+            ctx.guild.id,
+            member.id
+        )
+
+        position = await self.db.rank_position(
+            ctx.guild.id,
+            member.id,
+            "level"
+        )
+
         needed = user["level"] * 100
 
         embed = discord.Embed(
             title=f"👤 {member.display_name}",
             color=COLOR_PRIMARY
         )
-        embed.set_thumbnail(url=member.display_avatar.url)
 
-        embed.add_field(name="⭐ Level", value=user["level"], inline=True)
-        embed.add_field(name="🎖️ Rank", value=rank_title(user["level"]), inline=True)
-        embed.add_field(name="🏆 Server Rank", value=f"#{position}", inline=True)
-
-        embed.add_field(
-            name="✨ XP", value=f"{user['xp']:,} / {needed:,}", inline=True
-        )
-        embed.add_field(name="💰 Coins", value=f"{user['balance']:,}", inline=True)
-        embed.add_field(
-            name="🔥 Daily Streak", value=f"{user['daily_streak']} days", inline=True
+        embed.set_thumbnail(
+            url=member.display_avatar.url
         )
 
-        embed.add_field(name="💬 Messages", value=f"{user['messages']:,}", inline=True)
-        embed.add_field(name="🎮 Games Played", value=f"{user['games']:,}", inline=True)
-        embed.add_field(name="🏆 Wins", value=f"{user['wins']:,}", inline=True)
+        embed.add_field(
+            name="⭐ Level",
+            value=user["level"],
+            inline=True
+        )
+
+        embed.add_field(
+            name="🎖️ Rank",
+            value=rank_title(user["level"]),
+            inline=True
+        )
+
+        embed.add_field(
+            name="🏆 Server Rank",
+            value=f"#{position}",
+            inline=True
+        )
+
+        embed.add_field(
+            name="✨ XP",
+            value=f"{user['xp']:,} / {needed:,}",
+            inline=True
+        )
+
+        embed.add_field(
+            name="💰 Coins",
+            value=f"{user['balance']:,}",
+            inline=True
+        )
+
+        embed.add_field(
+            name="🔥 Daily Streak",
+            value=f"{user['daily_streak']} days",
+            inline=True
+        )
+
+        embed.add_field(
+            name="💬 Messages",
+            value=f"{user['messages']:,}",
+            inline=True
+        )
+
+        embed.add_field(
+            name="🎮 Games Played",
+            value=f"{user['games']:,}",
+            inline=True
+        )
+
+        embed.add_field(
+            name="🏆 Wins",
+            value=f"{user['wins']:,}",
+            inline=True
+        )
 
         embed.add_field(
             name=f"🏅 Achievements ({len(user['achievements'])})",
             value=(
-                ", ".join(user["achievements"][:8]) + ("…" if len(user["achievements"]) > 8 else "")
-                if user["achievements"] else "None yet — try `!achievements`"
+                ", ".join(user["achievements"][:8])
+                + ("…" if len(user["achievements"]) > 8 else "")
+                if user["achievements"]
+                else "None yet — try `!achievements`"
             ),
             inline=False
         )
 
-        await ctx.send(embed=footer(embed, ctx))
+        await ctx.send(
+            embed=footer(embed, ctx)
+        )
 
     # ------------------------------------------------------------
-    @commands.command(name="xpleaderboard", aliases=["xplb", "levels", "levelboard"])
+    @commands.command(
+        name="xpleaderboard",
+        aliases=["xplb", "levels", "levelboard"]
+    )
     async def xp_leaderboard(self, ctx):
-        top = await self.db.leaderboard(ctx.guild.id, order_by="level", limit=10)
+        top = await self.db.leaderboard(
+            ctx.guild.id,
+            order_by="level",
+            limit=10
+        )
 
         if not top:
-            await ctx.send("📊 Nobody has earned XP yet.")
+            await ctx.send(
+                "📊 Nobody has earned XP yet."
+            )
             return
 
         medals = ["🥇", "🥈", "🥉"]
         lines = []
 
         for i, data in enumerate(top, start=1):
-            member = ctx.guild.get_member(int(data["user_id"]))
-            name = member.display_name if member else f"User {data['user_id']}"
-            prefix = medals[i - 1] if i <= 3 else f"**{i}.**"
+            member = ctx.guild.get_member(
+                int(data["user_id"])
+            )
+
+            name = (
+                member.display_name
+                if member
+                else f"User {data['user_id']}"
+            )
+
+            prefix = (
+                medals[i - 1]
+                if i <= 3
+                else f"**{i}.**"
+            )
+
             lines.append(
-                f"{prefix} **{name}** — Level `{data['level']}` "
+                f"{prefix} **{name}** — "
+                f"Level `{data['level']}` "
                 f"• `{data['xp']} XP`"
             )
 
@@ -194,28 +331,114 @@ class Leveling(commands.Cog):
             description="\n".join(lines),
             color=COLOR_GOLD
         )
-        await ctx.send(embed=footer(embed, ctx))
 
+        await ctx.send(
+            embed=footer(embed, ctx)
+        )
 
     # ------------------------------------------------------------
-    @commands.command(name="achievements", aliases=["badges"])
-    async def achievements(self, ctx, member: discord.Member = None):
+    # OWNER LEVEL CONTROL
+    # ------------------------------------------------------------
+
+    @commands.command(name="setlevel")
+    @commands.is_owner()
+    async def set_level(
+        self,
+        ctx,
+        member: discord.Member,
+        level: int
+    ):
+        """
+        Manually set a user's level.
+        Bot owner only.
+        """
+
+        if level < 1:
+            await ctx.send(
+                "❌ Level must be 1 or higher."
+            )
+            return
+
+        if level > 1000:
+            await ctx.send(
+                "❌ Maximum level is 1000."
+            )
+            return
+
+        await self.db.update_user(
+            ctx.guild.id,
+            member.id,
+            level=level,
+            xp=0
+        )
+
+        embed = discord.Embed(
+            title="⭐ Level Updated",
+            description=(
+                f"{member.mention} is now "
+                f"**Level {level}**.\n\n"
+                f"🎖️ Title: **{rank_title(level)}**\n"
+                f"✨ XP: **0 / {level * 100}**"
+            ),
+            color=COLOR_GOLD
+        )
+
+        embed.set_thumbnail(
+            url=member.display_avatar.url
+        )
+
+        await ctx.send(
+            embed=footer(embed, ctx)
+        )
+
+    # ------------------------------------------------------------
+    @commands.command(
+        name="achievements",
+        aliases=["badges"]
+    )
+    async def achievements(
+        self,
+        ctx,
+        member: discord.Member = None
+    ):
         member = member or ctx.author
-        user = await self.db.get_user(ctx.guild.id, member.id)
+
+        user = await self.db.get_user(
+            ctx.guild.id,
+            member.id
+        )
 
         lines = []
 
         for name, data in ACHIEVEMENTS.items():
-            status = "✅" if name in user["achievements"] else "🔒"
-            lines.append(f"{status} {data['emoji']} **{name}** — {data['description']}")
+            status = (
+                "✅"
+                if name in user["achievements"]
+                else "🔒"
+            )
+
+            lines.append(
+                f"{status} {data['emoji']} "
+                f"**{name}** — {data['description']}"
+            )
 
         embed = discord.Embed(
-            title=f"🏅 Achievements ({len(user['achievements'])}/{len(ACHIEVEMENTS)})",
+            title=(
+                f"🏅 Achievements "
+                f"({len(user['achievements'])}/"
+                f"{len(ACHIEVEMENTS)})"
+            ),
             description="\n".join(lines),
             color=COLOR_GOLD
         )
-        embed.set_thumbnail(url=member.display_avatar.url)
-        await ctx.send(embed=footer(embed, ctx))
+
+        embed.set_thumbnail(
+            url=member.display_avatar.url
+        )
+
+        await ctx.send(
+            embed=footer(embed, ctx)
+        )
 
 
 async def setup(bot):
