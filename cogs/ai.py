@@ -6,8 +6,12 @@ Falls back to Google Gemini if configured.
 """
 
 import os
+import logging
 import discord
 from discord.ext import commands
+from typing import Optional
+
+logger = logging.getLogger("music_bot")
 
 try:
     from constants import COLOR_PRIMARY
@@ -22,6 +26,8 @@ class AI(commands.Cog):
         self.bot = bot
         self.openrouter_key = os.getenv("OPENROUTER_API_KEY")
         self.gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("ANTHROPIC_API_KEY")
+        self.http_client = None
+        self.gemini_client = None
         
         # Initialize OpenRouter client if key is available
         if self.openrouter_key:
@@ -34,29 +40,33 @@ class AI(commands.Cog):
                         "HTTP-Referer": "https://github.com/akobudoy20011-dev/discord-music-bot",
                     }
                 )
+                logger.info("✅ OpenRouter client initialized successfully")
             except Exception as e:
-                print(f"Warning: Could not initialize OpenRouter client: {e}")
+                logger.error(f"❌ Could not initialize OpenRouter client: {e}")
                 self.http_client = None
         else:
-            self.http_client = None
+            logger.warning("⚠️ OPENROUTER_API_KEY not set")
         
         # Fallback to Gemini if available
         if self.gemini_key:
             try:
                 from google import genai
                 self.gemini_client = genai.Client(api_key=self.gemini_key)
+                logger.info("✅ Gemini client initialized successfully")
             except Exception as e:
-                print(f"Warning: Could not initialize Gemini client: {e}")
+                logger.error(f"❌ Could not initialize Gemini client: {e}")
                 self.gemini_client = None
         else:
-            self.gemini_client = None
+            logger.warning("⚠️ GEMINI_API_KEY not set")
 
-    async def _use_openrouter(self, question: str) -> str | None:
+    async def _use_openrouter(self, question: str) -> Optional[str]:
         """Try to get a response from OpenRouter."""
         if not self.http_client:
+            logger.warning("OpenRouter client not available")
             return None
         
         try:
+            logger.info(f"Calling OpenRouter API...")
             response = await self.http_client.post(
                 "/chat/completions",
                 json={
@@ -76,18 +86,25 @@ class AI(commands.Cog):
                 }
             )
             
+            logger.info(f"OpenRouter response status: {response.status_code}")
+            
             if response.status_code == 200:
                 data = response.json()
                 if data.get("choices") and len(data["choices"]) > 0:
-                    return data["choices"][0]["message"]["content"]
+                    result = data["choices"][0]["message"]["content"]
+                    logger.info("✅ OpenRouter returned a response")
+                    return result
+            else:
+                logger.error(f"OpenRouter error: Status {response.status_code}, Response: {response.text}")
         except Exception as e:
-            print(f"OpenRouter error: {e}")
+            logger.exception(f"❌ OpenRouter error: {e}")
         
         return None
 
-    async def _use_gemini(self, question: str) -> str | None:
+    async def _use_gemini(self, question: str) -> Optional[str]:
         """Try to get a response from Google Gemini (fallback) using Chat API (recommended)."""
         if not self.gemini_client:
+            logger.warning("Gemini client not available")
             return None
         
         try:
@@ -98,6 +115,7 @@ class AI(commands.Cog):
             
             for model_name in models_to_try:
                 try:
+                    logger.info(f"Trying Gemini model: {model_name}")
                     # Use Chat API (recommended by Google instead of generate_content)
                     chat = await self.bot.loop.run_in_executor(
                         None,
@@ -113,11 +131,13 @@ class AI(commands.Cog):
                     )
                     
                     if response and response.text:
+                        logger.info(f"✅ Gemini returned a response from {model_name}")
                         return response.text
                 except Exception as e:
+                    logger.warning(f"Model {model_name} failed: {e}")
                     continue
         except Exception as e:
-            print(f"Gemini error: {e}")
+            logger.exception(f"❌ Gemini error: {e}")
         
         return None
 
@@ -136,13 +156,16 @@ class AI(commands.Cog):
             
             # Try OpenRouter first (primary)
             if self.http_client:
+                logger.info("Attempting OpenRouter...")
                 response_text = await self._use_openrouter(question)
             
             # Fall back to Gemini if OpenRouter didn't work
             if not response_text and self.gemini_client:
+                logger.info("Attempting Gemini fallback...")
                 response_text = await self._use_gemini(question)
             
             if not response_text:
+                logger.error("❌ Both AI services failed to return a response")
                 await ctx.send("❌ Error communicating with AI services. Please try again later.")
                 return
 
