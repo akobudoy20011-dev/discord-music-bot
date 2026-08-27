@@ -1,4 +1,4 @@
-FROM python:3.10-slim
+FROM python:3.11-slim
 
 # Install ffmpeg (required for voice streaming)
 RUN apt-get update && \
