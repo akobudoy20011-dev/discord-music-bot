@@ -57,7 +57,6 @@ class AI(commands.Cog):
             return None
         
         try:
-            import json
             response = await self.http_client.post(
                 "/chat/completions",
                 json={
@@ -87,13 +86,11 @@ class AI(commands.Cog):
         return None
 
     async def _use_gemini(self, question: str) -> str | None:
-        """Try to get a response from Google Gemini (fallback)."""
+        """Try to get a response from Google Gemini (fallback) using Chat API (recommended)."""
         if not self.gemini_client:
             return None
         
         try:
-            from google.genai import types
-            
             models_to_try = [
                 "models/gemini-2.0-flash",
                 "models/gemini-1.5-flash",
@@ -101,20 +98,22 @@ class AI(commands.Cog):
             
             for model_name in models_to_try:
                 try:
-                    res = await self.bot.loop.run_in_executor(
+                    # Use Chat API (recommended by Google instead of generate_content)
+                    chat = await self.bot.loop.run_in_executor(
                         None,
-                        lambda m=model_name: self.gemini_client.models.generate_content(
-                            model=m,
-                            contents=question,
-                            config=types.GenerateContentConfig(
-                                system_instruction="You are a friendly, helpful Discord bot assistant. Keep answers clear, concise, and formatted for Discord markdown.",
-                                temperature=0.7,
-                                max_output_tokens=1000,
-                            )
+                        lambda m=model_name: self.gemini_client.chats.create(model=m)
+                    )
+                    
+                    response = await self.bot.loop.run_in_executor(
+                        None,
+                        lambda: chat.send_message(
+                            question,
+                            system_instruction="You are a friendly, helpful Discord bot assistant. Keep answers clear, concise, and formatted for Discord markdown.",
                         )
                     )
-                    if res and res.text:
-                        return res.text
+                    
+                    if response and response.text:
+                        return response.text
                 except Exception as e:
                     continue
         except Exception as e:
