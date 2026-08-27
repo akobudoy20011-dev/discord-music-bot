@@ -56,6 +56,7 @@ COGS = [
     "cogs.admin",
     "cogs.ai",
     "cogs.help",
+    "cogs.science_game",
 ]
 
 
