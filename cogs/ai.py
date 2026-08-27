@@ -34,11 +34,7 @@ class AI(commands.Cog):
             try:
                 import httpx
                 self.http_client = httpx.AsyncClient(
-                    base_url="https://openrouter.ai/api/v1",
-                    headers={
-                        "Authorization": f"Bearer {self.openrouter_key}",
-                        "HTTP-Referer": "https://github.com/akobudoy20011-dev/discord-music-bot",
-                    }
+                    timeout=30.0
                 )
                 logger.info("✅ OpenRouter client initialized successfully")
             except Exception as e:
@@ -61,16 +57,21 @@ class AI(commands.Cog):
 
     async def _use_openrouter(self, question: str) -> Optional[str]:
         """Try to get a response from OpenRouter."""
-        if not self.http_client:
+        if not self.http_client or not self.openrouter_key:
             logger.warning("OpenRouter client not available")
             return None
         
         try:
             logger.info(f"Calling OpenRouter API...")
             response = await self.http_client.post(
-                "/chat/completions",
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {self.openrouter_key}",
+                    "HTTP-Referer": "https://github.com/akobudoy20011-dev/discord-music-bot",
+                    "X-Title": "Discord Music Bot",
+                },
                 json={
-                    "model": "openrouter/auto",  # Uses best available model
+                    "model": "openrouter/auto",  # Uses best available free model
                     "messages": [
                         {
                             "role": "system",
@@ -95,7 +96,8 @@ class AI(commands.Cog):
                     logger.info("✅ OpenRouter returned a response")
                     return result
             else:
-                logger.error(f"OpenRouter error: Status {response.status_code}, Response: {response.text}")
+                logger.error(f"OpenRouter error: Status {response.status_code}")
+                logger.error(f"Response: {response.text}")
         except Exception as e:
             logger.exception(f"❌ OpenRouter error: {e}")
         
