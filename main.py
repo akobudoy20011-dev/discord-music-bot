@@ -35,8 +35,10 @@ if not os.getenv("ANTHROPIC_API_KEY"):
 
 if not os.getenv("YTDLP_COOKIES_FILE"):
     logger.warning(
-        "YTDLP_COOKIES_FILE is not set — YouTube may block !play/!download "
-        "with a 'Sign in to confirm you're not a bot' error on cloud hosts."
+        "YTDLP_COOKIES_FILE is not set — using default 'cookies.txt'. "
+        "YouTube may still block requests as a bot without valid cookies. "
+        "For best results, export your browser cookies to cookies.txt and "
+        "set YTDLP_COOKIES_FILE=cookies.txt in your environment."
     )
 
 intents = discord.Intents.default()
