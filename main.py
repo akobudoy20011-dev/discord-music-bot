@@ -27,10 +27,10 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 if not DISCORD_TOKEN:
     raise RuntimeError("DISCORD_TOKEN environment variable is not set.")
 
-if not os.getenv("ANTHROPIC_API_KEY"):
+if not os.getenv("OPENROUTER_API_KEY") and not os.getenv("GEMINI_API_KEY"):
     logger.warning(
-        "ANTHROPIC_API_KEY is not set — !chat will reply "
-        "'AI isn't configured' until it is."
+        "Neither OPENROUTER_API_KEY nor GEMINI_API_KEY is set — "
+        "!chat will be unavailable until one is configured."
     )
 
 if not os.getenv("YTDLP_COOKIES_FILE"):
