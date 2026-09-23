@@ -94,6 +94,16 @@ CREATE TABLE IF NOT EXISTS rpg_items (
     PRIMARY KEY (guild_id, user_id, item_id)
 );
 
+CREATE TABLE IF NOT EXISTS rpg_quests (
+    guild_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    quest_id TEXT NOT NULL,
+    progress INTEGER NOT NULL DEFAULT 0,
+    completed INTEGER NOT NULL DEFAULT 0,
+    claimed INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (guild_id, user_id, quest_id)
+);
+
 CREATE TABLE IF NOT EXISTS rpg_battles (
     guild_id TEXT NOT NULL,
     user_id TEXT NOT NULL,
@@ -455,6 +465,29 @@ class Database:
 
         return old_level, level, player
 
+
+    async def get_rpg_quests(self, guild_id, user_id):
+        cur = await self._conn.execute(
+            "SELECT * FROM rpg_quests WHERE guild_id=? AND user_id=? ORDER BY quest_id",
+            (str(guild_id), str(user_id))
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def get_rpg_quest(self, guild_id, user_id, quest_id):
+        cur = await self._conn.execute(
+            "SELECT * FROM rpg_quests WHERE guild_id=? AND user_id=? AND quest_id=?",
+            (str(guild_id), str(user_id), str(quest_id))
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def set_rpg_quest(self, guild_id, user_id, quest_id, progress=0, completed=0, claimed=0):
+        await self._conn.execute(
+            "INSERT INTO rpg_quests (guild_id,user_id,quest_id,progress,completed,claimed) VALUES (?,?,?,?,?,?) "
+            "ON CONFLICT(guild_id,user_id,quest_id) DO UPDATE SET progress=excluded.progress, completed=excluded.completed, claimed=excluded.claimed",
+            (str(guild_id),str(user_id),str(quest_id),int(progress),int(completed),int(claimed))
+        )
+        await self._conn.commit()
 
     async def get_rpg_battle(self, guild_id, user_id):
         cur = await self._conn.execute(
