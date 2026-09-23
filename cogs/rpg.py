@@ -15,7 +15,7 @@ class RPG(commands.Cog):
     def __init__(self,bot): self.bot=bot; self.db=bot.db
 
     @commands.group(name="rpg",invoke_without_command=True)
-    async def rpg(self,ctx): await self.profile(ctx)
+    async def rpg(self,ctx): await ctx.invoke(self.profile)
 
     @rpg.command(name="profile",aliases=["p","status"])
     async def profile(self,ctx):
