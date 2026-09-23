@@ -57,6 +57,7 @@ COGS = [
     "cogs.ai",
     "cogs.help",
     "cogs.science_game",
+    "cogs.rpg",
 ]
 
 

@@ -1,0 +1,1 @@
+"""ECLIPSE Discord UI package."""
