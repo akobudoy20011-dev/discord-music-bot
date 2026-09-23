@@ -94,6 +94,20 @@ CREATE TABLE IF NOT EXISTS rpg_items (
     PRIMARY KEY (guild_id, user_id, item_id)
 );
 
+CREATE TABLE IF NOT EXISTS rpg_battles (
+    guild_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    enemy_id TEXT NOT NULL,
+    enemy_name TEXT NOT NULL,
+    enemy_hp INTEGER NOT NULL,
+    enemy_max_hp INTEGER NOT NULL,
+    enemy_attack INTEGER NOT NULL,
+    turn INTEGER NOT NULL DEFAULT 1,
+    guarding INTEGER NOT NULL DEFAULT 0,
+    created_at REAL NOT NULL,
+    PRIMARY KEY (guild_id, user_id)
+);
+
 CREATE TABLE IF NOT EXISTS rpg_skills (
     guild_id TEXT NOT NULL,
     user_id TEXT NOT NULL,
@@ -441,6 +455,31 @@ class Database:
 
         return old_level, level, player
 
+
+    async def get_rpg_battle(self, guild_id, user_id):
+        cur = await self._conn.execute(
+            "SELECT * FROM rpg_battles WHERE guild_id = ? AND user_id = ?",
+            (str(guild_id), str(user_id))
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def set_rpg_battle(self, guild_id, user_id, **fields):
+        guild_id, user_id = str(guild_id), str(user_id)
+        allowed = {"enemy_id","enemy_name","enemy_hp","enemy_max_hp","enemy_attack","turn","guarding","created_at"}
+        fields = {k:v for k,v in fields.items() if k in allowed}
+        await self._conn.execute(
+            "INSERT INTO rpg_battles (guild_id,user_id,enemy_id,enemy_name,enemy_hp,enemy_max_hp,enemy_attack,turn,guarding,created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(guild_id,user_id) DO UPDATE SET " +
+            ",".join(f"{k}=excluded.{k}" for k in fields),
+            (guild_id,user_id,fields.get("enemy_id",""),fields.get("enemy_name",""),int(fields.get("enemy_hp",0)),int(fields.get("enemy_max_hp",0)),int(fields.get("enemy_attack",0)),int(fields.get("turn",1)),int(fields.get("guarding",0)),float(fields.get("created_at",time.time()))
+        )
+        await self._conn.commit()
+
+    async def delete_rpg_battle(self, guild_id, user_id):
+        await self._conn.execute("DELETE FROM rpg_battles WHERE guild_id=? AND user_id=?", (str(guild_id),str(user_id)))
+        await self._conn.commit()
 
     async def get_rpg_items(self, guild_id, user_id):
         cur = await self._conn.execute(
