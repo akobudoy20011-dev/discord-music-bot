@@ -65,6 +65,26 @@ CREATE TABLE IF NOT EXISTS guild_config (
     game_rewards INTEGER NOT NULL DEFAULT 1
 );
 
+CREATE TABLE IF NOT EXISTS rpg_players (
+    guild_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    class_key TEXT NOT NULL DEFAULT 'knight',
+    level INTEGER NOT NULL DEFAULT 1,
+    xp INTEGER NOT NULL DEFAULT 0,
+    hp INTEGER NOT NULL DEFAULT 120,
+    max_hp INTEGER NOT NULL DEFAULT 120,
+    mp INTEGER NOT NULL DEFAULT 40,
+    max_mp INTEGER NOT NULL DEFAULT 40,
+    strength INTEGER NOT NULL DEFAULT 12,
+    defense INTEGER NOT NULL DEFAULT 10,
+    magic INTEGER NOT NULL DEFAULT 8,
+    agility INTEGER NOT NULL DEFAULT 8,
+    gold INTEGER NOT NULL DEFAULT 0,
+    created_at REAL NOT NULL,
+    last_adventure REAL,
+    PRIMARY KEY (guild_id, user_id)
+);
+
 CREATE TABLE IF NOT EXISTS warnings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     guild_id TEXT NOT NULL,
@@ -319,6 +339,90 @@ class Database:
         rows = await cur.fetchall()
 
         return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------
+    # RPG
+    # ------------------------------------------------------------
+
+    async def get_rpg_player(self, guild_id, user_id):
+        guild_id, user_id = str(guild_id), str(user_id)
+
+        cur = await self._conn.execute(
+            "SELECT * FROM rpg_players WHERE guild_id = ? AND user_id = ?",
+            (guild_id, user_id)
+        )
+        row = await cur.fetchone()
+
+        if row is None:
+            await self._conn.execute(
+                "INSERT INTO rpg_players "
+                "(guild_id, user_id, created_at) VALUES (?, ?, ?)",
+                (guild_id, user_id, time.time())
+            )
+            await self._conn.commit()
+
+            cur = await self._conn.execute(
+                "SELECT * FROM rpg_players WHERE guild_id = ? AND user_id = ?",
+                (guild_id, user_id)
+            )
+            row = await cur.fetchone()
+
+        return dict(row)
+
+    async def update_rpg_player(self, guild_id, user_id, **fields):
+        guild_id, user_id = str(guild_id), str(user_id)
+        await self.get_rpg_player(guild_id, user_id)
+
+        allowed = {
+            "class_key", "level", "xp", "hp", "max_hp",
+            "mp", "max_mp", "strength", "defense",
+            "magic", "agility", "gold", "last_adventure"
+        }
+        fields = {k: v for k, v in fields.items() if k in allowed}
+
+        if not fields:
+            return await self.get_rpg_player(guild_id, user_id)
+
+        set_clause = ", ".join(f"{k} = ?" for k in fields)
+        values = list(fields.values()) + [guild_id, user_id]
+
+        await self._conn.execute(
+            f"UPDATE rpg_players SET {set_clause} "
+            f"WHERE guild_id = ? AND user_id = ?",
+            values
+        )
+        await self._conn.commit()
+
+        return await self.get_rpg_player(guild_id, user_id)
+
+    async def add_rpg_xp(self, guild_id, user_id, amount):
+        player = await self.get_rpg_player(guild_id, user_id)
+        xp = max(0, int(player["xp"]) + int(amount))
+        level = int(player["level"])
+        old_level = level
+
+        while xp >= level * 100:
+            xp -= level * 100
+            level += 1
+
+        if level != old_level:
+            hp_gain = (level - old_level) * 12
+            mp_gain = (level - old_level) * 4
+            player = await self.update_rpg_player(
+                guild_id, user_id,
+                level=level,
+                xp=xp,
+                max_hp=int(player["max_hp"]) + hp_gain,
+                hp=int(player["max_hp"]) + hp_gain,
+                max_mp=int(player["max_mp"]) + mp_gain,
+                mp=int(player["max_mp"]) + mp_gain,
+            )
+        else:
+            player = await self.update_rpg_player(
+                guild_id, user_id, xp=xp
+            )
+
+        return old_level, level, player
 
     async def clear_warnings(self, guild_id, user_id):
         await self._conn.execute(
