@@ -85,6 +85,23 @@ CREATE TABLE IF NOT EXISTS rpg_players (
     PRIMARY KEY (guild_id, user_id)
 );
 
+CREATE TABLE IF NOT EXISTS rpg_items (
+    guild_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    item_id TEXT NOT NULL,
+    amount INTEGER NOT NULL DEFAULT 0,
+    equipped INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (guild_id, user_id, item_id)
+);
+
+CREATE TABLE IF NOT EXISTS rpg_skills (
+    guild_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    skill_id TEXT NOT NULL,
+    unlocked INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (guild_id, user_id, skill_id)
+);
+
 CREATE TABLE IF NOT EXISTS warnings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     guild_id TEXT NOT NULL,
@@ -423,6 +440,53 @@ class Database:
             )
 
         return old_level, level, player
+
+
+    async def get_rpg_items(self, guild_id, user_id):
+        cur = await self._conn.execute(
+            "SELECT item_id, amount, equipped FROM rpg_items "
+            "WHERE guild_id = ? AND user_id = ? AND amount > 0 "
+            "ORDER BY item_id",
+            (str(guild_id), str(user_id))
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def add_rpg_item(self, guild_id, user_id, item_id, amount=1):
+        await self._conn.execute(
+            "INSERT INTO rpg_items "
+            "(guild_id, user_id, item_id, amount) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(guild_id, user_id, item_id) "
+            "DO UPDATE SET amount = amount + excluded.amount",
+            (str(guild_id), str(user_id), str(item_id), int(amount))
+        )
+        await self._conn.commit()
+
+    async def set_rpg_item_equipped(self, guild_id, user_id, item_id, equipped=True):
+        await self._conn.execute(
+            "UPDATE rpg_items SET equipped = ? "
+            "WHERE guild_id = ? AND user_id = ? AND item_id = ?",
+            (1 if equipped else 0, str(guild_id), str(user_id), str(item_id))
+        )
+        await self._conn.commit()
+
+    async def get_rpg_skills(self, guild_id, user_id):
+        cur = await self._conn.execute(
+            "SELECT skill_id FROM rpg_skills "
+            "WHERE guild_id = ? AND user_id = ? AND unlocked = 1 "
+            "ORDER BY skill_id",
+            (str(guild_id), str(user_id))
+        )
+        return [r["skill_id"] for r in await cur.fetchall()]
+
+    async def unlock_rpg_skill(self, guild_id, user_id, skill_id):
+        await self._conn.execute(
+            "INSERT INTO rpg_skills "
+            "(guild_id, user_id, skill_id, unlocked) VALUES (?, ?, ?, 1) "
+            "ON CONFLICT(guild_id, user_id, skill_id) "
+            "DO UPDATE SET unlocked = 1",
+            (str(guild_id), str(user_id), str(skill_id))
+        )
+        await self._conn.commit()
 
     async def clear_warnings(self, guild_id, user_id):
         await self._conn.execute(
