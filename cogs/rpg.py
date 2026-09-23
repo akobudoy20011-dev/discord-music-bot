@@ -7,6 +7,7 @@ from rpg.manager import ADVENTURE_COOLDOWN, adventure, choose_class, get_player,
 from rpg.equipment import grant_starter_gear, inventory
 from rpg.skills import get_skills
 from rpg.skills_service import ensure_class_skills, unlock_skill
+from rpg.combat import start as start_battle, attack as combat_attack, flee as flee_battle
 
 
 def xp_bar(current, maximum, length=14):
@@ -51,6 +52,52 @@ class RPG(commands.Cog):
     @rpg.command(name="rest",aliases=["heal"])
     async def rest_command(self,ctx):
         player=await rest(self.db,ctx.guild.id,ctx.author.id); await ctx.send(f"🪽 **{ctx.author.display_name}** rests beneath the ECLIPSE.\n❤️ HP restored to **{player['hp']}/{player['max_hp']}** · 💠 MP restored to **{player['mp']}/{player['max_mp']}**")
+
+    @rpg.command(name="battle", aliases=["fight"])
+    async def battle_command(self, ctx):
+        result = await start_battle(self.db, ctx.guild.id, ctx.author.id)
+        if not result["ok"]:
+            battle = result["battle"]
+            await ctx.send(f"⚔️ Already fighting **{battle['enemy_name']}**. Use !rpg attack.")
+            return
+        battle = result["battle"]
+        await ctx.send(f"⚔️ **BATTLE BEGINS**\nEnemy: **{battle['enemy_name']}** · ❤️ {battle['enemy_hp']}/{battle['enemy_max_hp']} HP\nUse !rpg attack, !rpg skill <id>, or !rpg flee.")
+
+    @rpg.command(name="attack", aliases=["atk"])
+    async def attack_command(self, ctx):
+        result = await combat_attack(self.db, ctx.guild.id, ctx.author.id)
+        if not result["ok"]:
+            await ctx.send(f"❌ {result['message']}")
+            return
+        if result.get("victory"):
+            await ctx.send(f"🏆 **VICTORY** · {result['damage']} damage · +{result['xp']} XP · +{result['gold']} gold" + ("\n✦ **LEVEL UP**" if result["level_up"] else ""))
+        elif result.get("defeat"):
+            await ctx.send(f"☠️ **DEFEATED** · You dealt {result['damage']} damage, but the enemy struck for {result['incoming']}.")
+        else:
+            await ctx.send(f"⚔️ You dealt **{result['damage']}** damage. Enemy ❤️ {result['enemy_hp']}/{result['enemy_max_hp']} · You took **{result['incoming']}** damage.")
+
+    @rpg.command(name="skill")
+    async def skill_command(self, ctx, skill_id: str = None):
+        if not skill_id:
+            await ctx.send("Use !rpg skills to see your unlocked skills.")
+            return
+        result = await combat_attack(self.db, ctx.guild.id, ctx.author.id, skill_id)
+        if not result["ok"]:
+            await ctx.send(f"❌ {result['message']}")
+            return
+        if result.get("victory"):
+            await ctx.send(f"✨ **SKILL VICTORY** · {result['damage']} damage · +{result['xp']} XP · +{result['gold']} gold")
+        elif result.get("defeat"):
+            await ctx.send(f"☠️ **DEFEATED** · Skill dealt {result['damage']} damage.")
+        else:
+            await ctx.send(f"✨ Skill dealt **{result['damage']}** damage. Enemy ❤️ {result['enemy_hp']}/{result['enemy_max_hp']} · You took **{result['incoming']}** damage.")
+
+    @rpg.command(name="flee", aliases=["escape"])
+    async def flee_command(self, ctx):
+        if await flee_battle(self.db, ctx.guild.id, ctx.author.id):
+            await ctx.send("🏃 You escaped the battle.")
+        else:
+            await ctx.send("There is no active battle.")
 
     @rpg.command(name="inventory", aliases=["inv", "gear"])
     async def inventory_command(self, ctx):
