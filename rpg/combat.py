@@ -3,6 +3,8 @@ import random
 import time
 from .enemies import random_enemy
 from .skills import get_skill
+from .loot import roll_loot, describe
+from .quests import progress as quest_progress
 
 async def start(db,guild_id,user_id):
     existing=await db.get_rpg_battle(guild_id,user_id)
@@ -31,8 +33,12 @@ async def attack(db,guild_id,user_id,skill_id=None):
     if enemy_hp<=0:
         await db.delete_rpg_battle(guild_id,user_id)
         old,new,player=await db.add_rpg_xp(guild_id,user_id,ENEMIES_REWARD(battle["enemy_id"],"xp"))
-        player=await db.update_rpg_player(guild_id,user_id,gold=player["gold"]+ENEMIES_REWARD(battle["enemy_id"],"gold"))
-        return {"ok":True,"victory":True,"damage":damage,"xp":ENEMIES_REWARD(battle["enemy_id"],"xp"),"gold":ENEMIES_REWARD(battle["enemy_id"],"gold"),"level_up":new>old,"player":player}
+        gold=ENEMIES_REWARD(battle["enemy_id"],"gold")
+        player=await db.update_rpg_player(guild_id,user_id,gold=player["gold"]+gold)
+        loot=roll_loot(battle["enemy_id"])
+        if loot: await db.add_rpg_item(guild_id,user_id,loot,1)
+        await quest_progress(db,guild_id,user_id,"kills",1,battle["enemy_id"])
+        return {"ok":True,"victory":True,"damage":damage,"xp":ENEMIES_REWARD(battle["enemy_id"],"xp"),"gold":gold,"loot":loot,"loot_name":describe(loot) if loot else None,"level_up":new>old,"player":player}
     incoming=max(1,int(battle["enemy_attack"]-player["defense"]*.45))
     if random.random()<min(.35,player["agility"]*.01): incoming=0
     hp=max(0,player["hp"]-incoming)
