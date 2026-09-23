@@ -11,12 +11,12 @@ import discord
 # BRAND / EMBED COLORS
 # ------------------------------------------------------------------
 
-COLOR_PRIMARY = discord.Color.from_rgb(88, 101, 242)     # blurple
-COLOR_SUCCESS = discord.Color.from_rgb(87, 242, 135)      # green
-COLOR_WARNING = discord.Color.from_rgb(254, 231, 92)      # yellow
-COLOR_DANGER = discord.Color.from_rgb(237, 66, 69)        # red
-COLOR_GOLD = discord.Color.from_rgb(255, 200, 87)
-COLOR_MUSIC = discord.Color.from_rgb(235, 69, 158)
+COLOR_PRIMARY = discord.Color.from_rgb(191, 154, 230)    # lilac
+COLOR_SUCCESS = discord.Color.from_rgb(126, 214, 168)     # soft mint
+COLOR_WARNING = discord.Color.from_rgb(245, 194, 110)     # warm gold
+COLOR_DANGER = discord.Color.from_rgb(218, 112, 150)      # rose
+COLOR_GOLD = discord.Color.from_rgb(232, 190, 111)
+COLOR_MUSIC = discord.Color.from_rgb(225, 145, 190)
 
 
 def footer(embed, ctx):
