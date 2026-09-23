@@ -4,6 +4,9 @@ from discord.ext import commands
 from constants import COLOR_GOLD, COLOR_PRIMARY
 from rpg.classes import CLASSES, get_class
 from rpg.manager import ADVENTURE_COOLDOWN, adventure, choose_class, get_player, rest
+from rpg.equipment import grant_starter_gear, inventory
+from rpg.skills import get_skills
+from rpg.skills_service import ensure_class_skills, unlock_skill
 
 
 def xp_bar(current, maximum, length=14):
@@ -32,7 +35,9 @@ class RPG(commands.Cog):
             await ctx.send(embed=discord.Embed(title="♡ ECLIPSE · CLASSES ♡",description="\n\n".join(lines)+"\n\nUse !rpg class <name> to choose.",color=COLOR_PRIMARY)); return
         chosen,_=await choose_class(self.db,ctx.guild.id,ctx.author.id,key)
         if chosen is None: await ctx.send("❌ Unknown class. Use !rpg class to see the available paths."); return
-        await ctx.send(f"{chosen['icon']} **{ctx.author.display_name}** is now a **{chosen['name']}**.\n{chosen['description']}")
+        await grant_starter_gear(self.db, ctx.guild.id, ctx.author.id, key.lower())
+        await ensure_class_skills(self.db, ctx.guild.id, ctx.author.id, key.lower())
+        await ctx.send(f"{chosen['icon']} **{ctx.author.display_name}** is now a **{chosen['name']}**.\n{chosen['description']}\n\n🎒 Starter gear and your first skill have been unlocked.")
 
     @rpg.command(name="adventure",aliases=["explore","hunt"])
     @commands.cooldown(1,ADVENTURE_COOLDOWN,commands.BucketType.user)
@@ -46,5 +51,51 @@ class RPG(commands.Cog):
     @rpg.command(name="rest",aliases=["heal"])
     async def rest_command(self,ctx):
         player=await rest(self.db,ctx.guild.id,ctx.author.id); await ctx.send(f"🪽 **{ctx.author.display_name}** rests beneath the ECLIPSE.\n❤️ HP restored to **{player['hp']}/{player['max_hp']}** · 💠 MP restored to **{player['mp']}/{player['max_mp']}**")
+
+    @rpg.command(name="inventory", aliases=["inv", "gear"])
+    async def inventory_command(self, ctx):
+        items = await inventory(self.db, ctx.guild.id, ctx.author.id)
+        if not items:
+            await ctx.send("🎒 Your RPG inventory is empty.")
+            return
+        lines = []
+        for item in items:
+            equipped = " · **EQUIPPED**" if item["equipped"] else ""
+            lines.append(f"• `{item['item_id']}` ×{item['amount']}{equipped}")
+        await ctx.send(embed=discord.Embed(
+            title="♡ ECLIPSE · INVENTORY ♡",
+            description="\n".join(lines),
+            color=COLOR_PRIMARY
+        ))
+
+    @rpg.command(name="skills")
+    async def skills_command(self, ctx):
+        player = await get_player(self.db, ctx.guild.id, ctx.author.id)
+        owned = await ensure_class_skills(self.db, ctx.guild.id, ctx.author.id, player["class_key"])
+        available = get_skills(player["class_key"])
+        lines = []
+        for skill in available:
+            state = "✦ UNLOCKED" if skill["id"] in owned else "○ LOCKED"
+            lines.append(f"{state} **{skill['name']}** · {skill['cost']} MP\n{skill['description']}")
+        await ctx.send(embed=discord.Embed(
+            title="♡ ECLIPSE · SKILLS ♡",
+            description="\n\n".join(lines),
+            color=COLOR_PRIMARY
+        ))
+
+    @rpg.command(name="unlock")
+    async def unlock_command(self, ctx, skill_id: str = None):
+        if not skill_id:
+            await ctx.send("Use `!rpg skills` to see available skills.")
+            return
+        player = await get_player(self.db, ctx.guild.id, ctx.author.id)
+        skill, owned = await unlock_skill(
+            self.db, ctx.guild.id, ctx.author.id,
+            player["class_key"], skill_id
+        )
+        if skill is None:
+            await ctx.send("❌ That skill does not belong to your current class.")
+            return
+        await ctx.send(f"✦ **{skill['name']}** unlocked. MP cost: **{skill['cost']}**.")
 
 async def setup(bot): await bot.add_cog(RPG(bot))
