@@ -1176,7 +1176,7 @@ class Music(commands.Cog):
         await self.persist_settings(ctx.guild.id, state)
         await ctx.send(f"🔁 Loop mode set to {mode} and saved.")
 
-    @commands.command(name="autoplay", aliases=["ap"])
+    @commands.command(name="autoplay")
     async def autoplay(self, ctx, mode: str = None):
         if not await self.require_control(ctx):
             return
