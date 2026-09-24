@@ -266,10 +266,10 @@ class RPG(commands.Cog):
         lines = []
         for rid, region in list_regions():
             state = "📍 HERE" if rid == player.get("region") else f"Danger {region['danger']}/4"
-            lines.append(f"{region['icon']} **{region['name']}** · {state}\\n{region['description']}")
+            lines.append(f"{region['icon']} **{region['name']}** · {state}\n{region['description']}")
         active = get_event(world["active_event"]) if world.get("active_event") else None
-        event_line = f"\\n{active['icon']} **{active['name']}** · active" if active else ""
-        embed = discord.Embed(title="♡ ECLIPSE · THE VEILED REALMS ♡", description=f"**World Day {world['day']}** · {world['weather'].title()} · Instability {world['instability']}/10{event_line}\\n\\n" + "\\n\\n".join(lines), color=COLOR_PRIMARY)
+        event_line = f"\n{active['icon']} **{active['name']}** · active" if active else ""
+        embed = discord.Embed(title="♡ ECLIPSE · THE VEILED REALMS ♡", description=f"**World Day {world['day']}** · {world['weather'].title()} · Instability {world['instability']}/10{event_line}\n\n" + "\n\n".join(lines), color=COLOR_PRIMARY)
         embed.set_footer(text=f"୨୧ Current realm: {current['name'] if current else 'Unknown'} · !rpg travel <region>")
         await ctx.send(embed=embed)
 
@@ -277,14 +277,14 @@ class RPG(commands.Cog):
     async def travel_command(self, ctx, region_id: str = None):
         if not region_id:
             lines = [f"{r['icon']} {rid} — **{r['name']}** · danger {r['danger']}/4" for rid, r in list_regions()]
-            await ctx.send("🗺️ **Choose a realm:**\\n" + "\\n".join(lines))
+            await ctx.send("🗺️ **Choose a realm:**\n" + "\n".join(lines))
             return
         result = await travel(self.db, ctx.guild.id, ctx.author.id, region_id)
         if not result["ok"]:
             await ctx.send(f"❌ {result['message']}")
             return
         region = result["region"]
-        await ctx.send(f"🪽 **THE ROAD OPENS**\\n\\n{region['icon']} **{region['name']}**\\n{region['description']}\\n\\nTravel time: **{result['duration']:.0f}s**. Your journey has begun.")
+        await ctx.send(f"🪽 **THE ROAD OPENS**\n\n{region['icon']} **{region['name']}**\n{region['description']}\n\nTravel time: **{result['duration']:.0f}s**. Your journey has begun.")
 
     @rpg.command(name="explore", aliases=["scout", "search"])
     async def explore_command(self, ctx):
@@ -295,7 +295,7 @@ class RPG(commands.Cog):
         region = result["region"]
         if result["kind"] == "world_event":
             event = result["event"]
-            await ctx.send(f"{event['icon']} **WORLD EVENT · {event['name']}**\\n\\n{event['description']}\\n\\nThe realm itself has changed.")
+            await ctx.send(f"{event['icon']} **WORLD EVENT · {event['name']}**\n\n{event['description']}\n\nThe realm itself has changed.")
             return
 
         if result["kind"] == "guardian":
@@ -304,13 +304,13 @@ class RPG(commands.Cog):
             if not battle["ok"]:
                 await ctx.send(f"⚔️ **{enemy['name']}** is already confronting you. Use !rpg attack.")
                 return
-            await ctx.send(f"{region['icon']} **{region['name']}**\\n\\n👑 **REALM GUARDIAN**\\n**{enemy['name']}** · ❤️ {enemy['hp']}/{enemy['hp']} HP\\nDefeat it to change the history of this realm.")
+            await ctx.send(f"{region['icon']} **{region['name']}**\n\n👑 **REALM GUARDIAN**\n**{enemy['name']}** · ❤️ {enemy['hp']}/{enemy['hp']} HP\nDefeat it to change the history of this realm.")
             return
 
         if result["kind"] == "discovery":
             discovery = result["discovery"]
-            level_text = "\\n✦ **LEVEL UP**" if result["new_level"] > result["old_level"] else ""
-            await ctx.send(f"{discovery['icon']} **DISCOVERY · {discovery['name']}**\\n\\n{discovery['description']}\\n\\n**Found:** +{discovery['gold']:,} gold · +{discovery['xp']} XP{level_text}")
+            level_text = "\n✦ **LEVEL UP**" if result["new_level"] > result["old_level"] else ""
+            await ctx.send(f"{discovery['icon']} **DISCOVERY · {discovery['name']}**\n\n{discovery['description']}\n\n**Found:** +{discovery['gold']:,} gold · +{discovery['xp']} XP{level_text}")
             return
 
         if result["kind"] == "enemy":
@@ -319,11 +319,11 @@ class RPG(commands.Cog):
             if not battle["ok"]:
                 await ctx.send(f"⚔️ **{enemy['name']}** finds you before you can prepare. Use !rpg attack.")
                 return
-            await ctx.send(f"{region['icon']} **{region['name']}**\\n\\n⚔️ **AN ENCOUNTER**\\n**{enemy['name']}** · ❤️ {enemy['hp']}/{enemy['hp']} HP\\nThe realm has noticed you. Use !rpg attack, !rpg skill <id>, !rpg special <id>, or !rpg flee.")
+            await ctx.send(f"{region['icon']} **{region['name']}**\n\n⚔️ **AN ENCOUNTER**\n**{enemy['name']}** · ❤️ {enemy['hp']}/{enemy['hp']} HP\nThe realm has noticed you. Use !rpg attack, !rpg skill <id>, !rpg special <id>, or !rpg flee.")
             return
         event = result["event"]
-        level_text = "\\n✦ **LEVEL UP**" if result["new_level"] > result["old_level"] else ""
-        await ctx.send(f"{region['icon']} **{region['name']}**\\n\\n{event['text']}\\n\\n**Found:** +{event['gold']:,} gold · +{event['xp']} XP{level_text}")
+        level_text = "\n✦ **LEVEL UP**" if result["new_level"] > result["old_level"] else ""
+        await ctx.send(f"{region['icon']} **{region['name']}**\n\n{event['text']}\n\n**Found:** +{event['gold']:,} gold · +{event['xp']} XP{level_text}")
     @rpg.command(name="discoveries", aliases=["codex", "lore"])
     async def discoveries_command(self, ctx):
         rows = await self.db.get_rpg_discoveries(ctx.guild.id, ctx.author.id)
@@ -335,7 +335,7 @@ class RPG(commands.Cog):
             lines.append(f"{state} {data['icon']} **{data['name']}** · {data['region']}")
         await ctx.send(embed=discord.Embed(
             title="♡ ECLIPSE · CODEX ♡",
-            description="\\n".join(lines),
+            description="\n".join(lines),
             color=COLOR_PRIMARY
         ))
 
@@ -492,23 +492,23 @@ class RPG(commands.Cog):
     @rpg.command(name="npc", aliases=["npcs", "talk"])
     async def npc_command(self, ctx, npc_id: str = None):
         if not npc_id:
-            lines = [f"{n['icon']} **{n['name']}** · {n['region'].replace('_', ' ').title()}\\n{n['description']}" for n in NPCS.values()]
-            await ctx.send(embed=discord.Embed(title="🌙 ECLIPSE · NPCs", description="\\n\\n".join(lines), color=COLOR_PRIMARY))
+            lines = [f"{n['icon']} **{n['name']}** · {n['region'].replace('_', ' ').title()}\n{n['description']}" for n in NPCS.values()]
+            await ctx.send(embed=discord.Embed(title="🌙 ECLIPSE · NPCs", description="\n\n".join(lines), color=COLOR_PRIMARY))
             return
         view = await npc_view(self.db, ctx.guild.id, ctx.author.id, npc_id)
         if not view:
             await ctx.send("Unknown NPC. Use !rpg npc to see the known characters.")
             return
         npc = view["npc"]
-        lines = [f"{npc['icon']} **{npc['name']}**\\n{npc['dialogue']}"]
+        lines = [f"{npc['icon']} **{npc['name']}**\n{npc['dialogue']}"]
         if view["quests"]:
-            lines.append("\\n**Available chapters:**")
+            lines.append("\n**Available chapters:**")
             for qid, q, row in view["quests"]:
                 lines.append(f"- {qid} · Chapter {q['chapter']} · {q['name']} · {row['progress']}/{q['goal']}")
-            lines.append("\\nUse !rpg claim <quest_id> after completing the objective.")
+            lines.append("\nUse !rpg claim <quest_id> after completing the objective.")
         else:
-            lines.append("\\nNo new chapter is waiting here yet.")
-        await ctx.send(embed=discord.Embed(title=f"{npc['icon']} {npc['name']}", description="\\n".join(lines), color=COLOR_PRIMARY))
+            lines.append("\nNo new chapter is waiting here yet.")
+        await ctx.send(embed=discord.Embed(title=f"{npc['icon']} {npc['name']}", description="\n".join(lines), color=COLOR_PRIMARY))
 
     @rpg.command(name="quests", aliases=["quest"])
     async def quests_command(self, ctx):
