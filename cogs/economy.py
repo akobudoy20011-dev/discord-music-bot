@@ -26,12 +26,24 @@ WORK_MAX = 150
 WORK_COOLDOWN = 3600
 
 SHOP_ITEMS = {
-    "cookie": {"name": "🍪 Cookie", "price": 100},
-    "crown": {"name": "👑 Crown", "price": 1000},
-    "diamond": {"name": "💎 Diamond", "price": 2500},
-    "trophy": {"name": "🏆 Trophy", "price": 5000},
-    "mystery_box": {"name": "🎁 Mystery Box", "price": 2500},
+    "cookie": {"name": "🍪 Cookie", "price": 100, "min_tier": 1, "description": "A cheap everyday collectible."},
+    "crown": {"name": "👑 Crown", "price": 1000, "min_tier": 1, "description": "A symbol of status."},
+    "diamond": {"name": "💎 Diamond", "price": 2500, "min_tier": 2, "description": "A premium economy collectible."},
+    "mystery_box": {"name": "🎁 Mystery Box", "price": 2500, "min_tier": 2, "description": "A sealed high-value collectible."},
+    "trophy": {"name": "🏆 Trophy", "price": 5000, "min_tier": 3, "description": "A veteran economy trophy."},
+    "emerald": {"name": "🟢 Emerald", "price": 10000, "min_tier": 4, "description": "Reserved for established earners."},
+    "sapphire": {"name": "🔷 Sapphire", "price": 20000, "min_tier": 5, "description": "A high-tier collector's gem."},
+    "royal_seal": {"name": "🔱 Royal Seal", "price": 35000, "min_tier": 6, "description": "Proof of serious economic progression."},
+    "void_relic": {"name": "🌑 Void Relic", "price": 60000, "min_tier": 7, "description": "An endgame economy collectible."},
+    "eclipse_core": {"name": "🌌 Eclipse Core", "price": 100000, "min_tier": 8, "description": "An elite-tier economy relic."},
+    "sovereign_crown": {"name": "👑 Sovereign Crown", "price": 175000, "min_tier": 9, "description": "A near-legendary status item."},
+    "eternal_treasure": {"name": "✨ Eternal Treasure", "price": 300000, "min_tier": 10, "description": "The final economy progression collectible."},
 }
+
+ECONOMY_TIER_BONUS = 0.02
+
+def economy_multiplier(tier):
+    return 1.0 + max(0, min(9, int(tier) - 1)) * ECONOMY_TIER_BONUS
 
 
 def fmt_time(seconds):
@@ -69,7 +81,15 @@ class Economy(commands.Cog):
     @commands.command(name="daily")
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def daily(self, ctx):
-        result = await self.db.claim_daily(ctx.guild.id, ctx.author.id, time.time(), DAILY_AMOUNT, DAILY_STREAK_BONUS, DAILY_STREAK_CAP, DAILY_COOLDOWN, DAILY_GRACE)
+        progression = await self.db.get_economy_progression(ctx.guild.id, ctx.author.id)
+        tier = int(progression["tier"])
+        multiplier = economy_multiplier(tier)
+        result = await self.db.claim_daily(
+            ctx.guild.id, ctx.author.id, time.time(),
+            round(DAILY_AMOUNT * multiplier),
+            round(DAILY_STREAK_BONUS * multiplier),
+            DAILY_STREAK_CAP, DAILY_COOLDOWN, DAILY_GRACE
+        )
         if not result["ok"]:
             embed = discord.Embed(title="⏳ Already Claimed", description=f"Come back in **{fmt_time(result['remaining'])}**.", color=COLOR_PRIMARY)
             await ctx.send(embed=embed)
@@ -82,7 +102,8 @@ class Economy(commands.Cog):
             description=(
                 f"You claimed **{reward:,} coins**!\n"
                 f"🔥 Streak: **{streak} day{'s' if streak != 1 else ''}**\n"
-                f"💰 Balance: **{new_balance:,}**"
+                f"💰 Balance: **{new_balance:,}**\n"
+                f"💎 Economy Tier: **{tier}** ({multiplier:.0%} earning rate)"
             ),
             color=COLOR_GOLD
         )
@@ -95,7 +116,14 @@ class Economy(commands.Cog):
     @commands.command(name="work")
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def work(self, ctx):
-        result = await self.db.claim_work(ctx.guild.id, ctx.author.id, time.time(), WORK_MIN, WORK_MAX, WORK_COOLDOWN)
+        progression = await self.db.get_economy_progression(ctx.guild.id, ctx.author.id)
+        tier = int(progression["tier"])
+        multiplier = economy_multiplier(tier)
+        result = await self.db.claim_work(
+            ctx.guild.id, ctx.author.id, time.time(),
+            round(WORK_MIN * multiplier),
+            round(WORK_MAX * multiplier), WORK_COOLDOWN
+        )
         if not result["ok"]:
             embed = discord.Embed(title="😴 You're Tired", description=f"Try again in **{fmt_time(result['remaining'])}**.", color=COLOR_PRIMARY)
             await ctx.send(embed=embed)
@@ -107,7 +135,8 @@ class Economy(commands.Cog):
             title="🛠️ Work Complete",
             description=(
                 f"You earned **{earned} coins**!\n"
-                f"💰 Balance: **{new_balance:,}**"
+                f"💰 Balance: **{new_balance:,}**\n"
+                f"💎 Economy Tier: **{tier}** ({multiplier:.0%} earning rate)"
             ),
             color=COLOR_GOLD
         )
@@ -180,16 +209,31 @@ class Economy(commands.Cog):
     # ------------------------------------------------------------
     @commands.command(name="shop")
     async def shop(self, ctx):
-        lines = [
-            f"**{item['name']}**\n`!buy {item_id}` — 💰 {item['price']:,}"
-            for item_id, item in SHOP_ITEMS.items()
-        ]
+        progression = await self.db.get_economy_progression(ctx.guild.id, ctx.author.id)
+        tier = int(progression["tier"])
+        lines = []
+
+        for item_id, item in SHOP_ITEMS.items():
+            minimum = int(item.get("min_tier", 1))
+            if tier >= minimum:
+                lines.append(
+                    f"**{item['name']}** — 💰 {item['price']:,}\n"
+                    f"{item['description']}\n"
+                    f"`!buy {item_id}` • 🔓 Tier {minimum}+"
+                )
+            else:
+                lines.append(
+                    f"**{item['name']}** — 🔒 Tier {minimum}\n"
+                    f"{item['description']}\n"
+                    f"Unlock this item through economy progression."
+                )
 
         embed = discord.Embed(
-            title="🛒 Shop",
+            title=f"🛒 Economy Shop • Tier {tier}",
             description="\n\n".join(lines),
             color=discord.Color.green()
         )
+        embed.set_footer(text=f"Tier earning bonus: +{(economy_multiplier(tier) - 1):.0%}")
         await ctx.send(embed=footer(embed, ctx))
 
     @commands.command(name="buy")
@@ -200,6 +244,16 @@ class Economy(commands.Cog):
 
         if item is None:
             await ctx.send("❌ That item doesn't exist. Use `!shop`.")
+            return
+
+        progression = await self.db.get_economy_progression(ctx.guild.id, ctx.author.id)
+        tier = int(progression["tier"])
+        minimum_tier = int(item.get("min_tier", 1))
+        if tier < minimum_tier:
+            await ctx.send(
+                f"🔒 **{item['name']}** requires **Economy Tier {minimum_tier}**. "
+                f"You are currently Tier **{tier}**."
+            )
             return
 
         ok, reason, new_balance = await self.db.purchase_item(ctx.guild.id, ctx.author.id, item_id, item["price"], 1)
@@ -254,14 +308,14 @@ class Economy(commands.Cog):
         tier = int(state["tier"])
         earned = int(state["lifetime_earned"])
         spent = int(state["lifetime_spent"])
-        threshold = tier * 10000
-        next_tier = max(0, threshold - earned)
+        activity_score = earned // 10000 + spent // 25000
+        next_earned = max(0, (tier * 10000) - (earned % 10000))
 
         embed = discord.Embed(
             title=f"💎 {member.display_name}'s Economy Progression",
             description=(
                 f"**Tier {tier}**\n"
-                f"Your economic activity unlocks higher progression tiers over time."
+                f"Your economic activity unlocks higher tiers and permanent earning bonuses over time."
             ),
             color=COLOR_GOLD
         )
@@ -269,9 +323,16 @@ class Economy(commands.Cog):
         embed.add_field(name="💰 Balance", value=f"{int(user['balance']):,}", inline=True)
         embed.add_field(name="📈 Lifetime Earned", value=f"{earned:,}", inline=True)
         embed.add_field(name="🛍️ Lifetime Spent", value=f"{spent:,}", inline=True)
+        embed.add_field(name="⚡ Earning Bonus", value=f"+{(economy_multiplier(tier) - 1):.0%}", inline=True)
+        embed.add_field(name="📊 Activity Score", value=f"{activity_score:,}", inline=True)
         embed.add_field(
             name="🔓 Next Tier",
-            value="**Max tier reached**" if tier >= 10 else f"**{next_tier:,} earned** remaining",
+            value=(
+                "**Max tier reached**"
+                if tier >= 10
+                else f"**{next_earned:,} earned** toward the next tier"
+                     f"\nSpending also contributes to progression."
+            ),
             inline=False
         )
         await ctx.send(embed=footer(embed, ctx))
