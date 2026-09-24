@@ -2,12 +2,17 @@
 import random
 from .items import ITEMS
 
-LOOT_TABLE=[("guardian_mail",.10),("mana_charm",.12),("iron_sword",.18),("moon_staff",.12),("shadow_dagger",.18)]
+LOOT_TABLE=[
+    ("guardian_mail",.08),("mana_charm",.10),("iron_sword",.10),
+    ("moon_staff",.10),("shadow_dagger",.10),("thornblade",.07),
+    ("thornmantle",.06),("veilring",.05),("embercleaver",.04),
+    ("ashplate",.04),("starfall_staff",.03),("starweave",.03),
+]
 BOSS_LOOT={
-    "pale_stag":"moon_staff",
-    "rootbound_warden":"guardian_mail",
-    "ashen_sovereign":"shadow_dagger",
-    "astral_leviathan":"mana_charm",
+    "pale_stag":"pale_antler",
+    "rootbound_warden":"rootheart",
+    "ashen_sovereign":"sovereign_cinder",
+    "astral_leviathan":"leviathan_eye",
 }
 
 def roll_loot(enemy_id, loot_bonus=0.0):
