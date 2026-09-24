@@ -324,6 +324,46 @@ class GuildMusicState:
         self.playback_lock = asyncio.Lock()
 
 
+class QueuePageView(discord.ui.View):
+    """Ephemeral queue navigation; buttons never mutate playback state."""
+
+    def __init__(self, cog, guild_id, page, total_pages):
+        super().__init__(timeout=120)
+        self.cog = cog
+        self.guild_id = guild_id
+        self.page = page
+        self.total_pages = total_pages
+        self.previous_button.disabled = page <= 1
+        self.next_button.disabled = page >= total_pages
+
+    async def interaction_check(self, interaction):
+        if interaction.guild is None or interaction.guild.id != self.guild_id:
+            await interaction.response.send_message(
+                "This queue belongs to another server.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="Previous", emoji="◀️", style=discord.ButtonStyle.secondary)
+    async def previous_button(self, interaction, button):
+        await self.cog.send_queue(
+            interaction.guild,
+            interaction.channel,
+            interaction=interaction,
+            page=self.page - 1,
+        )
+
+    @discord.ui.button(label="Next", emoji="▶️", style=discord.ButtonStyle.secondary)
+    async def next_button(self, interaction, button):
+        await self.cog.send_queue(
+            interaction.guild,
+            interaction.channel,
+            interaction=interaction,
+            page=self.page + 1,
+        )
+
+
 class MusicControlView(discord.ui.View):
     def __init__(self, cog, guild_id):
         super().__init__(timeout=300)
@@ -804,22 +844,57 @@ class Music(commands.Cog):
             state.manual_disconnect = True
             await vc.disconnect()
 
-    async def send_queue(self, guild, channel, interaction=None):
+    async def send_queue(self, guild, channel, interaction=None, page=1):
         state = await self.ensure_settings(guild.id)
+        items = list(state.queue)
+        page_size = 10
+        total_pages = max(1, (len(items) + page_size - 1) // page_size)
+        page = max(1, min(int(page), total_pages))
+
         lines = []
         if state.current:
-            lines.append(f"▶️ **{state.current['title']}** · {state.current['requester_name']}")
-        for i, item in enumerate(state.queue, 1):
-            lines.append(f"{i:02} · {item['query']} · {item['requester_name']}")
-        content = "📭 The queue is empty." if not lines else "\n".join(lines[:25])
-        if len(lines) > 25:
-            content += f"\n… and {len(lines)-25} more."
-        embed = discord.Embed(title="🎵 ECLIPSE QUEUE", description=content, color=COLOR_MUSIC)
-        embed.set_footer(text=f"Loop: {state.loop_mode} · Autoplay: {'on' if state.autoplay else 'off'} · Limit: {state.queue_limit}")
+            lines.append(
+                f"▶️ **{state.current['title']}** · {state.current['requester_name']}"
+            )
+
+        if items:
+            start_index = (page - 1) * page_size
+            end_index = min(start_index + page_size, len(items))
+            for absolute_index, item in enumerate(
+                items[start_index:end_index],
+                start_index + 1,
+            ):
+                lines.append(
+                    f"{absolute_index:02} · {item['query']} · {item['requester_name']}"
+                )
+
+        content = "📭 The queue is empty." if not lines else "\n".join(lines)
+        embed = discord.Embed(
+            title="🎵 ECLIPSE QUEUE",
+            description=content,
+            color=COLOR_MUSIC,
+        )
+        embed.set_footer(
+            text=(
+                f"Page {page}/{total_pages} · "
+                f"Loop: {state.loop_mode} · "
+                f"Autoplay: {'on' if state.autoplay else 'off'} · "
+                f"Limit: {state.queue_limit}"
+            )
+        )
+
+        view = QueuePageView(self, guild.id, page, total_pages) if total_pages > 1 else None
         if interaction:
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.response.send_message(
+                embed=embed,
+                view=view,
+                ephemeral=True,
+            )
         else:
-            await channel.send(embed=embed, view=MusicControlView(self, guild.id))
+            await channel.send(
+                embed=embed,
+                view=view or MusicControlView(self, guild.id),
+            )
 
     @commands.command(name="pause")
     async def pause(self, ctx):
@@ -920,8 +995,11 @@ class Music(commands.Cog):
         await ctx.send("⏹️ Stopped and cleared the queue.")
 
     @commands.command(name="queue", aliases=["q"])
-    async def queue_cmd(self, ctx):
-        await self.send_queue(ctx.guild, ctx.channel)
+    async def queue_cmd(self, ctx, page: int = 1):
+        if page < 1:
+            await ctx.send("❌ Queue page must be 1 or higher.")
+            return
+        await self.send_queue(ctx.guild, ctx.channel, page=page)
 
     @commands.command(name="remove")
     async def remove(self, ctx, position: int):
@@ -949,6 +1027,42 @@ class Music(commands.Cog):
         items.insert(to_position - 1, item)
         state.queue = deque(items)
         await ctx.send(f"↕️ Moved **{item['query']}** to position **{to_position}**.")
+
+    @commands.command(name="jump")
+    async def jump(self, ctx, position: int):
+        if not await self.require_control(ctx):
+            return
+
+        state = await self.ensure_settings(ctx.guild.id)
+        items = list(state.queue)
+
+        if position < 1 or position > len(items):
+            await ctx.send(
+                f"❌ Invalid queue position. Choose a position from 1 to {len(items)}."
+            )
+            return
+
+        target = items[position - 1]
+        state.queue = deque(items[position:])
+
+        target_item = {
+            "query": target["query"],
+            "requester_name": target["requester_name"],
+        }
+
+        vc = ctx.voice_client
+        if vc and (vc.is_playing() or vc.is_paused()):
+            generation = state.current.get("generation") if state.current else None
+            state.intentional_stop_generation = generation
+            state.queue.appendleft(target_item)
+            vc.stop()
+        else:
+            state.queue.appendleft(target_item)
+            await self._play_next(ctx.guild)
+
+        await ctx.send(
+            f"⏭️ Jumping to **{target['query']}** at queue position **{position}**."
+        )
 
     @commands.command(name="clear")
     async def clear_queue(self, ctx):
