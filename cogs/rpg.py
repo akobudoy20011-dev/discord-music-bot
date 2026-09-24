@@ -6,8 +6,9 @@ from rpg.classes import CLASSES, get_class
 from rpg.manager import ADVENTURE_COOLDOWN, adventure, choose_class, get_player, rest
 from rpg.equipment import grant_starter_gear, inventory, get_equipment, equip, unequip, upgrade, equipment_stats
 from rpg.skills import get_skills
+from rpg.specials import SPECIALS, get_special, get_specials_for_class
 from rpg.skills_service import ensure_class_skills, unlock_skill
-from rpg.combat import start as start_battle, attack as combat_attack, flee as flee_battle
+from rpg.combat import start as start_battle, attack as combat_attack, special as combat_special, flee as flee_battle
 from rpg.quests import ensure_quests, list_quests, claim as claim_quest
 from rpg.world import list_regions, get_region, list_events, get_event
 from rpg.exploration import world_status, travel, explore
@@ -117,7 +118,7 @@ class RPG(commands.Cog):
             if not battle["ok"]:
                 await ctx.send(f"⚔️ **{enemy['name']}** finds you before you can prepare. Use !rpg attack.")
                 return
-            await ctx.send(f"{region['icon']} **{region['name']}**\\n\\n⚔️ **AN ENCOUNTER**\\n**{enemy['name']}** · ❤️ {enemy['hp']}/{enemy['hp']} HP\\nThe realm has noticed you. Use !rpg attack, !rpg skill <id>, or !rpg flee.")
+            await ctx.send(f"{region['icon']} **{region['name']}**\\n\\n⚔️ **AN ENCOUNTER**\\n**{enemy['name']}** · ❤️ {enemy['hp']}/{enemy['hp']} HP\\nThe realm has noticed you. Use !rpg attack, !rpg skill <id>, !rpg special <id>, or !rpg flee.")
             return
         event = result["event"]
         level_text = "\\n✦ **LEVEL UP**" if result["new_level"] > result["old_level"] else ""
@@ -232,6 +233,60 @@ class RPG(commands.Cog):
             await ctx.send("🏃 You escaped the battle.")
         else:
             await ctx.send("There is no active battle.")
+
+    @rpg.command(name="special", aliases=["specials", "ultimate"])
+    async def special_command(self, ctx, special_id: str = None):
+        player = await get_player(self.db, ctx.guild.id, ctx.author.id)
+
+        if special_id and special_id.lower() == "all":
+            lines = []
+            for sid, data in SPECIALS.items():
+                classes = ", ".join(data["class_keys"])
+                lines.append(f"{data['icon']} **{data['name']}** - {sid}\nLv. **{data['level']}** · {data['cost']} MP · {data['cooldown']}t CD · {classes}\n{data['description']}")
+            await ctx.send(embed=discord.Embed(title="♡ ECLIPSE · SPECIAL CODEX ♡", description="\n\n".join(lines), color=COLOR_PRIMARY))
+            return
+
+        available = get_specials_for_class(player["class_key"])
+        if not special_id:
+            unlocked = set(await self.db.get_rpg_specials(ctx.guild.id, ctx.author.id))
+            lines = []
+            for sid, data in available:
+                if sid in unlocked:
+                    state = "✦ READY"
+                elif player["level"] >= data["level"]:
+                    await self.db.unlock_rpg_special(ctx.guild.id, ctx.author.id, sid, source="level")
+                    state = "✦ READY"
+                else:
+                    state = f"○ LOCKED · Lv.{data['level']}"
+                lines.append(f"{state} {data['icon']} **{data['name']}** · {sid} · {data['cost']} MP · {data['cooldown']}t CD")
+            await ctx.send(embed=discord.Embed(title=f"♡ ECLIPSE · {player['class_key'].upper()} SPECIALS ♡", description="\n".join(lines) if lines else "No specials are assigned to this class.", color=COLOR_PRIMARY))
+            return
+
+        data = get_special(special_id)
+        if not data:
+            await ctx.send("❌ Unknown special. Use !rpg special all to open the full codex.")
+            return
+        if player["class_key"] not in data["class_keys"]:
+            await ctx.send("❌ That special is not part of your class path.")
+            return
+        battle = await self.db.get_rpg_battle(ctx.guild.id, ctx.author.id)
+        if not battle:
+            await ctx.send(f"{data['icon']} **{data['name']}**\n{data['description']}\nUnlock: **Lv.{data['level']}** · Cost: **{data['cost']} MP** · Cooldown: **{data['cooldown']} turns**\n\nStart a battle with !rpg battle, then cast it with !rpg special <id>.")
+            return
+        result = await combat_special(self.db, ctx.guild.id, ctx.author.id, special_id)
+        if not result["ok"]:
+            await ctx.send(f"❌ {result['message']}")
+            return
+        if result.get("victory"):
+            await ctx.send(f"{result['special_icon']} **{result['special_name'].upper()}**\n{result['special_message']}\n\n💥 **{result['damage']} damage** · 🏆 **VICTORY** · +{result['xp']} XP · +{result['gold']} gold")
+            return
+        if result.get("defeat"):
+            await ctx.send(f"{result['special_icon']} **{result['special_name'].upper()}**\n{result['special_message']}\n\n☠️ The enemy survives the cast and defeats you.")
+            return
+        incoming = result.get("incoming", 0)
+        enemy_state = " · enemy turn skipped" if result.get("enemy_skipped") else ""
+        status = f"\n**Status:** {result['status']}" if result.get("status") else ""
+        await ctx.send(f"{result['special_icon']} **{result['special_name'].upper()}**\n{result['special_message']}\n\n💥 **{result['damage']} damage** · Enemy ❤️ {result['enemy_hp']}/{result['enemy_max_hp']}\n💢 Incoming damage: **{incoming}**{enemy_state}{status}")
 
     @rpg.command(name="quests", aliases=["quest"])
     async def quests_command(self, ctx):
