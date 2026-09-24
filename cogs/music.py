@@ -416,8 +416,24 @@ class Music(commands.Cog):
         except SongDownloadError as e:
             if state.text_channel:
                 await state.text_channel.send(f"❌ Skipping '{next_query}': {e}")
-            await self._play_next(guild)
-            return
+
+            state.current = None
+            while state.queue:
+                failed = state.queue.popleft()
+                try:
+                    data = await resolve_query(loop, failed["query"])
+                    next_query = failed["query"]
+                    requester_name = failed["requester_name"]
+                    break
+                except SongDownloadError as retry_error:
+                    if state.text_channel:
+                        await state.text_channel.send(
+                            "❌ Skipping '{}' : {}".format(failed["query"], retry_error)
+                        )
+            else:
+                if state.text_channel:
+                    await state.text_channel.send("📭 Queue finished.")
+                return
 
         stream_url = data["url"]
         title = data.get("title", next_query)
