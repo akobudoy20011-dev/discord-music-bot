@@ -227,7 +227,7 @@ class Economy(commands.Cog):
             await self.db.record_economy_activity(ctx.guild.id, ctx.author.id, earned=interest)
         user = await self.db.get_user(ctx.guild.id, ctx.author.id)
         embed = discord.Embed(
-            title="🏦 Economy Vault",
+            title="🏦 ECLIPSE BANK",
             description=(
                 f"💰 Wallet: **{int(user['balance']):,}**\n"
                 f"🏦 Vault: **{int(user['bank_balance']):,}**\n"
