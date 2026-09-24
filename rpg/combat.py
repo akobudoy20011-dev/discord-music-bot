@@ -160,18 +160,26 @@ async def _finish_turn(db, guild_id, user_id, battle, player, stats, effects, co
         battle["enemy_hp"] = enemy_hp
         return await _victory_rewards(db, guild_id, user_id, battle, player, damage)
 
-    incoming = max(1, int(battle["enemy_attack"] - stats["defense"] * 0.45))
-    if effects.get("enemy_weaken_turns", 0):
-        incoming = max(1, int(incoming * (1.0 - float(effects.get("enemy_weaken_pct", 0.25)))))
+    # Enemy-control effects are consumed by the enemy turn, not by the player's
+    # cast. Infinite Darkness therefore preserves the original five-move freeze.
+    frozen = int(effects.get("enemy_freeze_turns", 0))
+    staggered = int(effects.get("enemy_stagger_turns", 0))
+    enemy_skipped = frozen > 0 or staggered > 0
 
-    if effects.get("player_blessing_turns", 0):
-        incoming = max(1, int(incoming * 0.65))
+    incoming = 0
+    if not enemy_skipped:
+        incoming = max(1, int(battle["enemy_attack"] - stats["defense"] * 0.45))
+        if effects.get("enemy_weaken_turns", 0):
+            incoming = max(1, int(incoming * (1.0 - float(effects.get("enemy_weaken_pct", 0.25)))))
 
-    if effects.get("player_guard_turns", 0):
-        incoming = max(1, int(incoming * 0.45))
+        if effects.get("player_blessing_turns", 0):
+            incoming = max(1, int(incoming * 0.65))
 
-    if random.random() < min(0.35, stats["agility"] * 0.01):
-        incoming = 0
+        if effects.get("player_guard_turns", 0):
+            incoming = max(1, int(incoming * 0.45))
+
+        if random.random() < min(0.35, stats["agility"] * 0.01):
+            incoming = 0
 
     hp = max(0, int(player["hp"]) - incoming)
     await db.update_rpg_player(guild_id, user_id, hp=hp)
@@ -185,12 +193,6 @@ async def _finish_turn(db, guild_id, user_id, battle, player, stats, effects, co
             "incoming": incoming,
             "special": special,
         }
-
-    # Enemy-control effects are consumed by the enemy turn, not by the player's
-    # cast. Infinite Darkness therefore preserves the original five-move freeze.
-    frozen = int(effects.get("enemy_freeze_turns", 0))
-    staggered = int(effects.get("enemy_stagger_turns", 0))
-    enemy_skipped = frozen > 0 or staggered > 0
 
     if frozen > 0:
         effects["enemy_freeze_turns"] = frozen - 1
