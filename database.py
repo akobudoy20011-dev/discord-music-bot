@@ -519,6 +519,41 @@ CREATE TABLE IF NOT EXISTS guild_server_events (
     created_at REAL NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS rpg_companions (
+    guild_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    companion_id TEXT NOT NULL,
+    level INTEGER NOT NULL DEFAULT 1,
+    xp INTEGER NOT NULL DEFAULT 0,
+    active INTEGER NOT NULL DEFAULT 0,
+    bonded INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (guild_id, user_id, companion_id)
+);
+
+CREATE TABLE IF NOT EXISTS world_bosses (
+    guild_id TEXT PRIMARY KEY,
+    boss_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    max_hp INTEGER NOT NULL,
+    hp INTEGER NOT NULL,
+    attack INTEGER NOT NULL DEFAULT 100,
+    reward_coins INTEGER NOT NULL DEFAULT 50000,
+    reward_xp INTEGER NOT NULL DEFAULT 5000,
+    ends_at REAL NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_by TEXT,
+    created_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS world_boss_contributors (
+    guild_id TEXT NOT NULL,
+    boss_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    damage INTEGER NOT NULL DEFAULT 0,
+    rewarded INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (guild_id, boss_id, user_id)
+);
+
 CREATE TABLE IF NOT EXISTS warnings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     guild_id TEXT NOT NULL,
@@ -2954,6 +2989,137 @@ class Database:
             (str(guild_id), str(user_id), str(special_id))
         )
         return await cur.fetchone() is not None
+
+    async def get_rpg_companions(self, guild_id, user_id):
+        cur = await self._conn.execute(
+            "SELECT * FROM rpg_companions WHERE guild_id=? AND user_id=? ORDER BY active DESC, level DESC, companion_id",
+            (str(guild_id), str(user_id))
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def get_rpg_companion(self, guild_id, user_id, companion_id):
+        cur = await self._conn.execute(
+            "SELECT * FROM rpg_companions WHERE guild_id=? AND user_id=? AND companion_id=?",
+            (str(guild_id), str(user_id), str(companion_id))
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def recruit_rpg_companion(self, guild_id, user_id, companion_id, cost=5000):
+        companion_id = str(companion_id).lower()
+        existing = await self.get_rpg_companion(guild_id, user_id, companion_id)
+        if existing:
+            return False, "owned", existing
+        ok, balance = await self.spend_rpg_gold(guild_id, user_id, int(cost))
+        if not ok:
+            return False, "gold", balance
+        await self._conn.execute(
+            "INSERT INTO rpg_companions(guild_id,user_id,companion_id) VALUES(?,?,?)",
+            (str(guild_id), str(user_id), companion_id)
+        )
+        await self._conn.commit()
+        return True, "ok", await self.get_rpg_companion(guild_id, user_id, companion_id)
+
+    async def set_active_rpg_companion(self, guild_id, user_id, companion_id):
+        companion_id = str(companion_id).lower()
+        if not await self.get_rpg_companion(guild_id, user_id, companion_id):
+            return False, "missing"
+        await self._conn.execute(
+            "UPDATE rpg_companions SET active=0 WHERE guild_id=? AND user_id=?",
+            (str(guild_id), str(user_id))
+        )
+        await self._conn.execute(
+            "UPDATE rpg_companions SET active=1,bonded=1 WHERE guild_id=? AND user_id=? AND companion_id=?",
+            (str(guild_id), str(user_id), companion_id)
+        )
+        await self._conn.commit()
+        return True, "ok"
+
+    async def train_rpg_companion(self, guild_id, user_id, companion_id, xp):
+        xp = max(1, int(xp))
+        companion = await self.get_rpg_companion(guild_id, user_id, companion_id)
+        if not companion:
+            return False, "missing", None
+        cost = max(100, ((xp + 99) // 100) * 100)
+        ok, balance = await self.spend_rpg_gold(guild_id, user_id, cost)
+        if not ok:
+            return False, "gold", balance
+        total = int(companion["xp"]) + xp
+        level = int(companion["level"])
+        while total >= level * 250:
+            total -= level * 250
+            level += 1
+        await self._conn.execute(
+            "UPDATE rpg_companions SET level=?,xp=? WHERE guild_id=? AND user_id=? AND companion_id=?",
+            (level,total,str(guild_id),str(user_id),str(companion_id))
+        )
+        await self._conn.commit()
+        return True, "ok", await self.get_rpg_companion(guild_id,user_id,companion_id)
+
+    async def get_active_rpg_companion(self, guild_id, user_id):
+        cur = await self._conn.execute(
+            "SELECT * FROM rpg_companions WHERE guild_id=? AND user_id=? AND active=1 LIMIT 1",
+            (str(guild_id), str(user_id))
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def create_world_boss(self, guild_id, boss_id, name, max_hp, attack, reward_coins, reward_xp, duration, created_by=None):
+        now = time.time()
+        await self._conn.execute("DELETE FROM world_boss_contributors WHERE guild_id=?", (str(guild_id),))
+        await self._conn.execute(
+            "INSERT OR REPLACE INTO world_bosses(guild_id,boss_id,name,max_hp,hp,attack,reward_coins,reward_xp,ends_at,status,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?,'active',?,?,?)",
+            (str(guild_id),str(boss_id),str(name),int(max_hp),int(max_hp),int(attack),int(reward_coins),int(reward_xp),now+int(duration),str(created_by) if created_by else None,now)
+        )
+        await self._conn.commit()
+        return await self.get_world_boss(guild_id)
+
+    async def get_world_boss(self, guild_id):
+        cur = await self._conn.execute("SELECT * FROM world_bosses WHERE guild_id=?", (str(guild_id),))
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def damage_world_boss(self, guild_id, user_id, damage):
+        damage=max(1,int(damage))
+        boss=await self.get_world_boss(guild_id)
+        if not boss or boss["status"]!="active" or float(boss["ends_at"])<=time.time():
+            return False,"inactive",0
+        await self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            cur=await self._conn.execute("UPDATE world_bosses SET hp=MAX(0,hp-?) WHERE guild_id=? AND status='active'",(damage,str(guild_id)))
+            if cur.rowcount!=1:
+                await self._conn.rollback()
+                return False,"inactive",0
+            await self._conn.execute(
+                "INSERT INTO world_boss_contributors(guild_id,boss_id,user_id,damage) VALUES(?,?,?,?) ON CONFLICT(guild_id,boss_id,user_id) DO UPDATE SET damage=damage+excluded.damage",
+                (str(guild_id),boss["boss_id"],str(user_id),damage)
+            )
+            cur=await self._conn.execute("SELECT hp FROM world_bosses WHERE guild_id=?",(str(guild_id),))
+            hp=int((await cur.fetchone())["hp"])
+            status="defeated" if hp<=0 else "active"
+            if hp<=0:
+                await self._conn.execute("UPDATE world_bosses SET status='defeated' WHERE guild_id=?",(str(guild_id),))
+            await self._conn.commit()
+            return True,status,hp
+        except Exception:
+            await self._conn.rollback()
+            raise
+
+    async def claim_world_boss_reward(self, guild_id, user_id):
+        boss=await self.get_world_boss(guild_id)
+        if not boss or boss["status"]!="defeated":
+            return None,"inactive"
+        cur=await self._conn.execute("SELECT damage,rewarded FROM world_boss_contributors WHERE guild_id=? AND boss_id=? AND user_id=?",(str(guild_id),boss["boss_id"],str(user_id)))
+        row=await cur.fetchone()
+        if not row or int(row["damage"])<=0:
+            return None,"none"
+        if int(row["rewarded"]):
+            return None,"claimed"
+        await self._conn.execute("UPDATE world_boss_contributors SET rewarded=1 WHERE guild_id=? AND boss_id=? AND user_id=?",(str(guild_id),boss["boss_id"],str(user_id)))
+        await self._conn.commit()
+        damage=int(row["damage"])
+        scale=min(2.0,0.5+damage/max(1,int(boss["max_hp"])))
+        return (int(int(boss["reward_coins"])*scale),int(int(boss["reward_xp"])*scale),damage),"ok"
 
     async def clear_warnings(self, guild_id, user_id):
         await self._conn.execute(
