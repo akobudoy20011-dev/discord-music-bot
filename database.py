@@ -1425,6 +1425,20 @@ class Database:
             return False, None
         return True, dict(current)
 
+    async def reset_arcade_match(self, match_id):
+        await self._conn.execute(
+            "UPDATE arcade_tournament_matches SET status='ready' "
+            "WHERE match_id=? AND status='playing'",
+            (int(match_id),)
+        )
+        await self._conn.commit()
+        cur = await self._conn.execute(
+            "SELECT * FROM arcade_tournament_matches WHERE match_id=?",
+            (int(match_id),)
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
     async def resolve_arcade_match(self, match_id, winner_id):
         cur = await self._conn.execute(
             "SELECT * FROM arcade_tournament_matches WHERE match_id=?",
