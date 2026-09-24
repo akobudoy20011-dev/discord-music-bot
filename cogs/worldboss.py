@@ -94,7 +94,8 @@ class WorldBoss(commands.Cog):
         ok,reason,hp=await self.db.damage_world_boss(ctx.guild.id,ctx.author.id,damage)
         if not ok: await ctx.send("❌ The world boss is no longer active."); return
         new_boss=await self.db.get_world_boss(ctx.guild.id)
-        effect_name = effect_id.replace("_", " ").title()\n        effect_note = f" · 💢 **{effect_name}** weakened your next attacks" if triggered else ""
+        effect_name = effect_id.replace("_", " ").title()
+        effect_note = f" · 💢 **{effect_name}** weakened your next attacks" if triggered else ""
         await ctx.send(f"⚔️ **{ctx.author.display_name}** dealt **{damage:,}** damage · Boss HP **{hp:,}**{effect_note}.")
         if new_boss and boss_phase(new_boss)[0] != phase:
             new_phase=boss_phase(new_boss)[0]
