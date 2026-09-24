@@ -835,6 +835,10 @@ class Database:
         except Exception:
             await self._conn.rollback(); raise
 
+    async def get_collectibles(self, guild_id, user_id):
+        cur=await self._conn.execute("SELECT collectible_id,amount FROM economy_collectibles WHERE guild_id=? AND user_id=? AND amount>0 ORDER BY amount DESC,collectible_id",(str(guild_id),str(user_id)))
+        return [dict(r) for r in await cur.fetchall()]
+
     async def create_investment(self, guild_id, user_id, principal, multiplier, duration):
         guild_id, user_id = str(guild_id), str(user_id)
         principal = int(principal)
