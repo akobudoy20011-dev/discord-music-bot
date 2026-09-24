@@ -1407,11 +1407,13 @@ class Database:
             return False, None
         if str(user_id) not in {str(m["player_a"]), str(m["player_b"])}:
             return False, None
-        await self._conn.execute(
+        update_cur = await self._conn.execute(
             "UPDATE arcade_tournament_matches SET status='playing' "
             "WHERE match_id=? AND status='ready'",
             (int(match_id),)
         )
+        if update_cur.rowcount != 1:
+            return False, None
         await self._conn.commit()
         cur = await self._conn.execute(
             "SELECT m.*, t.guild_id, t.game_id, t.name AS tournament_name "
