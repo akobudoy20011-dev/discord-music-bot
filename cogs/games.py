@@ -397,7 +397,10 @@ class Games(commands.Cog):
             if user["balance"] < bet:
                 await ctx.send(f"💸 You only have **{user['balance']:,} coins**.")
                 return
-            await self.db.add_balance(ctx.guild.id, ctx.author.id, -bet)
+            ok, _, _ = await self.db.withdraw_balance(ctx.guild.id, ctx.author.id, bet)
+        if not ok:
+            await ctx.send("💸 Your balance changed before the wager could be placed.")
+            return
 
         view = RPSView(self, ctx, bet)
 
@@ -481,7 +484,10 @@ class Games(commands.Cog):
             await ctx.send(f"💸 You only have **{user['balance']:,} coins**.")
             return
 
-        await self.db.add_balance(ctx.guild.id, ctx.author.id, -bet)
+        ok, _, _ = await self.db.withdraw_balance(ctx.guild.id, ctx.author.id, bet)
+        if not ok:
+            await ctx.send("💸 Your balance changed before the wager could be placed.")
+            return
 
         embed = discord.Embed(
             title="🎲 Dice Roll",
@@ -535,7 +541,10 @@ class Games(commands.Cog):
             await ctx.send(f"💸 You only have **{user['balance']:,} coins**.")
             return
 
-        await self.db.add_balance(ctx.guild.id, ctx.author.id, -bet)
+        ok, _, _ = await self.db.withdraw_balance(ctx.guild.id, ctx.author.id, bet)
+        if not ok:
+            await ctx.send("💸 Your balance changed before the wager could be placed.")
+            return
 
         secret = random.randint(1, 10)
 
@@ -599,7 +608,10 @@ class Games(commands.Cog):
             await ctx.send(f"💸 You only have **{user['balance']:,} coins**.")
             return
 
-        await self.db.add_balance(ctx.guild.id, ctx.author.id, -bet)
+        ok, _, _ = await self.db.withdraw_balance(ctx.guild.id, ctx.author.id, bet)
+        if not ok:
+            await ctx.send("💸 Your balance changed before the wager could be placed.")
+            return
 
         embed = discord.Embed(
             title="🪙 Coinflip",
@@ -650,7 +662,10 @@ class Games(commands.Cog):
 
         symbols = ["🍋", "🍒", "🍇", "🔔", "💎", "7️⃣"]
 
-        await self.db.add_balance(ctx.guild.id, ctx.author.id, -bet)
+        ok, _, _ = await self.db.withdraw_balance(ctx.guild.id, ctx.author.id, bet)
+        if not ok:
+            await ctx.send("💸 Your balance changed before the wager could be placed.")
+            return
 
         embed = discord.Embed(
             title="🎰 Slot Machine",
@@ -711,7 +726,10 @@ class Games(commands.Cog):
             await ctx.send(f"💸 You only have **{user['balance']:,} coins**.")
             return
 
-        await self.db.add_balance(ctx.guild.id, ctx.author.id, -bet)
+        ok, _, _ = await self.db.withdraw_balance(ctx.guild.id, ctx.author.id, bet)
+        if not ok:
+            await ctx.send("💸 Your balance changed before the wager could be placed.")
+            return
 
         suits = ["♠️", "♥️", "♦️", "♣️"]
         ranks = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"]
@@ -826,10 +844,11 @@ class Games(commands.Cog):
             return False, "Bet must be positive."
         if amount > self.MAX_BET:
             return False, f"Maximum bet is {self.MAX_BET:,} coins."
-        user = await self.db.get_user(ctx.guild.id, ctx.author.id)
-        if int(user["balance"]) < amount:
-            return False, f"You only have {int(user['balance']):,} coins."
-        await self.db.add_balance(ctx.guild.id, ctx.author.id, -amount)
+        ok, reason, balance = await self.db.withdraw_balance(ctx.guild.id, ctx.author.id, amount)
+        if not ok:
+            if reason == "balance":
+                return False, f"You only have {int(balance):,} coins."
+            return False, "Unable to place that wager."
         return True, amount
 
     async def _payout(self, ctx, bet, multiplier):
