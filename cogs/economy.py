@@ -139,7 +139,10 @@ class Economy(commands.Cog):
         tier_multiplier = economy_multiplier(tier)
         effects = await self.db.get_economy_effects(ctx.guild.id, ctx.author.id)
         boost = effect_multiplier(effects, "daily_boost")
-        multiplier = tier_multiplier * boost
+        guild_multiplier = await self.db.guild_multiplier(ctx.guild.id, ctx.author.id)
+        server_event = await self.db.get_server_event(ctx.guild.id)
+        event_multiplier = float(server_event["multiplier"]) if server_event else 1.0
+        multiplier = tier_multiplier * boost * guild_multiplier * event_multiplier
         result = await self.db.claim_daily(
             ctx.guild.id, ctx.author.id, time.time(),
             round(DAILY_AMOUNT * multiplier),
@@ -181,7 +184,10 @@ class Economy(commands.Cog):
         tier_multiplier = economy_multiplier(tier)
         effects = await self.db.get_economy_effects(ctx.guild.id, ctx.author.id)
         boost = effect_multiplier(effects, "work_boost")
-        multiplier = tier_multiplier * boost
+        guild_multiplier = await self.db.guild_multiplier(ctx.guild.id, ctx.author.id)
+        server_event = await self.db.get_server_event(ctx.guild.id)
+        event_multiplier = float(server_event["multiplier"]) if server_event else 1.0
+        multiplier = tier_multiplier * boost * guild_multiplier * event_multiplier
         result = await self.db.claim_work(
             ctx.guild.id, ctx.author.id, time.time(),
             round(WORK_MIN * multiplier),
@@ -244,7 +250,6 @@ class Economy(commands.Cog):
             user = await self.db.get_user(ctx.guild.id, ctx.author.id)
             await ctx.send(f"💸 You only have **{int(user['balance']):,}** coins available.")
             return
-        await self.db.record_economy_activity(ctx.guild.id, ctx.author.id, spent=amount)
         user = await self.db.get_user(ctx.guild.id, ctx.author.id)
         await ctx.send(f"🏦 Deposited **{amount:,} coins**. Vault balance: **{int(user['bank_balance']):,}**.")
 
@@ -259,7 +264,6 @@ class Economy(commands.Cog):
             user = await self.db.get_user(ctx.guild.id, ctx.author.id)
             await ctx.send(f"🏦 Your vault only contains **{int(user['bank_balance']):,}** coins.")
             return
-        await self.db.record_economy_activity(ctx.guild.id, ctx.author.id, earned=amount)
         user = await self.db.get_user(ctx.guild.id, ctx.author.id)
         await ctx.send(f"💰 Withdrew **{amount:,} coins**. Wallet balance: **{int(user['balance']):,}**.")
 
