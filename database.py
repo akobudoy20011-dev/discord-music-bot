@@ -481,6 +481,18 @@ class Database:
 
         return await self.get_rpg_player(guild_id, user_id)
 
+    async def spend_rpg_gold(self, guild_id, user_id, amount):
+        player = await self.get_rpg_player(guild_id, user_id)
+        amount = int(amount)
+        if amount < 0:
+            raise ValueError("amount must be non-negative")
+        if int(player["gold"]) < amount:
+            return False, int(player["gold"])
+        player = await self.update_rpg_player(
+            guild_id, user_id, gold=int(player["gold"]) - amount
+        )
+        return True, int(player["gold"])
+
     async def add_rpg_xp(self, guild_id, user_id, amount):
         player = await self.get_rpg_player(guild_id, user_id)
         xp = max(0, int(player["xp"]) + int(amount))
