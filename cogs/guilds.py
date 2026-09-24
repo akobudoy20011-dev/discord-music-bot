@@ -10,6 +10,7 @@ import uuid
 
 import discord
 from discord.ext import commands
+from rpg.equipment import equipment_stats
 
 GUILD_XP_PER_LEVEL = 1000
 MAX_GUILD_LEVEL = 20
@@ -282,6 +283,9 @@ class Guilds(commands.Cog):
         mine = await self._role(ctx)
         if not mine:
             return
+        if int(mine["level"]) < 3:
+            await ctx.send("❌ Guild Level **3** required to awaken a guild boss.")
+            return
         if not await self.db.spend_guild_treasury(mine["guild_id"], BOSS_COST):
             await ctx.send(f"❌ The treasury needs **{BOSS_COST:,}** coins.")
             return
@@ -343,6 +347,9 @@ class Guilds(commands.Cog):
         mine = await self._role(ctx)
         if not mine:
             return
+        if int(mine["level"]) < 5:
+            await ctx.send("❌ Guild Level **5** required to launch a raid.")
+            return
         if not await self.db.spend_guild_treasury(mine["guild_id"], RAID_COST):
             await ctx.send(f"❌ The treasury needs **{RAID_COST:,}** coins.")
             return
@@ -394,6 +401,9 @@ class Guilds(commands.Cog):
         mine = await self._role(ctx)
         if not mine:
             return
+        if int(mine["level"]) < 3:
+            await ctx.send("❌ Guild Level **3** required to declare war.")
+            return
         war_id, reason = await self.db.declare_guild_war(mine["guild_id"], opponent_guild_id)
         if war_id is None:
             await ctx.send("❌ War could not be declared.")
@@ -413,6 +423,32 @@ class Guilds(commands.Cog):
             f"Ends: <t:{int(war['ends_at'])}:R>"
         ))
 
+    @guild_war.command(name="strike")
+    @commands.cooldown(1, 15, commands.BucketType.user)
+    async def guild_war_strike(self, ctx, war_id: int):
+        mine = await self._member(ctx)
+        if not mine:
+            return
+        war = await self.db.get_guild_war(war_id)
+        if not war or war["status"] != "open" or float(war["ends_at"]) <= time.time():
+            await ctx.send("❌ That war is inactive.")
+            return
+        if mine["guild_id"] not in {str(war["guild_id"]), str(war["opponent_guild_id"])}:
+            await ctx.send("❌ That war does not involve your guild.")
+            return
+        player = await self.db.get_rpg_player(ctx.guild.id, ctx.author.id)
+        gear = await equipment_stats(self.db, ctx.guild.id, ctx.author.id)
+        companion = await self.db.get_active_rpg_companion(ctx.guild.id, ctx.author.id)
+        power = int(player["strength"]) + int(player["magic"]) + int(player["level"]) * 2 + int(gear["power"]) * 2
+        if companion:
+            power += int(companion["level"])
+        points = max(1, min(5, power // 25))
+        ok, reason = await self.db.add_guild_war_score(war_id, mine["guild_id"], points)
+        if not ok:
+            await ctx.send("❌ The war strike could not be recorded.")
+            return
+        await ctx.send(f"⚔️ RPG war strike landed for **+{points}** war score.")
+    
     @guild_war.command(name="end")
     async def guild_war_end(self, ctx, war_id: int):
         war = await self.db.get_guild_war(war_id)
