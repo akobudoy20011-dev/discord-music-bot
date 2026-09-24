@@ -3,9 +3,11 @@ name: ECLIPSE CI
 on:
   push:
     branches:
+      - main
       - eclipse-foundation
   pull_request:
     branches:
+      - main
       - eclipse-foundation
 
 jobs:
