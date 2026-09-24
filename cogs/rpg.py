@@ -22,11 +22,207 @@ def xp_bar(current, maximum, length=14):
     filled=int(length*min(current/maximum,1))
     return "█"*filled+"░"*(length-filled)
 
+class RPGHelpView(discord.ui.View):
+    """Interactive RPG command codex so players do not need to memorize commands."""
+
+    def __init__(self, *, author_id=None, timeout=300):
+        super().__init__(timeout=timeout)
+        self.author_id = author_id
+        self.select = discord.ui.Select(
+            placeholder="୨୧ Choose an RPG section",
+            min_values=1,
+            max_values=1,
+            options=[
+                discord.SelectOption(label="Getting Started", value="start", emoji="🌙", description="Profile, class, core loop"),
+                discord.SelectOption(label="Adventure & World", value="world", emoji="🗺️", description="Travel, explore, towns, discoveries"),
+                discord.SelectOption(label="Combat", value="combat", emoji="⚔️", description="Battle, attacks, skills, specials"),
+                discord.SelectOption(label="Quests & Progression", value="progress", emoji="📜", description="Quests, rewards, skills, codex"),
+                discord.SelectOption(label="Gear & Crafting", value="gear", emoji="🎒", description="Inventory, equipment, forge, materials"),
+                discord.SelectOption(label="Everything", value="all", emoji="📖", description="Full RPG command reference"),
+            ],
+        )
+        self.select.callback = self._select
+        self.add_item(self.select)
+
+    async def _guard(self, interaction):
+        if self.author_id is not None and interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ This RPG codex is locked to its creator.", ephemeral=True)
+            return False
+        return True
+
+    async def _select(self, interaction):
+        if not await self._guard(interaction):
+            return
+        await interaction.response.edit_message(
+            embed=build_rpg_help_embed(self.select.values[0]),
+            view=self,
+        )
+
+    @discord.ui.button(label="Home", emoji="⌂", style=discord.ButtonStyle.primary)
+    async def home(self, interaction, button):
+        if not await self._guard(interaction):
+            return
+        await interaction.response.edit_message(embed=build_rpg_help_embed("start"), view=self)
+
+    @discord.ui.button(label="Full List", emoji="📖", style=discord.ButtonStyle.secondary)
+    async def full_list(self, interaction, button):
+        if not await self._guard(interaction):
+            return
+        await interaction.response.edit_message(embed=build_rpg_help_embed("all"), view=self)
+
+
+RPG_HELP_PAGES = {
+    "start": {
+        "title": "🌙 ECLIPSE RPG · BEGIN HERE",
+        "description": (
+            "**THE BASIC LOOP**\n"
+            "\`!rpg profile\` → check your character\n"
+            "\`!rpg class\` → view/choose a class\n"
+            "\`!rpg adventure\` → earn XP and RPG gold\n"
+            "\`!rpg explore\` → discover the realm or enter encounters\n"
+            "\`!rpg battle\` → start a fight\n"
+            "\`!rpg rest\` → restore HP and MP\n\n"
+            "**FIRST STEPS**\n"
+            "① Run \`!rpg class\` and choose a path.\n"
+            "② Run \`!rpg adventure\` for your first rewards.\n"
+            "③ Run \`!rpg explore\` to find events, enemies and discoveries.\n"
+            "④ Use \`!rpg inventory\` and \`!rpg equipment\` to manage gear.\n"
+            "⑤ Use \`!rpg skills\` and \`!rpg special\` to learn your combat kit.\n\n"
+            "**CONNECTED SYSTEMS**\n"
+            "\`!companion\` · companions and training\n"
+            "\`!guild\` · guilds, raids, wars and relics\n"
+            "\`!worldboss\` · server world bosses"
+        ),
+    },
+    "world": {
+        "title": "🗺️ ECLIPSE RPG · ADVENTURE & WORLD",
+        "description": (
+            "**WORLD**\n"
+            "\`!rpg world\` — view realms, weather and active world events\n"
+            "\`!rpg travel <region>\` — travel to a realm\n"
+            "\`!rpg explore\` — search your current realm\n"
+            "\`!rpg discoveries\` — open your discovered codex\n\n"
+            "**TOWNS**\n"
+            "\`!rpg town\` — view the current settlement\n"
+            "\`!rpg town shop\` — browse the merchant\n"
+            "\`!rpg town buy <item>\` — buy an item\n"
+            "\`!rpg town inn\` — restore HP/MP for gold\n"
+            "\`!rpg town shrine\` — gain XP through the shrine\n"
+            "\`!rpg town alchemist\` — restore MP\n\n"
+            "**JOURNEY**\n"
+            "\`!rpg adventure\` — take a timed adventure\n"
+            "\`!rpg rest\` — recover without entering town"
+        ),
+    },
+    "combat": {
+        "title": "⚔️ ECLIPSE RPG · COMBAT",
+        "description": (
+            "**START & ACT**\n"
+            "\`!rpg battle\` — start a random battle\n"
+            "\`!rpg attack\` — basic attack\n"
+            "\`!rpg skill <id>\` — use an unlocked active skill\n"
+            "\`!rpg special <id>\` — cast a class special\n"
+            "\`!rpg flee\` — attempt to escape\n\n"
+            "**DISCOVER YOUR KIT**\n"
+            "\`!rpg skills\` — show your class skills\n"
+            "\`!rpg unlock <skill>\` — unlock an available skill\n"
+            "\`!rpg special\` — show your class specials\n"
+            "\`!rpg special all\` — full special codex\n\n"
+            "**COMBAT FLOW**\n"
+            "Start with \`!rpg battle\` or trigger an encounter with \`!rpg explore\`. "
+            "Then use attacks, skills or specials until the enemy is defeated."
+        ),
+    },
+    "progress": {
+        "title": "📜 ECLIPSE RPG · QUESTS & PROGRESSION",
+        "description": (
+            "**QUESTS**\n"
+            "\`!rpg quests\` — see active quests and progress\n"
+            "\`!rpg claim <quest_id>\` — claim a completed quest\n\n"
+            "**CHARACTER**\n"
+            "\`!rpg profile\` — stats, level, realm and vitals\n"
+            "\`!rpg class\` — class list / choose a class\n"
+            "\`!rpg skills\` — active skill list and unlock state\n"
+            "\`!rpg special\` — class special list\n"
+            "\`!rpg discoveries\` — lore and discovery progress\n\n"
+            "**GROWTH**\n"
+            "Adventure, exploration, combat and quests provide XP. "
+            "Use your rewards to improve gear and keep pushing into higher-danger realms."
+        ),
+    },
+    "gear": {
+        "title": "🎒 ECLIPSE RPG · GEAR & CRAFTING",
+        "description": (
+            "**EQUIPMENT**\n"
+            "\`!rpg inventory\` — all owned items\n"
+            "\`!rpg equipment\` — current loadout and bonuses\n"
+            "\`!rpg equip <item>\` — equip an item\n"
+            "\`!rpg unequip <slot>\` — remove weapon/armor/accessory/relic\n"
+            "\`!rpg upgrade <item>\` — upgrade equipped gear\n\n"
+            "**CRAFTING**\n"
+            "\`!rpg materials\` — view crafting materials\n"
+            "\`!rpg recipes\` — view forge recipes\n"
+            "\`!rpg craft <item>\` — craft an item\n"
+            "\`!rpg salvage <item>\` — dismantle an item for materials\n\n"
+            "**TIP**\n"
+            "Check \`!rpg recipes\` before selling or salvaging materials. "
+            "Some recipes require discoveries or realm guardians."
+        ),
+    },
+    "all": {
+        "title": "📖 ECLIPSE RPG · COMPLETE COMMAND CODEX",
+        "description": (
+            "**CHARACTER**\n"
+            "\`!rpg profile\` · \`!rpg class\` · \`!rpg skills\` · \`!rpg unlock <skill>\`\n"
+            "\`!rpg special\` · \`!rpg special all\` · \`!rpg discoveries\`\n\n"
+            "**WORLD**\n"
+            "\`!rpg world\` · \`!rpg travel <region>\` · \`!rpg explore\`\n"
+            "\`!rpg adventure\` · \`!rpg rest\` · \`!rpg town\`\n"
+            "\`!rpg town shop\` · \`!rpg town buy <item>\` · \`!rpg town inn\`\n"
+            "\`!rpg town shrine\` · \`!rpg town alchemist\`\n\n"
+            "**COMBAT**\n"
+            "\`!rpg battle\` · \`!rpg attack\` · \`!rpg skill <id>\` · \`!rpg special <id>\` · \`!rpg flee\`\n\n"
+            "**QUESTS**\n"
+            "\`!rpg quests\` · \`!rpg claim <quest_id>\`\n\n"
+            "**GEAR**\n"
+            "\`!rpg inventory\` · \`!rpg equipment\` · \`!rpg equip <item>\`\n"
+            "\`!rpg unequip <slot>\` · \`!rpg upgrade <item>\`\n\n"
+            "**FORGE**\n"
+            "\`!rpg materials\` · \`!rpg recipes\` · \`!rpg craft <item>\` · \`!rpg salvage <item>\`\n\n"
+            "**OUTSIDE THE RPG GROUP**\n"
+            "\`!companion\` · \`!guild\` · \`!worldboss\`\n"
+            "These are separate RPG-related systems with their own command menus."
+        ),
+    },
+}
+
+
+def build_rpg_help_embed(page="start"):
+    data = RPG_HELP_PAGES.get(page, RPG_HELP_PAGES["start"])
+    embed = discord.Embed(
+        title=f"╭─── {data['title']} ───╮",
+        description=data["description"],
+        color=COLOR_PRIMARY if page != "combat" else COLOR_GOLD,
+    )
+    embed.add_field(
+        name="୨୧ QUICK START",
+        value="\`!rpg class\` → \`!rpg adventure\` → \`!rpg explore\`",
+        inline=False,
+    )
+    embed.set_footer(text="ECLIPSE RPG · Select a section above or use !rpg help")
+    return embed
+
+
 class RPG(commands.Cog):
     def __init__(self,bot): self.bot=bot; self.db=bot.db
 
     @commands.group(name="rpg",invoke_without_command=True)
-    async def rpg(self,ctx): await ctx.invoke(self.profile)
+    async def rpg(self,ctx):
+        await ctx.send(embed=build_rpg_help_embed("start"), view=RPGHelpView(author_id=ctx.author.id))
+
+    @rpg.command(name="help", aliases=["h", "commands"])
+    async def help_command(self, ctx):
+        await ctx.send(embed=build_rpg_help_embed("start"), view=RPGHelpView(author_id=ctx.author.id))
 
     @rpg.command(name="profile",aliases=["p","status"])
     async def profile(self,ctx):
