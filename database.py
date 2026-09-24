@@ -48,6 +48,11 @@ CREATE TABLE IF NOT EXISTS users (
     bank_balance INTEGER NOT NULL DEFAULT 0,
     last_bank_interest REAL,
     equipped_title TEXT,
+    arcade_plays INTEGER NOT NULL DEFAULT 0,
+    arcade_wins INTEGER NOT NULL DEFAULT 0,
+    arcade_wagered INTEGER NOT NULL DEFAULT 0,
+    arcade_net INTEGER NOT NULL DEFAULT 0,
+    arcade_best_streak INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (guild_id, user_id)
 );
 
