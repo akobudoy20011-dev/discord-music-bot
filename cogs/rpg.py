@@ -346,10 +346,10 @@ class RPG(commands.Cog):
         lines = []
         for row in rows:
             data = MATERIALS.get(row["material_id"], {})
-            lines.append(f"{data.get('icon', '✦')} **{data.get('name', row['material_id'])}** ×{row['amount']}\\n{data.get('description', '')}")
+            lines.append(f"{data.get('icon', '✦')} **{data.get('name', row['material_id'])}** ×{row['amount']}\n{data.get('description', '')}")
         await ctx.send(embed=discord.Embed(
             title="♡ ECLIPSE · MATERIALS ♡",
-            description="\\n\\n".join(lines),
+            description="\n\n".join(lines),
             color=COLOR_PRIMARY
         ))
 
@@ -368,10 +368,10 @@ class RPG(commands.Cog):
             if recipe.get("requires_guardian"):
                 gates.append(f"defeat {recipe['requires_guardian']}")
             gate_text = f" · 🔒 {', '.join(gates)}" if gates else ""
-            lines.append(f"{item['icon']} **{item['name']}** · 💰 {recipe['gold']:,}\\n{mats}{gate_text}")
+            lines.append(f"{item['icon']} **{item['name']}** · 💰 {recipe['gold']:,}\n{mats}{gate_text}")
         await ctx.send(embed=discord.Embed(
             title="♡ ECLIPSE · FORGE RECIPES ♡",
-            description="\\n\\n".join(lines) + "\\n\\nUse \`!rpg craft <item>\`.",
+            description="\n\n".join(lines) + "\n\nUse \`!rpg craft <item>\`.",
             color=COLOR_PRIMARY
         ))
 
@@ -387,7 +387,7 @@ class RPG(commands.Cog):
         item = result["item"]
         await ctx.send(
             f"🔥 **FORGED** · {item['icon']} **{item['name']}** "
-            f"({item.get('rarity', 'common').title()})\\n"
+            f"({item.get('rarity', 'common').title()})\n"
             f"The forge consumes the materials and **{result['recipe']['gold']:,} RPG gold**."
         )
 
@@ -405,7 +405,7 @@ class RPG(commands.Cog):
             f"{MATERIALS[mid]['icon']} {MATERIALS[mid]['name']} ×{amount}"
             for mid, amount in result["yields"].items()
         )
-        await ctx.send(f"♻️ **SALVAGED** · {item['icon']} **{item['name']}**\\nRecovered: {yields}")
+        await ctx.send(f"♻️ **SALVAGED** · {item['icon']} **{item['name']}**\nRecovered: {yields}")
 
     @rpg.command(name="skills")
     async def skills_command(self, ctx):
