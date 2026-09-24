@@ -320,6 +320,7 @@ class GuildMusicState:
         self.auto_disconnect_task = None
         self.reconnect_task = None
         self.manual_disconnect = False
+        self.playback_lock = asyncio.Lock()
 
 
 class MusicControlView(discord.ui.View):
@@ -694,6 +695,13 @@ class Music(commands.Cog):
         state = self.states.get(guild.id)
         if state is None:
             return
+        async with state.playback_lock:
+            await self._play_next_unlocked(guild)
+
+    async def _play_next_unlocked(self, guild):
+        state = self.states.get(guild.id)
+        if state is None:
+            return
         await self.ensure_settings(guild.id)
         vc = guild.voice_client
         if vc is None:
@@ -763,7 +771,7 @@ class Music(commands.Cog):
                 return
             except Exception:
                 state.current = None
-                await self._play_next(guild)
+                await self._play_next_unlocked(guild)
 
     async def _skip_guild(self, guild, channel=None, announce=False):
         state = await self.ensure_settings(guild.id)
