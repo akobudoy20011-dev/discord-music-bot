@@ -337,6 +337,9 @@ class Guilds(commands.Cog):
         mine = await self._member(ctx)
         if not mine:
             return
+        raid, expired = await self.db.expire_guild_raid(mine["guild_id"])
+        if expired:
+            await ctx.send("💀 **RAID FAILED.** The raid timer expired before the boss was defeated.")
         raid = await self.db.get_guild_raid(mine["guild_id"])
         if not raid:
             await ctx.send("⚔️ No raid is active.")
@@ -345,7 +348,7 @@ class Guilds(commands.Cog):
             "⚔️ Guild Raid",
             f"Boss HP: **{raid['boss_hp']:,}/{raid['max_hp']:,}**\nPhase: **{ {1:"Awakening",2:"Enraged",3:"Cataclysm"}.get(int(raid.get("phase",1)),"Awakening") }**\n"
             f"Reward: **{raid['reward_coins']:,} coins + {raid['reward_xp']:,} XP**\n"
-            f"Ends: <t:{int(raid['ends_at'])}:R>"
+            f"Enrage: <t:{int(raid.get('enrage_at', raid['ends_at']))}:R>\nEnds: <t:{int(raid['ends_at'])}:R>"
         ))
 
     @guild_raid.command(name="start")
@@ -383,6 +386,9 @@ class Guilds(commands.Cog):
         phase=int(raid.get("phase",1))
         phase_names={1:"Awakening",2:"Enraged",3:"Cataclysm"}
         phase_mult={1:1.0,2:1.20,3:1.45}
+        if float(raid.get("enrage_at",0)) <= time.time():
+            phase_mult[2]=1.35
+            phase_mult[3]=1.70
         effect_key=(int(raid["raid_id"]),int(ctx.author.id))
         effect=self.raid_effects.get(effect_key)
         effect_mult=effect["multiplier"] if effect else 1.0
