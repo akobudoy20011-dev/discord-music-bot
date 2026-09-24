@@ -88,6 +88,40 @@ CREATE TABLE IF NOT EXISTS economy_effects (
     PRIMARY KEY (guild_id, user_id, effect_id)
 );
 
+CREATE TABLE IF NOT EXISTS economy_trades (
+    trade_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id TEXT NOT NULL,
+    seller_id TEXT NOT NULL,
+    buyer_id TEXT,
+    item_id TEXT NOT NULL,
+    amount INTEGER NOT NULL,
+    price INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open',
+    created_at REAL NOT NULL,
+    expires_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS economy_auctions (
+    auction_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id TEXT NOT NULL,
+    seller_id TEXT NOT NULL,
+    item_id TEXT NOT NULL,
+    amount INTEGER NOT NULL,
+    highest_bid INTEGER NOT NULL DEFAULT 0,
+    highest_bidder_id TEXT,
+    created_at REAL NOT NULL,
+    ends_at REAL NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open'
+);
+
+CREATE TABLE IF NOT EXISTS economy_collectibles (
+    guild_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    collectible_id TEXT NOT NULL,
+    amount INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (guild_id, user_id, collectible_id)
+);
+
 CREATE TABLE IF NOT EXISTS economy_investments (
     guild_id TEXT NOT NULL,
     user_id TEXT NOT NULL,
@@ -737,6 +771,65 @@ class Database:
         except Exception:
             await self._conn.rollback()
             raise
+
+    async def create_trade(self, guild_id, seller_id, item_id, amount, price, expires_in=3600):
+        guild_id, seller_id = str(guild_id), str(seller_id)
+        amount, price = int(amount), int(price)
+        if amount <= 0 or price <= 0:
+            return None, "invalid"
+        remaining = await self.consume_item(guild_id, seller_id, item_id, amount)
+        if remaining is None:
+            return None, "item"
+        now = time.time()
+        cur = await self._conn.execute(
+            "INSERT INTO economy_trades (guild_id,seller_id,item_id,amount,price,status,created_at,expires_at) VALUES (?,?,?,?,?,?,?,?)",
+            (guild_id,seller_id,str(item_id),amount,price,"open",now,now+max(60,int(expires_in)))
+        )
+        await self._conn.commit()
+        return int(cur.lastrowid), "ok"
+
+    async def get_open_trades(self, guild_id, limit=10):
+        guild_id = str(guild_id)
+        await self._conn.execute("UPDATE economy_trades SET status='expired' WHERE guild_id=? AND status='open' AND expires_at<=?", (guild_id,time.time()))
+        await self._conn.commit()
+        cur = await self._conn.execute("SELECT * FROM economy_trades WHERE guild_id=? AND status='open' ORDER BY trade_id DESC LIMIT ?", (guild_id,int(limit)))
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def cancel_trade(self, guild_id, seller_id, trade_id):
+        await self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            cur=await self._conn.execute("SELECT * FROM economy_trades WHERE trade_id=? AND guild_id=? AND seller_id=? AND status='open'",(int(trade_id),str(guild_id),str(seller_id)))
+            row=await cur.fetchone()
+            if not row:
+                await self._conn.rollback(); return None
+            await self._conn.execute("UPDATE economy_trades SET status='cancelled' WHERE trade_id=?",(int(trade_id),))
+            await self._conn.commit()
+            await self.add_item(guild_id,seller_id,row["item_id"],row["amount"])
+            return dict(row)
+        except Exception:
+            await self._conn.rollback(); raise
+
+    async def buy_trade(self, guild_id, buyer_id, trade_id):
+        guild_id,buyer_id=str(guild_id),str(buyer_id)
+        await self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            cur=await self._conn.execute("SELECT * FROM economy_trades WHERE trade_id=? AND guild_id=? AND status='open'",(int(trade_id),guild_id))
+            row=await cur.fetchone()
+            if not row or float(row["expires_at"])<=time.time():
+                if row: await self._conn.execute("UPDATE economy_trades SET status='expired' WHERE trade_id=?",(int(trade_id),))
+                await self._conn.commit(); return None,"missing"
+            if row["seller_id"]==buyer_id:
+                await self._conn.rollback(); return None,"self"
+            cur=await self._conn.execute("UPDATE users SET balance=balance-? WHERE guild_id=? AND user_id=? AND balance>=?",(int(row["price"]),guild_id,buyer_id,int(row["price"])))
+            if cur.rowcount!=1:
+                await self._conn.rollback(); return None,"balance"
+            await self._conn.execute("UPDATE users SET balance=balance+? WHERE guild_id=? AND user_id=?",(int(row["price"]),guild_id,row["seller_id"]))
+            await self._conn.execute("INSERT INTO inventory(guild_id,user_id,item_id,amount) VALUES(?,?,?,?) ON CONFLICT(guild_id,user_id,item_id) DO UPDATE SET amount=amount+excluded.amount",(guild_id,buyer_id,row["item_id"],int(row["amount"])))
+            await self._conn.execute("UPDATE economy_trades SET buyer_id=?,status='sold' WHERE trade_id=?",(buyer_id,int(trade_id)))
+            await self._conn.commit()
+            return dict(row),"ok"
+        except Exception:
+            await self._conn.rollback(); raise
 
     async def create_investment(self, guild_id, user_id, principal, multiplier, duration):
         guild_id, user_id = str(guild_id), str(user_id)
