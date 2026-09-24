@@ -66,20 +66,36 @@ async def equip(db, guild_id, user_id, item_id):
         return {"ok": False, "message": "You do not own that item."}
 
     slot = item["slot"]
+    cur = await db._conn.execute(
+        "SELECT item_id, level FROM rpg_equipment "
+        "WHERE guild_id=? AND user_id=? AND slot=?",
+        (str(guild_id), str(user_id), slot),
+    )
+    previous = await cur.fetchone()
+    level = int(previous["level"]) if previous and previous["item_id"] == item_id else 1
+
     await db._conn.execute(
         "INSERT INTO rpg_equipment (guild_id,user_id,slot,item_id,level) "
-        "VALUES (?,?,?,?,1) "
-        "ON CONFLICT(guild_id,user_id,slot) DO UPDATE SET item_id=excluded.item_id",
-        (str(guild_id), str(user_id), slot, item_id),
+        "VALUES (?,?,?,?,?) "
+        "ON CONFLICT(guild_id,user_id,slot) "
+        "DO UPDATE SET item_id=excluded.item_id, level=excluded.level",
+        (str(guild_id), str(user_id), slot, item_id, level),
     )
     await db._conn.execute(
-        "UPDATE rpg_items SET equipped=CASE WHEN item_id=? THEN 1 ELSE 0 END "
-        "WHERE guild_id=? AND user_id=? AND item_id IN "
-        "(SELECT item_id FROM rpg_items WHERE guild_id=? AND user_id=? AND item_id=?)",
-        (item_id, str(guild_id), str(user_id), str(guild_id), str(user_id), item_id),
+        "UPDATE rpg_items SET equipped=0 WHERE guild_id=? AND user_id=?",
+        (str(guild_id), str(user_id)),
     )
+    equipped_rows = await db._conn.execute(
+        "SELECT item_id FROM rpg_equipment WHERE guild_id=? AND user_id=?",
+        (str(guild_id), str(user_id)),
+    )
+    for row in await equipped_rows.fetchall():
+        await db._conn.execute(
+            "UPDATE rpg_items SET equipped=1 WHERE guild_id=? AND user_id=? AND item_id=?",
+            (str(guild_id), str(user_id), row["item_id"]),
+        )
     await db._conn.commit()
-    return {"ok": True, "item": item, "slot": slot, "level": 1}
+    return {"ok": True, "item": item, "slot": slot, "level": level}
 
 async def unequip(db, guild_id, user_id, slot):
     await _ensure_schema(db)
