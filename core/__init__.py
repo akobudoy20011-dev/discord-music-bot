@@ -1,1 +1,0 @@
-"""ECLIPSE Discord core package."""

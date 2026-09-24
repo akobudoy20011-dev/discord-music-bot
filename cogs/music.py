@@ -110,8 +110,12 @@ AUDIO_FILTERS_ENABLED = os.getenv("ECLIPSE_AUDIO_FILTERS", "1").lower() not in {
     "0", "false", "no", "off"
 }
 AUDIO_FILTER_CHAIN = (
-    "bass=g=1.5:f=100,"
-    "treble=g=0.5:f=6000,"
+    # Gentle cleanup + tonal shaping. Keep the chain conservative so it
+    # improves clarity and punch without making every genre sound crushed.
+    "highpass=f=32,"
+    "bass=g=1.8:f=95:w=0.7,"
+    "treble=g=0.8:f=6500:w=0.8,"
+    "acompressor=threshold=0.08:ratio=2.2:attack=18:release=120:makeup=1.4:knee=2.5,"
     "loudnorm=I=-14:LRA=11:TP=-1.5:linear=false,"
     "alimiter=limit=0.97:attack=5:release=80:latency=1,"
     "afade=t=in:st=0:d=0.20"
