@@ -2960,7 +2960,9 @@ class Database:
             "DELETE FROM warnings WHERE guild_id = ? AND user_id = ?",
             (str(guild_id), str(user_id))
         )
-        await self._conn.commit()    async def claim_arcade_match(self, guild_id, match_id, user_id):
+        await self._conn.commit()
+
+    async def claim_arcade_match(self, guild_id, match_id, user_id):
         cur = await self._conn.execute(
             "SELECT m.*, t.guild_id FROM arcade_tournament_matches m "
             "JOIN arcade_tournaments t ON t.tournament_id=m.tournament_id "
