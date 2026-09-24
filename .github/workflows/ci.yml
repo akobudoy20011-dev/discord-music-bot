@@ -36,6 +36,7 @@ jobs:
           modules = [
               "database",
               "constants",
+              "systems.arcade_tournament_db",
               "cogs.leveling",
               "cogs.economy",
               "cogs.games",
@@ -53,6 +54,7 @@ jobs:
               "rpg.items",
               "rpg.equipment",
               "rpg.skills",
+              "rpg.specials",
               "rpg.skills_service",
               "rpg.enemies",
               "rpg.combat",
@@ -94,6 +96,20 @@ jobs:
                       "ci-guild", "ci-user", {"iron_shard": 3}
                   )
 
+
+                  # Specials: persistent unlocks are backed by the RPG schema.
+                  await db.update_rpg_player(
+                      "ci-guild", "ci-user", class_key="wraith", level=3, mp=40
+                  )
+                  await db.unlock_rpg_special(
+                      "ci-guild", "ci-user", "infinite_darkness", source="level"
+                  )
+                  assert await db.has_rpg_special(
+                      "ci-guild", "ci-user", "infinite_darkness"
+                  )
+                  specials = await db.get_rpg_specials("ci-guild", "ci-user")
+                  assert "infinite_darkness" in specials
+
                   await db.record_game("ci-guild", "ci-user", "dicebattle", "win", 100, 100)
                   user = await db.get_user("ci-guild", "ci-user")
                   assert user["games"] == 1
@@ -109,3 +125,9 @@ jobs:
           asyncio.run(smoke())
           print("database smoke test passed")
           PY
+
+      - name: Exercise RPG special subsystem
+        run: python tests/rpg_specials_smoke.py
+
+      - name: Exercise arcade tournament lifecycle
+        run: python tests/arcade_tournament_smoke.py
