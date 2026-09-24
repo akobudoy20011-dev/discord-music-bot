@@ -9,7 +9,7 @@ from rpg.skills import get_skills
 from rpg.specials import SPECIALS, get_special, get_specials_for_class
 from rpg.skills_service import ensure_class_skills, unlock_skill
 from rpg.combat import start as start_battle, attack as combat_attack, special as combat_special, flee as flee_battle
-from rpg.quests import ensure_quests, list_quests, claim as claim_quest
+from rpg.quests import ensure_quests, list_quests, claim as claim_quest, NPCS, npc_view
 from rpg.world import list_regions, get_region, list_events, get_event
 from rpg.exploration import world_status, travel, explore
 from rpg.towns import town_status, inn, shrine, alchemist, buy
@@ -488,6 +488,27 @@ class RPG(commands.Cog):
         enemy_state = " · enemy turn skipped" if result.get("enemy_skipped") else ""
         status = f"\n**Status:** {result['status']}" if result.get("status") else ""
         await ctx.send(f"{result['special_icon']} **{result['special_name'].upper()}**\n{result['special_message']}\n\n💥 **{result['damage']} damage** · Enemy ❤️ {result['enemy_hp']}/{result['enemy_max_hp']}\n💢 Incoming damage: **{incoming}**{enemy_state}{status}")
+
+    @rpg.command(name="npc", aliases=["npcs", "talk"])
+    async def npc_command(self, ctx, npc_id: str = None):
+        if not npc_id:
+            lines = [f"{n['icon']} **{n['name']}** · {n['region'].replace('_', ' ').title()}\\n{n['description']}" for n in NPCS.values()]
+            await ctx.send(embed=discord.Embed(title="🌙 ECLIPSE · NPCs", description="\\n\\n".join(lines), color=COLOR_PRIMARY))
+            return
+        view = await npc_view(self.db, ctx.guild.id, ctx.author.id, npc_id)
+        if not view:
+            await ctx.send("Unknown NPC. Use !rpg npc to see the known characters.")
+            return
+        npc = view["npc"]
+        lines = [f"{npc['icon']} **{npc['name']}**\\n{npc['dialogue']}"]
+        if view["quests"]:
+            lines.append("\\n**Available chapters:**")
+            for qid, q, row in view["quests"]:
+                lines.append(f"- {qid} · Chapter {q['chapter']} · {q['name']} · {row['progress']}/{q['goal']}")
+            lines.append("\\nUse !rpg claim <quest_id> after completing the objective.")
+        else:
+            lines.append("\\nNo new chapter is waiting here yet.")
+        await ctx.send(embed=discord.Embed(title=f"{npc['icon']} {npc['name']}", description="\\n".join(lines), color=COLOR_PRIMARY))
 
     @rpg.command(name="quests", aliases=["quest"])
     async def quests_command(self, ctx):
