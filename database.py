@@ -128,6 +128,15 @@ CREATE TABLE IF NOT EXISTS inventory (
     PRIMARY KEY (guild_id, user_id, item_id)
 );
 
+CREATE TABLE IF NOT EXISTS music_premium (
+    guild_id TEXT PRIMARY KEY,
+    plan TEXT NOT NULL DEFAULT 'premium',
+    expires_at REAL NOT NULL,
+    granted_at REAL NOT NULL,
+    granted_by TEXT,
+    updated_at REAL NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS guild_config (
     guild_id TEXT PRIMARY KEY,
     level_channel_id TEXT,
@@ -930,6 +939,52 @@ class Database:
         )
         await self._conn.commit()
         return interest, await self.get_user(guild_id, user_id)
+
+    async def get_music_premium(self, guild_id):
+        cur = await self._conn.execute(
+            "SELECT * FROM music_premium WHERE guild_id=?",
+            (str(guild_id),),
+        )
+        row = await cur.fetchone()
+        if not row:
+            return None
+        premium = dict(row)
+        if float(premium["expires_at"]) <= time.time():
+            await self._conn.execute(
+                "DELETE FROM music_premium WHERE guild_id=?",
+                (str(guild_id),),
+            )
+            await self._conn.commit()
+            return None
+        return premium
+
+    async def grant_music_premium(self, guild_id, days, granted_by=None, plan="premium"):
+        days = max(1, int(days))
+        now = time.time()
+        current = await self.get_music_premium(guild_id)
+        base = max(now, float(current["expires_at"])) if current else now
+        expires_at = base + days * 86400
+        await self._conn.execute(
+            """INSERT INTO music_premium
+               (guild_id, plan, expires_at, granted_at, granted_by, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(guild_id) DO UPDATE SET
+                 plan=excluded.plan,
+                 expires_at=excluded.expires_at,
+                 granted_by=excluded.granted_by,
+                 updated_at=excluded.updated_at""",
+            (str(guild_id), plan, expires_at, now, str(granted_by) if granted_by else None, now),
+        )
+        await self._conn.commit()
+        return await self.get_music_premium(guild_id)
+
+    async def revoke_music_premium(self, guild_id):
+        await self._conn.execute(
+            "DELETE FROM music_premium WHERE guild_id=?",
+            (str(guild_id),),
+        )
+        await self._conn.commit()
+        return True
 
     async def get_music_config(self, guild_id):
         config = await self.get_guild_config(guild_id)
