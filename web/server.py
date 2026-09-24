@@ -45,6 +45,17 @@ async def health(request):
     uptime_seconds = max(0, int(time.monotonic() - started_at))
     overall_ready = discord_ready and db_ok
 
+    watchdog = None
+    watchdog_cog = bot.get_cog("Watchdog") if bot is not None else None
+    if watchdog_cog is not None:
+        watchdog = {
+            "running": watchdog_cog._tick.is_running(),
+            "last_run": watchdog_cog.last_run,
+            "last_error": watchdog_cog.last_error,
+            "recovery_count": watchdog_cog.recovery_count,
+            "last_recovery": watchdog_cog.last_recovery,
+        }
+
     payload = {
         "status": "ok" if overall_ready else "degraded",
         "service": "ECLIPSE",
@@ -63,6 +74,7 @@ async def health(request):
             "ready": db_ok,
             "latency_ms": db_latency_ms,
         },
+        "watchdog": watchdog,
         "uptime_seconds": uptime_seconds,
         "uptime": _format_uptime(uptime_seconds),
         "timestamp": datetime.now(timezone.utc).isoformat(),
