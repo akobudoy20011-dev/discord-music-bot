@@ -159,7 +159,11 @@ async def resolve_query(loop, query):
     """Resolve a YouTube URL/search query with maintained-client fallbacks."""
     is_url = query.startswith("http")
     q = query if is_url else f"ytsearch5:{query}"
-    clients = [None, "web", "mweb"]
+    # YouTube's player clients change frequently. Keep the normal/default
+    # extractor first, then try clients that currently work without a
+    # PO-token provider.  Do not force web/mweb only: those clients are
+    # currently affected by SABR/PO-token rollouts on some videos.
+    clients = [None, "android_vr", "web_embedded", "tv"]
     last_error = None
 
     for client in clients:
@@ -206,7 +210,9 @@ async def fetch_song_mp3(query):
     q = query if query.startswith("http") else f"ytsearch5:{query}"
     os.makedirs("downloads", exist_ok=True)
     loop = asyncio.get_event_loop()
-    clients = [None, "web", "mweb"]
+    # Mirror the playback fallback order for downloads.  YouTube can fail
+    # one player client while another still exposes a usable audio stream.
+    clients = [None, "android_vr", "web_embedded", "tv"]
     last_error = None
 
     for client in clients:
