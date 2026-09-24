@@ -333,24 +333,6 @@ class BlackjackView(discord.ui.View):
         await interaction.response.edit_message(embed=embed, view=self)
 
 
-class Games(commands.Cog):
-    """Interactive mini-games and gambling hub."""
-
-    @commands.command(name="games")
-    async def games(self, ctx):
-        """Open the interactive ECLIPSE game center."""
-        await ctx.send(embed=build_games_home_embed(), view=GamesHubView(author_id=ctx.author.id))
-
-    def __init__(self, bot):
-        self.bot = bot
-        self.db = bot.db
-        
-        # Setup AI client for intelligent 8ball answers if API key exists
-        self.ai_client = None
-        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("ANTHROPIC_API_KEY")
-        if HAS_GENAI and api_key:
-            self.ai_client = genai.Client(api_key=api_key)
-
 class GamesHubView(discord.ui.View):
     """Interactive ECLIPSE Game Center."""
 
@@ -495,6 +477,27 @@ def build_games_home_embed():
     embed.set_footer(text="ECLIPSE GAME CENTER · Choose a game from the menu")
     return embed
 
+
+class Games(commands.Cog):
+    """Interactive mini-games and gambling hub."""
+
+    def __init__(self, bot):
+        self.bot = bot
+        self.db = bot.db
+
+        # Setup AI client for intelligent 8ball answers if API key exists
+        self.ai_client = None
+        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("ANTHROPIC_API_KEY")
+        if HAS_GENAI and api_key:
+            self.ai_client = genai.Client(api_key=api_key)
+
+    @commands.command(name="games")
+    async def games(self, ctx):
+        """Open the interactive ECLIPSE game center."""
+        await ctx.send(
+            embed=build_games_home_embed(),
+            view=GamesHubView(author_id=ctx.author.id),
+        )
 
     @commands.command(name="trivia")
     @commands.cooldown(1, 10, commands.BucketType.user)
