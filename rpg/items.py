@@ -80,6 +80,13 @@ ITEMS = {
         "description": "A ring that lets its bearer move between moments.", "region": "whispering_wood",
     },
 
+    # Story quest items
+    "moon_seal": {"name":"Moon-Sealed Letter","slot":"quest","rarity":"common","icon":"letter","description":"A sealed letter from the Moonlit Vale.","quest_item":True},
+    "echo_fragment": {"name":"Echo Fragment","slot":"quest","rarity":"uncommon","icon":"fragment","description":"A shard of memory recovered from the Veil.","quest_item":True},
+    "root_token": {"name":"Rootbound Token","slot":"quest","rarity":"rare","icon":"root","description":"A living token proving an oath to the Rootbound.","quest_item":True},
+    "ashen_seal": {"name":"Ashen Seal","slot":"quest","rarity":"epic","icon":"seal","description":"A blackened seal from the Ashen Crown.","quest_item":True},
+    "star_key": {"name":"Starfall Key","slot":"quest","rarity":"legendary","icon":"star","description":"A key cut from fallen starlight.","quest_item":True},
+
     # Guardian-exclusive equipment
     "pale_antler": {
         "name": "Pale Antler", "slot": "relic", "rarity": "legendary",
