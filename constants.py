@@ -111,6 +111,38 @@ ACHIEVEMENTS = {
         "requirement": lambda u: u["wins"] >= 100
     },
 
+    # Arcade
+    "Arcade Initiate": {
+        "emoji": "🎮",
+        "description": "Play your first multiplayer arcade game.",
+        "requirement": lambda u: u.get("arcade_plays", 0) >= 1
+    },
+    "First Blood": {
+        "emoji": "⚔️",
+        "description": "Win your first multiplayer arcade game.",
+        "requirement": lambda u: u.get("arcade_wins", 0) >= 1
+    },
+    "Arcade Veteran": {
+        "emoji": "🎟️",
+        "description": "Play 100 multiplayer arcade games.",
+        "requirement": lambda u: u.get("arcade_plays", 0) >= 100
+    },
+    "High Roller": {
+        "emoji": "💎",
+        "description": "Wager 1,000,000 coins across the arcade.",
+        "requirement": lambda u: u.get("arcade_wagered", 0) >= 1_000_000
+    },
+    "Tenfold": {
+        "emoji": "🔥",
+        "description": "Reach a 10-win arcade streak.",
+        "requirement": lambda u: u.get("arcade_best_streak", 0) >= 10
+    },
+    "Arcade Tycoon": {
+        "emoji": "👑",
+        "description": "Earn 1,000,000 net coins through the arcade.",
+        "requirement": lambda u: u.get("arcade_net", 0) >= 1_000_000
+    },
+
     # Streaks
     "Dedicated": {
         "emoji": "🔥",
