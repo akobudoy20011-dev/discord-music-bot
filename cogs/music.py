@@ -304,6 +304,11 @@ class GuildMusicState:
         self.volume = 0.5
         self.loop_mode = "off"          # off / single / queue
         self.text_channel = None
+        # Incremented for every playback generation. This prevents an old
+        # FFmpeg callback from advancing or refreshing a newer track.
+        self.playback_generation = 0
+        # Manual stop/skip set this before calling voice_client.stop().
+        self.intentional_stop_generation = None
 
 
 class Music(commands.Cog):
@@ -392,30 +397,82 @@ class Music(commands.Cog):
         title = data.get("title", query)
         webpage_url = data.get("webpage_url")
 
+        # A new generation invalidates callbacks belonging to an older
+        # source. This is important when FFmpeg fails asynchronously.
+        state.playback_generation += 1
+        generation = state.playback_generation
+        state.intentional_stop_generation = None
+
         state.current = {
             "query": query,
             "title": title,
             "webpage_url": webpage_url,
             "requester_name": requester_name,
             "stream_url": stream_url,
+            "generation": generation,
         }
 
         source = discord.FFmpegPCMAudio(stream_url, **FFMPEG_OPTIONS)
         source = discord.PCMVolumeTransformer(source, volume=state.volume)
 
         def after_playing(error):
-            fut = asyncio.run_coroutine_threadsafe(
-                self._handle_player_end(guild, query, requester_name, error),
-                self.bot.loop
+            # The callback runs on discord.py's player thread. Schedule the
+            # coroutine and return immediately; never block that thread on
+            # fut.result().
+            asyncio.run_coroutine_threadsafe(
+                self._handle_player_end(
+                    guild, query, requester_name, generation, error
+                ),
+                self.bot.loop,
             )
-            try:
-                fut.result()
-            except Exception:
-                logger.exception("Error handling playback completion")
 
-    async def _handle_player_end(self, guild, query, requester_name, error):
+        try:
+            vc = guild.voice_client
+            if vc is None:
+                raise RuntimeError("Voice connection disappeared before playback started.")
+
+            vc.play(source, after=after_playing)
+        except Exception:
+            # The source was never successfully started. Invalidate this
+            # generation so no stale callback can affect the next track.
+            if state.playback_generation == generation:
+                state.current = None
+            raise
+
+        if state.text_channel:
+            embed = discord.Embed(
+                title="🎵 Now Playing",
+                description=f"**{title}**\\n{webpage_url or ''}",
+                color=COLOR_MUSIC,
+            )
+            embed.set_footer(text=f"Requested by {requester_name}")
+            await state.text_channel.send(embed=embed)
+
+    async def _handle_player_end(
+        self, guild, query, requester_name, generation, error
+    ):
         state = self.states.get(guild.id)
         if state is None:
+            return
+
+        # Ignore callbacks from an older source after another track has
+        # already taken ownership of the guild player.
+        if generation != state.playback_generation:
+            logger.debug(
+                "Ignoring stale playback callback for '%s' (generation %s; current %s)",
+                query,
+                generation,
+                state.playback_generation,
+            )
+            return
+
+        # A user-requested skip/stop is not a stream failure. Do not refresh
+        # the old URL in that case.
+        if state.intentional_stop_generation == generation:
+            state.intentional_stop_generation = None
+            if state.current and state.current.get("generation") == generation:
+                state.current = None
+            await self._play_next(guild)
             return
 
         if error:
@@ -438,19 +495,10 @@ class Music(commands.Cog):
                     refresh_error,
                 )
 
-        state.current = None
+        if state.current and state.current.get("generation") == generation:
+            state.current = None
+
         await self._play_next(guild)
-
-        guild.voice_client.play(source, after=after_playing)
-
-        if state.text_channel:
-            embed = discord.Embed(
-                title="🎵 Now Playing",
-                description=f"**{title}**\\n{webpage_url or ''}",
-                color=COLOR_MUSIC
-            )
-            embed.set_footer(text=f"Requested by {requester_name}")
-            await state.text_channel.send(embed=embed)
 
     async def _play_next(self, guild):
         state = self.states.get(guild.id)
@@ -584,6 +632,9 @@ class Music(commands.Cog):
             await ctx.send("Nothing to skip.")
             return
 
+        state = self.state_for(ctx.guild.id)
+        generation = state.current.get("generation") if state.current else None
+        state.intentional_stop_generation = generation
         vc.stop()  # triggers after_playing -> _play_next
         await ctx.send("⏭️ Skipped.")
 
@@ -593,11 +644,13 @@ class Music(commands.Cog):
         state = self.state_for(ctx.guild.id)
 
         state.queue.clear()
-        state.current = None
 
-        if vc:
+        if vc and (vc.is_playing() or vc.is_paused()):
+            generation = state.current.get("generation") if state.current else None
+            state.intentional_stop_generation = generation
             vc.stop()
 
+        state.current = None
         await ctx.send("⏹️ Stopped and cleared the queue.")
 
     # ------------------------------------------------------------
