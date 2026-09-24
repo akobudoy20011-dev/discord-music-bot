@@ -75,6 +75,7 @@ class Economy(commands.Cog):
             await ctx.send(embed=embed)
             return
         reward, streak, new_balance = result["reward"], result["streak"], result["balance"]
+        await self.db.record_economy_activity(ctx.guild.id, ctx.author.id, earned=reward)
 
         embed = discord.Embed(
             title="🎁 Daily Reward",
@@ -100,6 +101,7 @@ class Economy(commands.Cog):
             await ctx.send(embed=embed)
             return
         earned, new_balance = result["earned"], result["balance"]
+        await self.db.record_economy_activity(ctx.guild.id, ctx.author.id, earned=earned)
 
         embed = discord.Embed(
             title="🛠️ Work Complete",
@@ -137,6 +139,8 @@ class Economy(commands.Cog):
             else:
                 await ctx.send("❌ Payment could not be completed.")
             return
+
+        await self.db.record_economy_activity(ctx.guild.id, ctx.author.id, spent=amount)
 
         embed = discord.Embed(
             title="💸 Payment Sent",
@@ -206,6 +210,8 @@ class Economy(commands.Cog):
                 await ctx.send("❌ Purchase could not be completed.")
             return
 
+        await self.db.record_economy_activity(ctx.guild.id, ctx.author.id, spent=item["price"])
+
         embed = discord.Embed(
             title="🛒 Purchase Complete",
             description=(
@@ -235,6 +241,38 @@ class Economy(commands.Cog):
             title=f"🎒 {member.display_name}'s Inventory",
             description="\n".join(lines),
             color=COLOR_PRIMARY
+        )
+        await ctx.send(embed=footer(embed, ctx))
+
+    # ------------------------------------------------------------
+    @commands.command(name="economyprogress", aliases=["econprogress", "wealth"])
+    async def economyprogress(self, ctx, member: discord.Member = None):
+        member = member or ctx.author
+        user = await self.db.get_user(ctx.guild.id, member.id)
+        state = await self.db.get_economy_progression(ctx.guild.id, member.id)
+
+        tier = int(state["tier"])
+        earned = int(state["lifetime_earned"])
+        spent = int(state["lifetime_spent"])
+        threshold = tier * 10000
+        next_tier = max(0, threshold - earned)
+
+        embed = discord.Embed(
+            title=f"💎 {member.display_name}'s Economy Progression",
+            description=(
+                f"**Tier {tier}**\n"
+                f"Your economic activity unlocks higher progression tiers over time."
+            ),
+            color=COLOR_GOLD
+        )
+        embed.set_thumbnail(url=member.display_avatar.url)
+        embed.add_field(name="💰 Balance", value=f"{int(user['balance']):,}", inline=True)
+        embed.add_field(name="📈 Lifetime Earned", value=f"{earned:,}", inline=True)
+        embed.add_field(name="🛍️ Lifetime Spent", value=f"{spent:,}", inline=True)
+        embed.add_field(
+            name="🔓 Next Tier",
+            value="**Max tier reached**" if tier >= 10 else f"**{next_tier:,} earned** remaining",
+            inline=False
         )
         await ctx.send(embed=footer(embed, ctx))
 
