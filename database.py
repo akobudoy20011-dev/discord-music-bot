@@ -68,6 +68,15 @@ CREATE TABLE IF NOT EXISTS level_progression (
     PRIMARY KEY (guild_id, user_id)
 );
 
+CREATE TABLE IF NOT EXISTS economy_progression (
+    guild_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    lifetime_earned INTEGER NOT NULL DEFAULT 0,
+    lifetime_spent INTEGER NOT NULL DEFAULT 0,
+    tier INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (guild_id, user_id)
+);
+
 CREATE TABLE IF NOT EXISTS game_stats (
     guild_id TEXT NOT NULL,
     user_id TEXT NOT NULL,
@@ -491,6 +500,47 @@ class Database:
             values
         )
         await self._conn.commit()
+
+    async def record_economy_activity(self, guild_id, user_id, earned=0, spent=0):
+        guild_id, user_id = str(guild_id), str(user_id)
+        earned = max(0, int(earned))
+        spent = max(0, int(spent))
+        await self.get_user(guild_id, user_id)
+        await self._conn.execute(
+            "INSERT OR IGNORE INTO economy_progression (guild_id,user_id) VALUES (?,?)",
+            (guild_id, user_id)
+        )
+        await self._conn.execute(
+            "UPDATE economy_progression SET lifetime_earned=lifetime_earned+?, lifetime_spent=lifetime_spent+? WHERE guild_id=? AND user_id=?",
+            (earned, spent, guild_id, user_id)
+        )
+        await self._conn.commit()
+        return await self.get_economy_progression(guild_id, user_id)
+
+    async def get_economy_progression(self, guild_id, user_id):
+        guild_id, user_id = str(guild_id), str(user_id)
+        await self.get_user(guild_id, user_id)
+        await self._conn.execute(
+            "INSERT OR IGNORE INTO economy_progression (guild_id,user_id) VALUES (?,?)",
+            (guild_id, user_id)
+        )
+        cur = await self._conn.execute(
+            "SELECT * FROM economy_progression WHERE guild_id=? AND user_id=?",
+            (guild_id, user_id)
+        )
+        row = await cur.fetchone()
+        data = dict(row)
+        earned = int(data["lifetime_earned"])
+        spent = int(data["lifetime_spent"])
+        tier = 1 + min(9, earned // 10000 + spent // 25000)
+        if tier != int(data["tier"]):
+            await self._conn.execute(
+                "UPDATE economy_progression SET tier=? WHERE guild_id=? AND user_id=?",
+                (tier, guild_id, user_id)
+            )
+            await self._conn.commit()
+            data["tier"] = tier
+        return data
 
     async def health_check(self):
         """Return a lightweight database health snapshot."""
