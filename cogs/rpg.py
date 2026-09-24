@@ -264,8 +264,13 @@ class RPG(commands.Cog):
             return
         lines = []
         for item in items:
+            data = item.get("item") or {}
             equipped = " · **EQUIPPED**" if item["equipped"] else ""
-            lines.append(f"• `{item['item_id']}` ×{item['amount']}{equipped}")
+            level = f" · +{item['equipped_level']}" if item.get("equipped_level") else ""
+            rarity = f" · {data.get('rarity', 'common').title()}" if data else ""
+            label = data.get("name", item["item_id"])
+            icon = data.get("icon", "🎒")
+            lines.append(f"• {icon} **{label}** ×{item['amount']}{rarity}{level}{equipped}")
         await ctx.send(embed=discord.Embed(
             title="♡ ECLIPSE · INVENTORY ♡",
             description="\n".join(lines),
