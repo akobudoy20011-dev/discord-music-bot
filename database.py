@@ -723,7 +723,31 @@ class Database:
                 (str(guild_id), int(season_id))
             )
         row = await cur.fetchone()
-        return dict(row) if row else None
+        if not row:
+            return None
+        season = dict(row)
+        if season["status"] == "active" and float(season["ends_at"]) <= time.time():
+            cur = await self._conn.execute(
+                "SELECT user_id,points FROM arcade_season_stats WHERE season_id=? AND guild_id=? "
+                "ORDER BY points DESC,wins DESC,net_coins DESC LIMIT 1",
+                (int(season["season_id"]), str(guild_id))
+            )
+            winner = await cur.fetchone()
+            await self._conn.execute(
+                "UPDATE arcade_seasons SET status='ended',winner_id=?,winner_points=? "
+                "WHERE season_id=? AND guild_id=? AND status='active'",
+                (winner["user_id"] if winner else None,
+                 int(winner["points"]) if winner else 0,
+                 int(season["season_id"]), str(guild_id))
+            )
+            await self._conn.commit()
+            if winner:
+                if int(season["reward_coins"]):
+                    await self.add_balance(guild_id, winner["user_id"], int(season["reward_coins"]))
+                if int(season["reward_xp"]):
+                    await self.add_xp(guild_id, winner["user_id"], int(season["reward_xp"]))
+            return None
+        return season
 
     async def create_arcade_season(self, guild_id, name, duration_days=30, created_by=None, reward_coins=5000, reward_xp=2500):
         duration_days = max(1, min(365, int(duration_days)))
