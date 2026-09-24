@@ -39,11 +39,13 @@ jobs:
               "cogs.leveling",
               "cogs.economy",
               "cogs.games",
+              "cogs.arcade",
               "cogs.music",
               "cogs.fun",
               "cogs.admin",
               "cogs.ai",
               "cogs.help",
+              "cogs.eclipse",
               "cogs.science_game",
               "cogs.rpg",
               "rpg.classes",
@@ -91,6 +93,16 @@ jobs:
                   assert await db.has_rpg_materials(
                       "ci-guild", "ci-user", {"iron_shard": 3}
                   )
+
+                  await db.record_game("ci-guild", "ci-user", "dicebattle", "win", 100, 100)
+                  user = await db.get_user("ci-guild", "ci-user")
+                  assert user["games"] == 1
+                  assert user["wins"] == 1
+                  assert user["arcade_plays"] == 1
+                  assert user["arcade_wins"] == 1
+                  assert user["arcade_wagered"] == 100
+                  assert user["arcade_net"] == 100
+                  assert user["arcade_best_streak"] == 1
 
                   await db.close()
 
