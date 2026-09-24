@@ -554,6 +554,17 @@ CREATE TABLE IF NOT EXISTS world_boss_contributors (
     PRIMARY KEY (guild_id, boss_id, user_id)
 );
 
+CREATE TABLE IF NOT EXISTS world_boss_effects (
+    guild_id TEXT NOT NULL,
+    boss_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    effect_id TEXT NOT NULL,
+    multiplier REAL NOT NULL DEFAULT 1.0,
+    uses INTEGER NOT NULL DEFAULT 1,
+    expires_at REAL NOT NULL,
+    PRIMARY KEY (guild_id, boss_id, user_id, effect_id)
+);
+
 CREATE TABLE IF NOT EXISTS warnings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     guild_id TEXT NOT NULL,
@@ -3120,6 +3131,47 @@ class Database:
         damage=int(row["damage"])
         scale=min(2.0,0.5+damage/max(1,int(boss["max_hp"])))
         return (int(int(boss["reward_coins"])*scale),int(int(boss["reward_xp"])*scale),damage),"ok"
+
+    async def add_world_boss_effect(self, guild_id, boss_id, user_id, effect_id, multiplier, uses=2, duration=120):
+        now=time.time()
+        await self._conn.execute(
+            """INSERT INTO world_boss_effects
+               (guild_id,boss_id,user_id,effect_id,multiplier,uses,expires_at)
+               VALUES(?,?,?,?,?,?,?)
+               ON CONFLICT(guild_id,boss_id,user_id,effect_id)
+               DO UPDATE SET multiplier=MIN(world_boss_effects.multiplier,excluded.multiplier),
+                             uses=MAX(world_boss_effects.uses,excluded.uses),
+                             expires_at=MAX(world_boss_effects.expires_at,excluded.expires_at)""",
+            (str(guild_id),str(boss_id),str(user_id),str(effect_id),float(multiplier),int(uses),now+duration)
+        )
+        await self._conn.commit()
+
+    async def consume_world_boss_effects(self, guild_id, boss_id, user_id):
+        now=time.time()
+        cur=await self._conn.execute(
+            "SELECT effect_id,multiplier,uses FROM world_boss_effects WHERE guild_id=? AND boss_id=? AND user_id=? AND expires_at>?",
+            (str(guild_id),str(boss_id),str(user_id),now)
+        )
+        rows=await cur.fetchall()
+        multiplier=1.0
+        for row in rows:
+            multiplier*=float(row["multiplier"])
+            if int(row["uses"])<=1:
+                await self._conn.execute(
+                    "DELETE FROM world_boss_effects WHERE guild_id=? AND boss_id=? AND user_id=? AND effect_id=?",
+                    (str(guild_id),str(boss_id),str(user_id),row["effect_id"])
+                )
+            else:
+                await self._conn.execute(
+                    "UPDATE world_boss_effects SET uses=uses-1 WHERE guild_id=? AND boss_id=? AND user_id=? AND effect_id=?",
+                    (str(guild_id),str(boss_id),str(user_id),row["effect_id"])
+                )
+        await self._conn.execute(
+            "DELETE FROM world_boss_effects WHERE expires_at<=?",
+            (now,)
+        )
+        await self._conn.commit()
+        return multiplier
 
     async def clear_warnings(self, guild_id, user_id):
         await self._conn.execute(
