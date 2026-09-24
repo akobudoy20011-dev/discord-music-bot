@@ -41,6 +41,7 @@ class Arcade(commands.Cog):
 
     async def finish(self, guild_id, user_id, game_id, result, wager=0, net=0, ctx=None):
         await self.db.record_game(guild_id, user_id, game_id, result, wager, net)
+        await self.db.advance_arcade_season(guild_id, user_id, result, net)
 
         xp_reward = {"win": 60, "tie": 30, "loss": 20}.get(result, 0)
         old_level, new_level, _ = await self.db.add_xp(
@@ -67,6 +68,81 @@ class Arcade(commands.Cog):
                 await ctx.channel.send(
                     f"🎮 **Arcade level up!** <@{user_id}> reached **Level {new_level}** — *{rank_title(new_level)}*"
                 )
+
+    @commands.group(name="season", aliases=["arcadeseason"], invoke_without_command=True)
+    @commands.guild_only()
+    async def season(self, ctx):
+        current = await self.db.get_arcade_season(ctx.guild.id)
+        if not current:
+            await ctx.send("🎮 No active arcade season. Staff can start one with !season start <name> [days].")
+            return
+        remaining = max(0, int(current["ends_at"] - time.time()))
+        days, rem = divmod(remaining, 86400)
+        hours = rem // 3600
+        board = await self.db.get_arcade_season_leaderboard(ctx.guild.id, current["season_id"], 5)
+        lines = [
+            f"**{i}.** <@{row['user_id']}> — **{row['points']:,} pts** · {row['wins']}W/{row['plays']}P"
+            for i, row in enumerate(board, 1)
+        ]
+        desc = (
+            f"Season **{current['name']}** · <t:{int(current['ends_at'])}:R>\n"
+            f"Remaining: **{days}d {hours}h**\n\n"
+            + ("\n".join(lines) if lines else "No players have scored yet.")
+        )
+        await ctx.send(embed=self.embed("🎮 ECLIPSE · ARCADE SEASON", desc, COLOR_GOLD))
+
+    @season.command(name="start")
+    @commands.has_guild_permissions(manage_guild=True)
+    async def season_start(self, ctx, name: str, days: int = 30):
+        season, reason = await self.db.create_arcade_season(ctx.guild.id, name, days, created_by=ctx.author.id)
+        if not season:
+            return await ctx.send("❌ An arcade season is already active.")
+        await ctx.send(
+            f"🎮 **Season started:** {season['name']}\n"
+            f"Ends <t:{int(season['ends_at'])}:F>\n"
+            f"Winner rewards: **{season['reward_coins']:,} coins + {season['reward_xp']:,} XP**."
+        )
+
+    @season.command(name="leaderboard", aliases=["lb", "top"])
+    async def season_leaderboard(self, ctx):
+        season = await self.db.get_arcade_season(ctx.guild.id)
+        if not season:
+            return await ctx.send("❌ No active arcade season.")
+        rows = await self.db.get_arcade_season_leaderboard(ctx.guild.id, season["season_id"], 10)
+        if not rows:
+            return await ctx.send("🎮 The season leaderboard is empty.")
+        lines = [
+            f"**{i}.** <@{r['user_id']}> — **{r['points']:,} pts** · {r['wins']} wins · {r['plays']} plays"
+            for i, r in enumerate(rows, 1)
+        ]
+        await ctx.send(embed=self.embed("🏆 SEASON LEADERBOARD", "\n".join(lines), COLOR_GOLD))
+
+    @season.command(name="stats")
+    async def season_stats(self, ctx, member: discord.Member = None):
+        member = member or ctx.author
+        season = await self.db.get_arcade_season(ctx.guild.id)
+        if not season:
+            return await ctx.send("❌ No active arcade season.")
+        stats = await self.db.get_arcade_season_stats(ctx.guild.id, member.id, season["season_id"])
+        await ctx.send(embed=self.embed(
+            f"🎮 {member.display_name} · SEASON STATS",
+            f"**Points:** {stats['points']:,}\n**Wins:** {stats['wins']}\n**Plays:** {stats['plays']}\n**Net coins:** {stats['net_coins']:+,}"
+        ))
+
+    @season.command(name="end")
+    @commands.has_guild_permissions(manage_guild=True)
+    async def season_end(self, ctx):
+        season = await self.db.get_arcade_season(ctx.guild.id)
+        if not season:
+            return await ctx.send("❌ No active arcade season.")
+        winner = await self.db.finish_arcade_season(ctx.guild.id, season["season_id"])
+        if not winner:
+            return await ctx.send("🏁 Season ended with no ranked players.")
+        await ctx.send(
+            f"🏁 **{season['name']} has ended.**\n"
+            f"Champion: <@{winner['user_id']}> with **{winner['points']:,} points**.\n"
+            f"Reward: **{season['reward_coins']:,} coins + {season['reward_xp']:,} XP**."
+        )
 
     @commands.group(name="tournament", aliases=["tourny"], invoke_without_command=True)
     async def tournament(self, ctx):
