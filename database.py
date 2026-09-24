@@ -58,6 +58,16 @@ CREATE TABLE IF NOT EXISTS users (
     PRIMARY KEY (guild_id, user_id)
 );
 
+CREATE TABLE IF NOT EXISTS level_progression (
+    guild_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    total_xp INTEGER NOT NULL DEFAULT 0,
+    prestige INTEGER NOT NULL DEFAULT 0,
+    milestone_claimed INTEGER NOT NULL DEFAULT 0,
+    xp_boost REAL NOT NULL DEFAULT 1.0,
+    PRIMARY KEY (guild_id, user_id)
+);
+
 CREATE TABLE IF NOT EXISTS game_stats (
     guild_id TEXT NOT NULL,
     user_id TEXT NOT NULL,
@@ -597,8 +607,24 @@ class Database:
         """Returns (old_level, new_level, new_xp)."""
 
         user = await self.get_user(guild_id, user_id)
+        guild_id, user_id = str(guild_id), str(user_id)
+        amount = max(0, int(amount))
+        await self._conn.execute(
+            "INSERT OR IGNORE INTO level_progression (guild_id,user_id,total_xp,prestige) VALUES (?,?,0,0)",
+            (guild_id, user_id)
+        )
+        cur = await self._conn.execute(
+            "SELECT xp_boost FROM level_progression WHERE guild_id=? AND user_id=?",
+            (guild_id, user_id)
+        )
+        boost = float((await cur.fetchone())["xp_boost"])
+        boosted_amount = int(amount * max(1.0, boost))
+        await self._conn.execute(
+            "UPDATE level_progression SET total_xp=total_xp+? WHERE guild_id=? AND user_id=?",
+            (boosted_amount, guild_id, user_id)
+        )
 
-        xp = user["xp"] + amount
+        xp = user["xp"] + boosted_amount
         level = user["level"]
         old_level = level
 
@@ -609,6 +635,49 @@ class Database:
         await self.update_user(guild_id, user_id, xp=xp, level=level)
 
         return old_level, level, xp
+
+    async def get_level_progression(self, guild_id, user_id):
+        await self.get_user(guild_id, user_id)
+        await self._conn.execute(
+            "INSERT OR IGNORE INTO level_progression (guild_id,user_id) VALUES (?,?)",
+            (str(guild_id), str(user_id))
+        )
+        await self._conn.commit()
+        cur = await self._conn.execute(
+            "SELECT * FROM level_progression WHERE guild_id=? AND user_id=?",
+            (str(guild_id), str(user_id))
+        )
+        return dict(await cur.fetchone())
+
+    async def prestige_user(self, guild_id, user_id):
+        state = await self.get_level_progression(guild_id, user_id)
+        user = await self.get_user(guild_id, user_id)
+        if int(user["level"]) < 100:
+            return None
+        prestige = int(state["prestige"]) + 1
+        await self.update_user(guild_id, user_id, level=1, xp=0)
+        await self._conn.execute(
+            "UPDATE level_progression SET prestige=?, milestone_claimed=0, xp_boost=? WHERE guild_id=? AND user_id=?",
+            (prestige, 1.0 + min(prestige, 10) * 0.05, str(guild_id), str(user_id))
+        )
+        await self._conn.commit()
+        return prestige
+
+    async def grant_level_milestone(self, guild_id, user_id, level):
+        if int(level) < 10 or int(level) % 10:
+            return False
+        state = await self.get_level_progression(guild_id, user_id)
+        claimed = int(state["milestone_claimed"])
+        if int(level) <= claimed:
+            return False
+        reward = int(level) * 100
+        await self.add_balance(guild_id, user_id, reward)
+        await self._conn.execute(
+            "UPDATE level_progression SET milestone_claimed=? WHERE guild_id=? AND user_id=?",
+            (int(level), str(guild_id), str(user_id))
+        )
+        await self._conn.commit()
+        return reward
 
     async def add_achievement(self, guild_id, user_id, name):
         user = await self.get_user(guild_id, user_id)
