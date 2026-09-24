@@ -253,7 +253,12 @@ DEFAULT_USER = {
     "achievements": [],
     "bank_balance": 0,
     "last_bank_interest": None,
-    "equipped_title": None
+    "equipped_title": None,
+    "arcade_plays": 0,
+    "arcade_wins": 0,
+    "arcade_wagered": 0,
+    "arcade_net": 0,
+    "arcade_best_streak": 0
 }
 
 
