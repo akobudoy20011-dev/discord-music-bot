@@ -1,3 +1,8 @@
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
 """Smoke tests for the ECLIPSE RPG special-move subsystem."""
 
 import asyncio
