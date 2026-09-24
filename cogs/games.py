@@ -415,7 +415,7 @@ class GamesHubView(discord.ui.View):
         embed.set_footer(text="ECLIPSE GAME CENTER · Select a game above")
         await interaction.response.edit_message(embed=embed, view=self)
 
-    @discord.ui.button(label="Home", emoji="⌂", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="Home", emoji="🏠", style=discord.ButtonStyle.primary)
     async def game_list(self, interaction, button):
         if not await self._guard(interaction):
             return
