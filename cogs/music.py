@@ -379,6 +379,53 @@ class Music(commands.Cog):
     async def play(self, ctx, *, query):
         await self.enqueue(ctx, query)
 
+    async def _resolve_for_playback(self, guild, query):
+        """Resolve a fresh stream URL immediately before playback."""
+        loop = asyncio.get_event_loop()
+        return await resolve_query(loop, query)
+
+    async def _start_resolved_track(self, guild, state, query, requester_name, data):
+        stream_url = data.get("url")
+        if not stream_url:
+            raise SongDownloadError("YouTube returned no stream URL.")
+
+        title = data.get("title", query)
+        webpage_url = data.get("webpage_url")
+
+        state.current = {
+            "query": query,
+            "title": title,
+            "webpage_url": webpage_url,
+            "requester_name": requester_name,
+            "stream_url": stream_url,
+        }
+
+        source = discord.FFmpegPCMAudio(stream_url, **FFMPEG_OPTIONS)
+        source = discord.PCMVolumeTransformer(source, volume=state.volume)
+
+        def after_playing(error):
+            if error:
+                logger.error("FFmpeg/player error for '%s': %s", title, error)
+
+            fut = asyncio.run_coroutine_threadsafe(
+                self._play_next(guild), self.bot.loop
+            )
+            try:
+                fut.result()
+            except Exception:
+                logger.exception("Error advancing queue")
+
+        guild.voice_client.play(source, after=after_playing)
+
+        if state.text_channel:
+            embed = discord.Embed(
+                title="🎵 Now Playing",
+                description=f"**{title}**\\n{webpage_url or ''}",
+                color=COLOR_MUSIC
+            )
+            embed.set_footer(text=f"Requested by {requester_name}")
+            await state.text_channel.send(embed=embed)
+
     async def _play_next(self, guild):
         state = self.states.get(guild.id)
 
@@ -404,73 +451,81 @@ class Music(commands.Cog):
 
         if next_query is None:
             state.current = None
-
             if state.text_channel:
                 await state.text_channel.send("📭 Queue finished.")
             return
 
         loop = asyncio.get_event_loop()
 
+        # Resolve a fresh URL. Stream URLs are intentionally never stored
+        # in the queue because they expire.
         try:
-            data = await resolve_query(loop, next_query)
-        except SongDownloadError as e:
+            data = await self._resolve_for_playback(guild, next_query)
+        except SongDownloadError as first_error:
             if state.text_channel:
-                await state.text_channel.send(f"❌ Skipping '{next_query}': {e}")
+                await state.text_channel.send(
+                    f"❌ Couldn't start '{next_query}': {first_error}"
+                )
 
             state.current = None
+
             while state.queue:
                 failed = state.queue.popleft()
                 try:
-                    data = await resolve_query(loop, failed["query"])
+                    data = await self._resolve_for_playback(guild, failed["query"])
                     next_query = failed["query"]
                     requester_name = failed["requester_name"]
                     break
                 except SongDownloadError as retry_error:
                     if state.text_channel:
                         await state.text_channel.send(
-                            "❌ Skipping '{}' : {}".format(failed["query"], retry_error)
+                            "❌ Skipping '{}' : {}".format(
+                                failed["query"], retry_error
+                            )
                         )
             else:
                 if state.text_channel:
                     await state.text_channel.send("📭 Queue finished.")
                 return
 
-        stream_url = data["url"]
-        title = data.get("title", next_query)
-        webpage_url = data.get("webpage_url")
-
-        state.current = {
-            "query": next_query,
-            "title": title,
-            "webpage_url": webpage_url,
-            "requester_name": requester_name
-        }
-
-        source = discord.FFmpegPCMAudio(stream_url, **FFMPEG_OPTIONS)
-        source = discord.PCMVolumeTransformer(source, volume=state.volume)
-
-        def after_playing(error):
-            if error:
-                logger.error(f"Player error: {error}")
-
-            fut = asyncio.run_coroutine_threadsafe(
-                self._play_next(guild), self.bot.loop
+        try:
+            await self._start_resolved_track(
+                guild, state, next_query, requester_name, data
             )
+        except Exception as playback_error:
+            logger.error(
+                "Playback start failed for '%s': %s",
+                next_query,
+                playback_error,
+            )
+
+            # One complete re-resolution is important here: a freshly
+            # extracted YouTube URL can still be rejected by FFmpeg if
+            # it expires or is invalidated between extraction and opening.
             try:
-                fut.result()
-            except Exception:
-                logger.exception("Error advancing queue")
+                fresh = await self._resolve_for_playback(guild, next_query)
+                await self._start_resolved_track(
+                    guild, state, next_query, requester_name, fresh
+                )
+                if state.text_channel:
+                    await state.text_channel.send(
+                        "🔄 Stream refreshed and playback restarted."
+                    )
+                return
+            except Exception as refresh_error:
+                logger.error(
+                    "Stream refresh failed for '%s': %s",
+                    next_query,
+                    refresh_error,
+                )
+                state.current = None
 
-        guild.voice_client.play(source, after=after_playing)
+                if state.text_channel:
+                    await state.text_channel.send(
+                        f"❌ Couldn't start **{next_query}** after a stream refresh."
+                    )
 
-        if state.text_channel:
-            embed = discord.Embed(
-                title="🎵 Now Playing",
-                description=f"**{title}**\n{webpage_url or ''}",
-                color=COLOR_MUSIC
-            )
-            embed.set_footer(text=f"Requested by {requester_name}")
-            await state.text_channel.send(embed=embed)
+                await self._play_next(guild)
 
     # ------------------------------------------------------------
     @commands.command(name="pause")
