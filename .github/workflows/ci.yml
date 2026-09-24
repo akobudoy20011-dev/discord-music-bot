@@ -51,6 +51,7 @@ jobs:
               "cogs.eclipse",
               "cogs.science_game",
               "cogs.rpg",
+              "cogs.guilds",
               "rpg.classes",
               "rpg.manager",
               "rpg.items",
