@@ -45,6 +45,9 @@ CREATE TABLE IF NOT EXISTS users (
     xp INTEGER NOT NULL DEFAULT 0,
     level INTEGER NOT NULL DEFAULT 1,
     achievements TEXT NOT NULL DEFAULT '[]',
+    bank_balance INTEGER NOT NULL DEFAULT 0,
+    last_bank_interest REAL,
+    equipped_title TEXT,
     PRIMARY KEY (guild_id, user_id)
 );
 
@@ -174,11 +177,33 @@ CREATE TABLE IF NOT EXISTS rpg_materials (
     PRIMARY KEY (guild_id, user_id, material_id)
 );
 
+CREATE TABLE IF NOT EXISTS eclipse_world_events (
+    guild_id TEXT PRIMARY KEY,
+    event_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL,
+    target INTEGER NOT NULL DEFAULT 5000,
+    progress INTEGER NOT NULL DEFAULT 0,
+    reward_coins INTEGER NOT NULL DEFAULT 1000,
+    reward_xp INTEGER NOT NULL DEFAULT 100,
+    ends_at REAL NOT NULL,
+    completed INTEGER NOT NULL DEFAULT 0,
+    created_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS eclipse_world_contributors (
+    guild_id TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    contribution INTEGER NOT NULL DEFAULT 0,
+    rewarded INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (guild_id, event_id, user_id)
+);
+
 CREATE TABLE IF NOT EXISTS warnings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     guild_id TEXT NOT NULL,
-    user_id TEXT NOT NULL,
-    moderator_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,    moderator_id TEXT NOT NULL,
     reason TEXT NOT NULL,
     created_at REAL NOT NULL
 );
@@ -193,7 +218,10 @@ DEFAULT_USER = {
     "games": 0,
     "xp": 0,
     "level": 1,
-    "achievements": []
+    "achievements": [],
+    "bank_balance": 0,
+    "last_bank_interest": None,
+    "equipped_title": None
 }
 
 
@@ -213,6 +241,19 @@ class Database:
             await self._conn.execute("ALTER TABLE rpg_players ADD COLUMN region TEXT NOT NULL DEFAULT 'moonlit_vale'")
         if "travel_until" not in columns:
             await self._conn.execute("ALTER TABLE rpg_players ADD COLUMN travel_until REAL NOT NULL DEFAULT 0")
+
+        user_cur = await self._conn.execute("PRAGMA table_info(users)")
+        user_columns = {row["name"] for row in await user_cur.fetchall()}
+        user_columns_to_add = {
+            "bank_balance": "INTEGER NOT NULL DEFAULT 0",
+            "last_bank_interest": "REAL",
+            "equipped_title": "TEXT",
+        }
+        for name, definition in user_columns_to_add.items():
+            if name not in user_columns:
+                await self._conn.execute(
+                    f"ALTER TABLE users ADD COLUMN {name} {definition}"
+                )
 
         guild_cur = await self._conn.execute("PRAGMA table_info(guild_config)")
         guild_columns = {row["name"] for row in await guild_cur.fetchall()}
@@ -327,7 +368,6 @@ class Database:
             return False
 
         user["achievements"].append(name)
-
         await self.update_user(
             guild_id, user_id, achievements=user["achievements"]
         )
@@ -362,6 +402,141 @@ class Database:
                 return i
 
         return len(rows) + 1
+
+    # ------------------------------------------------------------
+    # ECLIPSE PROFILE / BANK / WORLD
+    # ------------------------------------------------------------
+
+    async def set_equipped_title(self, guild_id, user_id, title):
+        await self.get_user(guild_id, user_id)
+        await self._conn.execute(
+            "UPDATE users SET equipped_title=? WHERE guild_id=? AND user_id=?",
+            (title, str(guild_id), str(user_id))
+        )
+        await self._conn.commit()
+        return await self.get_user(guild_id, user_id)
+
+    async def deposit_bank(self, guild_id, user_id, amount):
+        amount = int(amount)
+        if amount <= 0:
+            return False, "amount"
+        user = await self.get_user(guild_id, user_id)
+        if int(user["balance"]) < amount:
+            return False, "balance"
+        await self._conn.execute(
+            "UPDATE users SET balance=balance-?, bank_balance=bank_balance+? WHERE guild_id=? AND user_id=?",
+            (amount, amount, str(guild_id), str(user_id))
+        )
+        await self._conn.commit()
+        return True, await self.get_user(guild_id, user_id)
+
+    async def withdraw_bank(self, guild_id, user_id, amount):
+        amount = int(amount)
+        if amount <= 0:
+            return False, "amount"
+        user = await self.get_user(guild_id, user_id)
+        if int(user["bank_balance"]) < amount:
+            return False, "balance"
+        await self._conn.execute(
+            "UPDATE users SET balance=balance+?, bank_balance=bank_balance-? WHERE guild_id=? AND user_id=?",
+            (amount, amount, str(guild_id), str(user_id))
+        )
+        await self._conn.commit()
+        return True, await self.get_user(guild_id, user_id)
+
+    async def apply_bank_interest(self, guild_id, user_id, rate=0.01, period=86400):
+        user = await self.get_user(guild_id, user_id)
+        now = time.time()
+        last = user["last_bank_interest"]
+        if last is None:
+            last = now
+        elapsed_periods = int(max(0, now - float(last)) // period)
+        if elapsed_periods <= 0:
+            return 0, user
+        balance = int(user["bank_balance"])
+        if balance <= 0:
+            await self.update_user(guild_id, user_id, last_bank_interest=now)
+            return 0, await self.get_user(guild_id, user_id)
+        interest = int(balance * rate * elapsed_periods)
+        if interest <= 0:
+            await self.update_user(guild_id, user_id, last_bank_interest=now)
+            return 0, await self.get_user(guild_id, user_id)
+        await self._conn.execute(
+            "UPDATE users SET bank_balance=bank_balance+?, last_bank_interest=? WHERE guild_id=? AND user_id=?",
+            (interest, now, str(guild_id), str(user_id))
+        )
+        await self._conn.commit()
+        return interest, await self.get_user(guild_id, user_id)
+
+    async def get_world_event(self, guild_id):
+        cur = await self._conn.execute(
+            "SELECT * FROM eclipse_world_events WHERE guild_id=?",
+            (str(guild_id),)
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def create_world_event(self, guild_id, event_id, title, description, target, reward_coins, reward_xp, ends_at):
+        await self._conn.execute(
+            "INSERT INTO eclipse_world_events "
+            "(guild_id,event_id,title,description,target,progress,reward_coins,reward_xp,ends_at,completed,created_at) "
+            "VALUES (?,?,?,?,?,0,?,?,?,0,?) "
+            "ON CONFLICT(guild_id) DO UPDATE SET event_id=excluded.event_id,title=excluded.title,"
+            "description=excluded.description,target=excluded.target,progress=0,reward_coins=excluded.reward_coins,"
+            "reward_xp=excluded.reward_xp,ends_at=excluded.ends_at,completed=0,created_at=excluded.created_at",
+            (str(guild_id), event_id, title, description, int(target), int(reward_coins), int(reward_xp), float(ends_at), time.time())
+        )
+        await self._conn.commit()
+        return await self.get_world_event(guild_id)
+
+    async def contribute_world_event(self, guild_id, user_id, amount):
+        event = await self.get_world_event(guild_id)
+        if not event or event["completed"] or float(event["ends_at"]) <= time.time():
+            return False, "inactive"
+        amount = int(amount)
+        if amount <= 0:
+            return False, "amount"
+        user = await self.get_user(guild_id, user_id)
+        if int(user["balance"]) < amount:
+            return False, "balance"
+        await self._conn.execute(
+            "UPDATE users SET balance=balance-? WHERE guild_id=? AND user_id=?",
+            (amount, str(guild_id), str(user_id))
+        )
+        await self._conn.execute(
+            "INSERT INTO eclipse_world_contributors(guild_id,event_id,user_id,contribution,rewarded) "
+            "VALUES(?,?,?, ?,0) ON CONFLICT(guild_id,event_id,user_id) DO UPDATE SET contribution=contribution+excluded.contribution",
+            (str(guild_id), event["event_id"], str(user_id), amount)
+        )
+        new_progress=min(int(event["target"]), int(event["progress"])+amount)
+        completed=1 if new_progress>=int(event["target"]) else 0
+        await self._conn.execute(
+            "UPDATE eclipse_world_events SET progress=?, completed=? WHERE guild_id=?",
+            (new_progress, completed, str(guild_id))
+        )
+        await self._conn.commit()
+        return True, await self.get_world_event(guild_id)
+
+    async def reward_world_event_contributors(self, guild_id):
+        event = await self.get_world_event(guild_id)
+        if not event or not event["completed"]:
+            return 0
+        cur = await self._conn.execute(
+            "SELECT user_id FROM eclipse_world_contributors WHERE guild_id=? AND event_id=? AND rewarded=0",
+            (str(guild_id), event["event_id"])
+        )
+        rows = await cur.fetchall()
+        count=0
+        for row in rows:
+            await self.add_balance(guild_id, row["user_id"], int(event["reward_coins"]))
+            await self.add_xp(guild_id, row["user_id"], int(event["reward_xp"]))
+            await self._conn.execute(
+                "UPDATE eclipse_world_contributors SET rewarded=1 WHERE guild_id=? AND event_id=? AND user_id=?",
+                (str(guild_id), event["event_id"], row["user_id"])
+            )
+            count+=1
+        await self._conn.commit()
+        return count
 
     # ------------------------------------------------------------
     # INVENTORY
@@ -497,8 +672,7 @@ class Database:
         cur = await self._conn.execute(
             "SELECT * FROM warnings WHERE guild_id = ? AND user_id = ? "
             "ORDER BY created_at DESC",
-            (str(guild_id), str(user_id))
-        )
+            (str(guild_id), str(user_id))        )
         rows = await cur.fetchall()
 
         return [dict(r) for r in rows]
@@ -758,71 +932,3 @@ class Database:
             (str(guild_id), str(user_id), str(item_id), int(amount))
         )
         await self._conn.commit()
-
-    async def set_rpg_item_equipped(self, guild_id, user_id, item_id, equipped=True):
-        await self._conn.execute(
-            "UPDATE rpg_items SET equipped = ? "
-            "WHERE guild_id = ? AND user_id = ? AND item_id = ?",
-            (1 if equipped else 0, str(guild_id), str(user_id), str(item_id))
-        )
-        await self._conn.commit()
-
-    async def get_rpg_skills(self, guild_id, user_id):
-        cur = await self._conn.execute(
-            "SELECT skill_id FROM rpg_skills "
-            "WHERE guild_id = ? AND user_id = ? AND unlocked = 1 "
-            "ORDER BY skill_id",
-            (str(guild_id), str(user_id))
-        )
-        return [r["skill_id"] for r in await cur.fetchall()]
-
-    async def unlock_rpg_skill(self, guild_id, user_id, skill_id):
-        await self._conn.execute(
-            "INSERT INTO rpg_skills "
-            "(guild_id, user_id, skill_id, unlocked) VALUES (?, ?, ?, 1) "
-            "ON CONFLICT(guild_id, user_id, skill_id) "
-            "DO UPDATE SET unlocked = 1",
-            (str(guild_id), str(user_id), str(skill_id))
-        )
-        await self._conn.commit()
-
-    async def remove_rpg_item(self, guild_id, user_id, item_id, amount=1):
-        amount = int(amount)
-        if amount <= 0:
-            return True
-        cur = await self._conn.execute(
-            "SELECT amount FROM rpg_items WHERE guild_id=? AND user_id=? AND item_id=?",
-            (str(guild_id), str(user_id), str(item_id))
-        )
-        row = await cur.fetchone()
-        if not row or int(row["amount"]) < amount:
-            return False
-        remaining = int(row["amount"]) - amount
-        await self._conn.execute(
-            "UPDATE rpg_items SET amount=?, equipped=CASE WHEN ?=0 THEN 0 ELSE equipped END "
-            "WHERE guild_id=? AND user_id=? AND item_id=?",
-            (remaining, remaining, str(guild_id), str(user_id), str(item_id))
-        )
-        if remaining <= 0:
-            await self._conn.execute(
-                "DELETE FROM rpg_items WHERE guild_id=? AND user_id=? AND item_id=?",
-                (str(guild_id), str(user_id), str(item_id))
-            )
-        await self._conn.commit()
-        return True
-
-    async def get_rpg_materials(self, guild_id, user_id):
-        cur = await self._conn.execute(
-            "SELECT material_id, amount FROM rpg_materials "
-            "WHERE guild_id=? AND user_id=? AND amount > 0 ORDER BY material_id",
-            (str(guild_id), str(user_id))
-        )
-        return [dict(r) for r in await cur.fetchall()]
-
-    async def add_rpg_material(self, guild_id, user_id, material_id, amount=1):
-        amount = int(amount)
-        if amount <= 0:
-            return
-        await self._conn.execute(
-            "INSERT INTO rpg_materials (guild_id,user_id,material_id,amount) VALUES (?,?,?,?) "
-            "ON CONFLICT(guild_id,user_id,material_id) "
