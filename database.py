@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS users (
     arcade_net INTEGER NOT NULL DEFAULT 0,
     arcade_best_streak INTEGER NOT NULL DEFAULT 0,
     tournament_wins INTEGER NOT NULL DEFAULT 0,
+    tournament_entries INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (guild_id, user_id)
 );
 
@@ -297,7 +298,8 @@ DEFAULT_USER = {
     "arcade_wagered": 0,
     "arcade_net": 0,
     "arcade_best_streak": 0,
-    "tournament_wins": 0
+    "tournament_wins": 0,
+    "tournament_entries": 0
 }
 
 
@@ -335,6 +337,7 @@ class Database:
             "arcade_net": "INTEGER NOT NULL DEFAULT 0",
             "arcade_best_streak": "INTEGER NOT NULL DEFAULT 0",
             "tournament_wins": "INTEGER NOT NULL DEFAULT 0",
+            "tournament_entries": "INTEGER NOT NULL DEFAULT 0",
         }.items():
             if name not in user_columns:
                 await self._conn.execute(
@@ -629,6 +632,7 @@ class Database:
         fee=int(tournament["entry_fee"]); user=await self.get_user(guild_id,user_id)
         if int(user["balance"]) < fee: return False, "balance"
         if fee: await self.add_balance(guild_id,user_id,-fee)
+        await self._conn.execute("UPDATE users SET tournament_entries=tournament_entries+1 WHERE guild_id=? AND user_id=?", (str(guild_id), str(user_id)))
         await self._conn.execute("INSERT INTO arcade_tournament_players(tournament_id,user_id,seed) VALUES(?,?,?)",(int(tournament_id),str(user_id),count+1))
         await self._conn.execute("UPDATE arcade_tournaments SET prize_pool=prize_pool+? WHERE tournament_id=?",(fee,int(tournament_id)))
         await self._conn.commit(); return True, "joined"
