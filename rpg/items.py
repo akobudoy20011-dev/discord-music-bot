@@ -105,6 +105,27 @@ ITEMS = {
         "description": "A star-bright eye from the Astral Leviathan.",
         "source": "astral_leviathan",
     },
+    "legendary_eclipse_blade": {
+        "name": "Eclipse Blade", "slot": "weapon", "rarity": "legendary",
+        "icon": "⚔️", "power": 24, "strength": 10, "agility": 4, "max_hp": 20,
+        "description": "A guild-forged blade that cuts through eclipse-born armor.", "source": "guild_relic",
+    },
+    "legendary_void_crown": {
+        "name": "Void Crown", "slot": "accessory", "rarity": "legendary",
+        "icon": "👑", "power": 10, "magic": 14, "max_mp": 28, "agility": 3,
+        "description": "A crown that turns empty space into spellcraft.", "source": "guild_relic",
+    },
+    "legendary_celestial_aegis": {
+        "name": "Celestial Aegis", "slot": "armor", "rarity": "legendary",
+        "icon": "🛡️", "power": 12, "defense": 20, "max_hp": 70, "max_mp": 10,
+        "description": "Shield-mail forged from condensed starlight.", "source": "guild_relic",
+    },
+    "legendary_sovereign_relic": {
+        "name": "Sovereign Relic", "slot": "relic", "rarity": "relic",
+        "icon": "🌌", "power": 20, "strength": 10, "defense": 10, "magic": 10,
+        "agility": 10, "max_hp": 60, "max_mp": 40,
+        "description": "A relic carrying the authority of a fallen sovereign.", "source": "guild_relic",
+    },
 }
 
 def get_item(item_id):
