@@ -5,6 +5,7 @@ COMPANIONS = {
         "name": "Moonfox", "icon": "🦊", "cost": 5000,
         "description": "A lunar fox that sharpens agility and awareness.",
         "bonus": {"agility": 4, "magic": 2},
+        "ability": {"name": "Moonstep", "cooldown": 60, "multiplier": 1.35},
     },
     "emberwolf": {
         "name": "Emberwolf", "icon": "🐺", "cost": 7500,
