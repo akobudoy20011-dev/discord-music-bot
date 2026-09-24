@@ -77,6 +77,17 @@ CREATE TABLE IF NOT EXISTS economy_progression (
     PRIMARY KEY (guild_id, user_id)
 );
 
+CREATE TABLE IF NOT EXISTS economy_effects (
+    guild_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    effect_id TEXT NOT NULL,
+    multiplier REAL NOT NULL DEFAULT 1.0,
+    uses INTEGER NOT NULL DEFAULT 0,
+    expires_at REAL,
+    created_at REAL NOT NULL,
+    PRIMARY KEY (guild_id, user_id, effect_id)
+);
+
 CREATE TABLE IF NOT EXISTS game_stats (
     guild_id TEXT NOT NULL,
     user_id TEXT NOT NULL,
@@ -1381,6 +1392,118 @@ class Database:
         rows = await cur.fetchall()
 
         return {r["item_id"]: r["amount"] for r in rows}
+
+    async def consume_item(self, guild_id, user_id, item_id, amount=1):
+        """Atomically consume inventory items. Returns remaining quantity or None."""
+        guild_id, user_id = str(guild_id), str(user_id)
+        item_id, amount = str(item_id), int(amount)
+        if amount <= 0:
+            return None
+        await self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            cur = await self._conn.execute(
+                "UPDATE inventory SET amount=amount-? "
+                "WHERE guild_id=? AND user_id=? AND item_id=? AND amount>=?",
+                (amount, guild_id, user_id, item_id, amount)
+            )
+            if cur.rowcount != 1:
+                await self._conn.rollback()
+                return None
+            await self._conn.execute(
+                "DELETE FROM inventory WHERE guild_id=? AND user_id=? AND item_id=? AND amount<=0",
+                (guild_id, user_id, item_id)
+            )
+            cur = await self._conn.execute(
+                "SELECT COALESCE(amount,0) AS amount FROM inventory "
+                "WHERE guild_id=? AND user_id=? AND item_id=?",
+                (guild_id, user_id, item_id)
+            )
+            row = await cur.fetchone()
+            remaining = int(row["amount"]) if row else 0
+            await self._conn.commit()
+            return remaining
+        except Exception:
+            await self._conn.rollback()
+            raise
+
+    async def add_economy_effect(self, guild_id, user_id, effect_id,
+                                 multiplier=1.0, uses=0, expires_at=None):
+        """Persist a temporary or next-use economy effect."""
+        guild_id, user_id = str(guild_id), str(user_id)
+        effect_id = str(effect_id)
+        multiplier = max(1.0, float(multiplier))
+        uses = max(0, int(uses))
+        now = time.time()
+
+        await self._conn.execute(
+            "INSERT INTO economy_effects "
+            "(guild_id,user_id,effect_id,multiplier,uses,expires_at,created_at) "
+            "VALUES (?,?,?,?,?,?,?) "
+            "ON CONFLICT(guild_id,user_id,effect_id) DO UPDATE SET "
+            "multiplier=MAX(economy_effects.multiplier, excluded.multiplier), "
+            "uses=CASE WHEN excluded.uses > 0 "
+            "THEN economy_effects.uses + excluded.uses ELSE economy_effects.uses END, "
+            "expires_at=CASE "
+            "WHEN excluded.expires_at IS NULL THEN economy_effects.expires_at "
+            "WHEN economy_effects.expires_at IS NULL THEN excluded.expires_at "
+            "ELSE MAX(economy_effects.expires_at, excluded.expires_at) END",
+            (guild_id, user_id, effect_id, multiplier, uses, expires_at, now)
+        )
+        await self._conn.commit()
+
+    async def get_economy_effects(self, guild_id, user_id):
+        """Return active economy effects and remove expired ones."""
+        guild_id, user_id = str(guild_id), str(user_id)
+        now = time.time()
+        await self._conn.execute(
+            "DELETE FROM economy_effects "
+            "WHERE guild_id=? AND user_id=? AND expires_at IS NOT NULL AND expires_at<=?",
+            (guild_id, user_id, now)
+        )
+        await self._conn.commit()
+        cur = await self._conn.execute(
+            "SELECT * FROM economy_effects "
+            "WHERE guild_id=? AND user_id=? ORDER BY effect_id",
+            (guild_id, user_id)
+        )
+        return [dict(row) for row in await cur.fetchall()]
+
+    async def consume_economy_effect(self, guild_id, user_id, effect_id):
+        """Consume one next-use charge; timed effects are left untouched."""
+        guild_id, user_id = str(guild_id), str(user_id)
+        effect_id = str(effect_id)
+        now = time.time()
+        await self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            cur = await self._conn.execute(
+                "SELECT uses, expires_at FROM economy_effects "
+                "WHERE guild_id=? AND user_id=? AND effect_id=?",
+                (guild_id, user_id, effect_id)
+            )
+            row = await cur.fetchone()
+            if row is None or (
+                row["expires_at"] is not None and float(row["expires_at"]) <= now
+            ):
+                await self._conn.rollback()
+                return False
+            if int(row["uses"]) <= 0:
+                await self._conn.rollback()
+                return True
+            await self._conn.execute(
+                "UPDATE economy_effects SET uses=uses-1 "
+                "WHERE guild_id=? AND user_id=? AND effect_id=? AND uses>0",
+                (guild_id, user_id, effect_id)
+            )
+            await self._conn.execute(
+                "DELETE FROM economy_effects WHERE guild_id=? AND user_id=? "
+                "AND effect_id=? AND uses<=0 AND expires_at IS NULL",
+                (guild_id, user_id, effect_id)
+            )
+            await self._conn.commit()
+            return True
+        except Exception:
+            await self._conn.rollback()
+            raise
 
     # ------------------------------------------------------------
     # GUILD CONFIG
