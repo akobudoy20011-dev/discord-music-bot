@@ -110,6 +110,31 @@ CREATE TABLE IF NOT EXISTS arcade_tournament_matches (
     created_at REAL NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS arcade_seasons (
+    guild_id TEXT NOT NULL,
+    season_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    starts_at REAL NOT NULL,
+    ends_at REAL NOT NULL,
+    created_by TEXT,
+    winner_id TEXT,
+    winner_points INTEGER NOT NULL DEFAULT 0,
+    reward_coins INTEGER NOT NULL DEFAULT 0,
+    reward_xp INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS arcade_season_stats (
+    season_id INTEGER NOT NULL,
+    guild_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    points INTEGER NOT NULL DEFAULT 0,
+    wins INTEGER NOT NULL DEFAULT 0,
+    plays INTEGER NOT NULL DEFAULT 0,
+    net_coins INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (season_id, user_id)
+);
+
 CREATE TABLE IF NOT EXISTS arcade_daily (
     guild_id TEXT NOT NULL,
     user_id TEXT NOT NULL,
@@ -685,6 +710,105 @@ class Database:
             (str(guild_id), str(game_id), int(limit))
         )
         return [dict(r) for r in await cur.fetchall()]
+
+    async def get_arcade_season(self, guild_id, season_id=None):
+        if season_id is None:
+            cur = await self._conn.execute(
+                "SELECT * FROM arcade_seasons WHERE guild_id=? AND status='active' ORDER BY season_id DESC LIMIT 1",
+                (str(guild_id),)
+            )
+        else:
+            cur = await self._conn.execute(
+                "SELECT * FROM arcade_seasons WHERE guild_id=? AND season_id=?",
+                (str(guild_id), int(season_id))
+            )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def create_arcade_season(self, guild_id, name, duration_days=30, created_by=None, reward_coins=5000, reward_xp=2500):
+        duration_days = max(1, min(365, int(duration_days)))
+        now = time.time()
+        active = await self.get_arcade_season(guild_id)
+        if active:
+            return None, "active"
+        cur = await self._conn.execute(
+            """INSERT INTO arcade_seasons
+               (guild_id,name,status,starts_at,ends_at,created_by,reward_coins,reward_xp)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (str(guild_id), str(name)[:80], "active", now, now + duration_days * 86400,
+             str(created_by) if created_by else None, int(reward_coins), int(reward_xp))
+        )
+        await self._conn.commit()
+        return await self.get_arcade_season(guild_id, cur.lastrowid), "created"
+
+    async def get_arcade_season_leaderboard(self, guild_id, season_id=None, limit=10):
+        season = await self.get_arcade_season(guild_id, season_id)
+        if not season:
+            return []
+        cur = await self._conn.execute(
+            """SELECT user_id,points,wins,plays,net_coins
+               FROM arcade_season_stats
+               WHERE season_id=? AND guild_id=?
+               ORDER BY points DESC,wins DESC,net_coins DESC
+               LIMIT ?""",
+            (int(season["season_id"]), str(guild_id), int(limit))
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def get_arcade_season_stats(self, guild_id, user_id, season_id=None):
+        season = await self.get_arcade_season(guild_id, season_id)
+        if not season:
+            return None
+        cur = await self._conn.execute(
+            "SELECT * FROM arcade_season_stats WHERE season_id=? AND guild_id=? AND user_id=?",
+            (int(season["season_id"]), str(guild_id), str(user_id))
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else {
+            "season_id": season["season_id"], "guild_id": str(guild_id),
+            "user_id": str(user_id), "points": 0, "wins": 0, "plays": 0, "net_coins": 0
+        }
+
+    async def advance_arcade_season(self, guild_id, user_id, result, net_coins=0):
+        season = await self.get_arcade_season(guild_id)
+        if not season:
+            return None
+        points = {"win": 100, "tie": 40, "loss": 20}.get(result, 0)
+        await self._conn.execute(
+            """INSERT INTO arcade_season_stats
+               (season_id,guild_id,user_id,points,wins,plays,net_coins)
+               VALUES (?,?,?,?,?,?,?)
+               ON CONFLICT(season_id,user_id) DO UPDATE SET
+                 points=points+excluded.points,
+                 wins=wins+excluded.wins,
+                 plays=plays+excluded.plays,
+                 net_coins=net_coins+excluded.net_coins""",
+            (int(season["season_id"]), str(guild_id), str(user_id), points,
+             1 if result == "win" else 0, 1, int(net_coins))
+        )
+        await self._conn.commit()
+        return points
+
+    async def finish_arcade_season(self, guild_id, season_id=None):
+        season = await self.get_arcade_season(guild_id, season_id)
+        if not season:
+            return None
+        rows = await self.get_arcade_season_leaderboard(guild_id, season["season_id"], 1)
+        winner = rows[0] if rows else None
+        await self._conn.execute(
+            """UPDATE arcade_seasons SET status='ended',winner_id=?,winner_points=?
+               WHERE season_id=? AND guild_id=? AND status='active'""",
+            (winner["user_id"] if winner else None,
+             int(winner["points"]) if winner else 0,
+             int(season["season_id"]), str(guild_id))
+        )
+        await self._conn.commit()
+        if winner:
+            if int(season["reward_coins"]):
+                await self.add_balance(guild_id, winner["user_id"], int(season["reward_coins"]))
+            if int(season["reward_xp"]):
+                await self.add_xp(guild_id, winner["user_id"], int(season["reward_xp"]))
+        return winner
 
     async def get_arcade_daily(self, guild_id, user_id, day_key):
         challenges = (
