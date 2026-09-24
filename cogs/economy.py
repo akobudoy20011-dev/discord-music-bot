@@ -11,7 +11,7 @@ import time
 from typing import Union
 
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from constants import COLOR_PRIMARY, COLOR_GOLD, footer, check_achievements
 
@@ -93,6 +93,28 @@ class Economy(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.db = bot.db
+        self.auction_settler.start()
+
+    @tasks.loop(seconds=45)
+    async def auction_settler(self):
+        for guild in list(self.bot.guilds):
+            try:
+                rows = await self.db.settle_expired_auctions(guild.id)
+                for row in rows:
+                    if row.get("highest_bidder_id"):
+                        await self.db.record_economy_activity(
+                            guild.id, row["seller_id"], earned=int(row["highest_bid"])
+                        )
+                await self.db.settle_expired_marketplace(guild.id)
+            except Exception:
+                continue
+
+    @auction_settler.before_loop
+    async def before_auction_settler(self):
+        await self.bot.wait_until_ready()
+
+    def cog_unload(self):
+        self.auction_settler.cancel()
 
     # ------------------------------------------------------------
     @commands.command(name="balance", aliases=["bal"])
@@ -356,26 +378,27 @@ class Economy(commands.Cog):
     # ------------------------------------------------------------
     @commands.command(name="auctions", aliases=["auctionhouse"])
     async def auctions(self, ctx):
-        cur = await self.db._conn.execute(
-            "SELECT * FROM economy_auctions WHERE guild_id=? AND status='open' ORDER BY auction_id DESC LIMIT 15",
-            (str(ctx.guild.id),)
-        )
-        rows = await cur.fetchall()
+        rows = await self.db.list_auctions(ctx.guild.id, 15)
         if not rows:
             await ctx.send("🔨 The auction house is empty.")
             return
         lines = []
         now = time.time()
         for row in rows:
-            if float(row["ends_at"]) <= now:
-                continue
             data = COLLECTIBLES.get(row["item_id"]) or SHOP_ITEMS.get(row["item_id"])
             name = data["name"] if data else row["item_id"]
             remaining = fmt_time(max(0, int(float(row["ends_at"]) - now)))
             bidder = f"<@{row['highest_bidder_id']}>" if row["highest_bidder_id"] else "No bids"
-            lines.append(f"**#{row['auction_id']}** • {name} ×{row['amount']} • 💰 {int(row['highest_bid']):,} • {bidder} • ⏳ {remaining}")
-        embed = discord.Embed(title="🔨 ECLIPSE Auction House", description="\n".join(lines) or "No active auctions.", color=COLOR_GOLD)
-        embed.set_footer(text="Use !auction create <item> <amount> <starting_bid> [minutes] • !bid <id> <amount>")
+            lines.append(
+                f"**#{row['auction_id']}** • {name} ×{row['amount']} • "
+                f"💰 {int(row['highest_bid']):,} • {bidder} • ⏳ {remaining}"
+            )
+        embed = discord.Embed(
+            title="🔨 ECLIPSE Auction House",
+            description="\n".join(lines) or "No active auctions.",
+            color=COLOR_GOLD,
+        )
+        embed.set_footer(text="!auction create <item> <amount> <starting_bid> [minutes] • !bid <id> <amount>")
         await ctx.send(embed=footer(embed, ctx))
 
     @commands.command(name="auction")
@@ -393,136 +416,74 @@ class Economy(commands.Cog):
             if amount <= 0 or starting_bid <= 0 or minutes < 1:
                 await ctx.send("❌ Amount, starting bid, and duration must be positive.")
                 return
-            minutes = min(7 * 24 * 60, minutes)
-            await self.db._conn.execute("BEGIN IMMEDIATE")
-            try:
-                cur = await self.db._conn.execute(
-                    "UPDATE inventory SET amount=amount-? WHERE guild_id=? AND user_id=? AND item_id=? AND amount>=?",
-                    (amount,str(ctx.guild.id),str(ctx.author.id),asset_id,amount)
-                )
-                if cur.rowcount != 1:
-                    await self.db._conn.rollback()
-                    await ctx.send("❌ You don't own enough of that asset.")
-                    return
-                await self.db._conn.execute("DELETE FROM inventory WHERE guild_id=? AND user_id=? AND item_id=? AND amount<=0",(str(ctx.guild.id),str(ctx.author.id),asset_id))
-                now = time.time()
-                cur = await self.db._conn.execute(
-                    "INSERT INTO economy_auctions(guild_id,seller_id,item_id,amount,highest_bid,highest_bidder_id,created_at,ends_at,status,asset_type) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                    (str(ctx.guild.id),str(ctx.author.id),asset_id,amount,starting_bid,None,now,now+minutes*60,"open","collectible" if asset_id in COLLECTIBLES else "item")
-                )
-                await self.db._conn.commit()
-                await ctx.send(f"🔨 Auction **#{cur.lastrowid}** created for **{asset_id} ×{amount}**. Starting bid: **{starting_bid:,}**.")
-            except Exception:
-                await self.db._conn.rollback()
-                raise
+            auction_id, reason = await self.db.create_auction(
+                ctx.guild.id, ctx.author.id, asset_id, amount, starting_bid, minutes,
+                "collectible" if asset_id in COLLECTIBLES else "item",
+            )
+            if auction_id is None:
+                await ctx.send("❌ You don't own enough of that asset.")
+                return
+            await ctx.send(
+                f"🔨 Auction **#{auction_id}** created for **{asset_id} ×{amount}**. "
+                f"Starting bid: **{starting_bid:,}**."
+            )
             return
+
         if action == "cancel":
             if not asset_id:
                 await ctx.send("Usage: !auction cancel <id>")
                 return
-            await self.db._conn.execute("BEGIN IMMEDIATE")
-            try:
-                cur = await self.db._conn.execute("SELECT * FROM economy_auctions WHERE auction_id=? AND guild_id=? AND seller_id=? AND status='open'",(int(asset_id),str(ctx.guild.id),str(ctx.author.id)))
-                row = await cur.fetchone()
-                if not row:
-                    await self.db._conn.rollback()
-                    await ctx.send("❌ Auction not found.")
-                    return
-                if row["highest_bidder_id"]:
-                    await self.db._conn.rollback()
-                    await ctx.send("❌ An auction with bids cannot be cancelled.")
-                    return
-                await self.db._conn.execute("INSERT INTO inventory(guild_id,user_id,item_id,amount) VALUES(?,?,?,?) ON CONFLICT(guild_id,user_id,item_id) DO UPDATE SET amount=amount+excluded.amount",(str(ctx.guild.id),str(ctx.author.id),row["item_id"],int(row["amount"])))
-                await self.db._conn.execute("UPDATE economy_auctions SET status='cancelled' WHERE auction_id=?",(int(asset_id),))
-                await self.db._conn.commit()
-                await ctx.send(f"↩️ Auction **#{asset_id}** cancelled and asset returned.")
-            except Exception:
-                await self.db._conn.rollback()
-                raise
+            row, reason = await self.db.cancel_auction(ctx.guild.id, ctx.author.id, int(asset_id))
+            messages = {
+                "missing": "❌ Auction not found.",
+                "bid": "❌ An auction with bids cannot be cancelled.",
+            }
+            if row is None:
+                await ctx.send(messages.get(reason, "❌ Auction could not be cancelled."))
+                return
+            await ctx.send(f"↩️ Auction **#{asset_id}** cancelled and asset returned.")
             return
+
         await ctx.send("Usage: !auction create <item> <amount> <starting_bid> [minutes] or !auction cancel <id>")
 
     @commands.command(name="bid")
     @commands.cooldown(1, 2, commands.BucketType.user)
     async def bid(self, ctx, auction_id: int, amount: int):
-        if amount <= 0:
-            await ctx.send("❌ Bid must be positive.")
+        result, reason = await self.db.place_bid(ctx.guild.id, ctx.author.id, auction_id, amount)
+        if result is None:
+            messages = {
+                "invalid": "❌ Bid must be positive.",
+                "missing": "❌ Auction not found.",
+                "ended": "⏰ That auction has ended.",
+                "self": "❌ You can't bid on your own auction.",
+                "raise": "❌ Your new bid must be higher.",
+                "low": "❌ Your bid must be at least the current bid.",
+                "balance": "💸 You don't have enough coins.",
+            }
+            await ctx.send(messages.get(reason, "❌ Bid could not be placed."))
             return
-        await self.db._conn.execute("BEGIN IMMEDIATE")
-        try:
-            cur = await self.db._conn.execute("SELECT * FROM economy_auctions WHERE auction_id=? AND guild_id=? AND status='open'",(auction_id,str(ctx.guild.id)))
-            row = await cur.fetchone()
-            if not row:
-                await self.db._conn.rollback()
-                await ctx.send("❌ Auction not found.")
-                return
-            if float(row["ends_at"]) <= time.time():
-                await self.db._conn.rollback()
-                await ctx.send("⏰ That auction has ended. Use !auctionend <id>.")
-                return
-            if row["seller_id"] == str(ctx.author.id):
-                await self.db._conn.rollback()
-                await ctx.send("❌ You can't bid on your own auction.")
-                return
-            current = int(row["highest_bid"])
-            previous = row["highest_bidder_id"]
-            if previous == str(ctx.author.id):
-                delta = amount - current
-                if delta <= 0:
-                    await self.db._conn.rollback()
-                    await ctx.send("❌ Your new bid must be higher.")
-                    return
-            else:
-                if amount < current:
-                    await self.db._conn.rollback()
-                    await ctx.send("❌ Your bid must exceed the current bid.")
-                    return
-                delta = amount
-            cur = await self.db._conn.execute("UPDATE users SET balance=balance-? WHERE guild_id=? AND user_id=? AND balance>=?",(delta,str(ctx.guild.id),str(ctx.author.id),delta))
-            if cur.rowcount != 1:
-                await self.db._conn.rollback()
-                await ctx.send("💸 You don't have enough coins.")
-                return
-            if previous and previous != str(ctx.author.id):
-                await self.db._conn.execute("UPDATE users SET balance=balance+? WHERE guild_id=? AND user_id=?",(current,str(ctx.guild.id),previous))
-            await self.db._conn.execute("UPDATE economy_auctions SET highest_bid=?,highest_bidder_id=? WHERE auction_id=?",(amount,str(ctx.author.id),auction_id))
-            await self.db._conn.commit()
-            await self.db.record_economy_activity(ctx.guild.id, ctx.author.id, spent=delta)
-            await ctx.send(f"🔨 Bid placed: **{amount:,} coins** on auction **#{auction_id}**.")
-        except Exception:
-            await self.db._conn.rollback()
-            raise
+        await self.db.record_economy_activity(ctx.guild.id, ctx.author.id, spent=int(result["delta"]))
+        await ctx.send(f"🔨 Bid placed: **{amount:,} coins** on auction **#{auction_id}**.")
 
     @commands.command(name="auctionend")
     async def auctionend(self, ctx, auction_id: int):
-        await self.db._conn.execute("BEGIN IMMEDIATE")
-        try:
-            cur = await self.db._conn.execute("SELECT * FROM economy_auctions WHERE auction_id=? AND guild_id=? AND status='open'",(auction_id,str(ctx.guild.id)))
-            row = await cur.fetchone()
-            if not row:
-                await self.db._conn.rollback()
-                await ctx.send("❌ Auction not found.")
-                return
-            if float(row["ends_at"]) > time.time():
-                await self.db._conn.rollback()
-                await ctx.send("⏳ That auction is still active.")
-                return
-            winner = row["highest_bidder_id"]
-            if winner:
-                await self.db._conn.execute("UPDATE users SET balance=balance+? WHERE guild_id=? AND user_id=?",(int(row["highest_bid"]),str(ctx.guild.id),str(row["seller_id"])))
-                await self.db._conn.execute("INSERT INTO inventory(guild_id,user_id,item_id,amount) VALUES(?,?,?,?) ON CONFLICT(guild_id,user_id,item_id) DO UPDATE SET amount=amount+excluded.amount",(str(ctx.guild.id),str(winner),row["item_id"],int(row["amount"])))
-                result = f"Winner: <@{winner}> for **{int(row['highest_bid']):,} coins**."
-            else:
-                await self.db._conn.execute("INSERT INTO inventory(guild_id,user_id,item_id,amount) VALUES(?,?,?,?) ON CONFLICT(guild_id,user_id,item_id) DO UPDATE SET amount=amount+excluded.amount",(str(ctx.guild.id),str(row["seller_id"]),row["item_id"],int(row["amount"])))
-                result = "No bids — the asset was returned."
-            await self.db._conn.execute("UPDATE economy_auctions SET status='ended' WHERE auction_id=?",(auction_id,))
-            await self.db._conn.commit()
-            if winner:
-                await self.db.record_economy_activity(ctx.guild.id,row["seller_id"],earned=int(row["highest_bid"]))
-            await ctx.send(f"🏁 Auction **#{auction_id}** ended. {result}")
-        except Exception:
-            await self.db._conn.rollback()
-            raise
+        row, reason = await self.db.settle_auction(ctx.guild.id, auction_id)
+        if row is None:
+            messages = {
+                "missing": "❌ Auction not found.",
+                "active": "⏳ That auction is still active.",
+            }
+            await ctx.send(messages.get(reason, "❌ Auction could not be settled."))
+            return
+        winner = row["highest_bidder_id"]
+        if winner:
+            await self.db.record_economy_activity(
+                ctx.guild.id, row["seller_id"], earned=int(row["highest_bid"])
+            )
+            result = f"Winner: <@{winner}> for **{int(row['highest_bid']):,} coins**."
+        else:
+            result = "No bids — the asset was returned."
+        await ctx.send(f"🏁 Auction **#{auction_id}** ended. {result}")
 
     @commands.command(name="pay", aliases=["give"])
     @commands.cooldown(1, 5, commands.BucketType.user)
