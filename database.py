@@ -67,6 +67,16 @@ CREATE TABLE IF NOT EXISTS game_stats (
     PRIMARY KEY (guild_id, user_id, game_id)
 );
 
+CREATE TABLE IF NOT EXISTS arcade_daily (
+    guild_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    day_key TEXT NOT NULL,
+    challenge_id TEXT NOT NULL,
+    progress INTEGER NOT NULL DEFAULT 0,
+    claimed INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (guild_id, user_id, day_key)
+);
+
 CREATE TABLE IF NOT EXISTS inventory (
     guild_id TEXT NOT NULL,
     user_id TEXT NOT NULL,
@@ -466,6 +476,70 @@ class Database:
             (str(guild_id),str(game_id),int(limit))
         )
         return [dict(r) for r in await cur.fetchall()]
+
+    # ------------------------------------------------------------
+    # ARCADE DAILY CHALLENGES
+    # ------------------------------------------------------------
+
+    ARCADE_DAILY = (
+        ("play3", "Play 3 recorded arcade games.", 3),
+        ("win2", "Win 2 recorded arcade games.", 2),
+        ("play5", "Play 5 recorded arcade games.", 5),
+        ("pvpwin1", "Win 1 PvP arcade game.", 1),
+    )
+
+    async def get_arcade_daily(self, guild_id, user_id, day_key):
+        import datetime
+        index = int(day_key.replace("-", "")) % len(self.ARCADE_DAILY)
+        challenge_id, description, target = self.ARCADE_DAILY[index]
+        await self._conn.execute(
+            "INSERT OR IGNORE INTO arcade_daily "
+            "(guild_id,user_id,day_key,challenge_id,progress,claimed) VALUES (?,?,?,?,0,0)",
+            (str(guild_id), str(user_id), str(day_key), challenge_id)
+        )
+        await self._conn.commit()
+        cur = await self._conn.execute(
+            "SELECT * FROM arcade_daily WHERE guild_id=? AND user_id=? AND day_key=?",
+            (str(guild_id), str(user_id), str(day_key))
+        )
+        row = await cur.fetchone()
+        data = dict(row)
+        data["description"] = description
+        data["target"] = target
+        return data
+
+    async def advance_arcade_daily(self, guild_id, user_id, day_key, result, game_id):
+        data = await self.get_arcade_daily(guild_id, user_id, day_key)
+        is_pvp = game_id in {"ttt", "connect4", "dicebattle"}
+        increment = (
+            1 if data["challenge_id"] in {"play3", "play5"} else
+            1 if data["challenge_id"] == "win2" and result == "win" else
+            1 if data["challenge_id"] == "pvpwin1" and result == "win" and is_pvp else 0
+        )
+        if increment:
+            await self._conn.execute(
+                "UPDATE arcade_daily SET progress=MIN(progress+?, ?) "
+                "WHERE guild_id=? AND user_id=? AND day_key=? AND claimed=0",
+                (increment, int(data["target"]), str(guild_id), str(user_id), str(day_key))
+            )
+            await self._conn.commit()
+
+    async def claim_arcade_daily(self, guild_id, user_id, day_key):
+        data = await self.get_arcade_daily(guild_id, user_id, day_key)
+        if data["claimed"]:
+            return False, "claimed", data
+        if int(data["progress"]) < int(data["target"]):
+            return False, "incomplete", data
+        await self._conn.execute(
+            "UPDATE arcade_daily SET claimed=1 WHERE guild_id=? AND user_id=? AND day_key=? AND claimed=0",
+            (str(guild_id), str(user_id), str(day_key))
+        )
+        await self._conn.commit()
+        coins = 500
+        xp = 150
+        await self.add_balance(guild_id, user_id, coins)
+        await self.add_xp(guild_id, user_id, xp)
+        return True, "claimed", data
 
     # ECLIPSE PROFILE / BANK / MUSIC / WORLD
     # ------------------------------------------------------------
