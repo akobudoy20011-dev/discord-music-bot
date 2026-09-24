@@ -1071,6 +1071,127 @@ class Database:
         except Exception:
             await self._conn.rollback(); raise
 
+    async def create_auction(self, guild_id, seller_id, item_id, amount, starting_bid, minutes, asset_type="item"):
+        guild_id, seller_id, item_id = str(guild_id), str(seller_id), str(item_id)
+        amount, starting_bid, minutes = int(amount), int(starting_bid), int(minutes)
+        if amount <= 0 or starting_bid <= 0:
+            return None, "invalid"
+        minutes = min(7 * 24 * 60, max(1, minutes))
+        await self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            cur = await self._conn.execute(
+                "UPDATE inventory SET amount=amount-? WHERE guild_id=? AND user_id=? AND item_id=? AND amount>=?",
+                (amount,guild_id,seller_id,item_id,amount),
+            )
+            if cur.rowcount != 1:
+                await self._conn.rollback()
+                return None, "item"
+            await self._conn.execute(
+                "DELETE FROM inventory WHERE guild_id=? AND user_id=? AND item_id=? AND amount<=0",
+                (guild_id,seller_id,item_id),
+            )
+            now=time.time()
+            cur=await self._conn.execute(
+                "INSERT INTO economy_auctions(guild_id,seller_id,item_id,amount,highest_bid,highest_bidder_id,created_at,ends_at,status,asset_type) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (guild_id,seller_id,item_id,amount,starting_bid,None,now,now+minutes*60,"open",asset_type),
+            )
+            await self._conn.commit()
+            return int(cur.lastrowid), "ok"
+        except Exception:
+            await self._conn.rollback()
+            raise
+
+    async def list_auctions(self, guild_id, limit=15):
+        await self.settle_expired_auctions(guild_id)
+        cur=await self._conn.execute(
+            "SELECT * FROM economy_auctions WHERE guild_id=? AND status='open' ORDER BY auction_id DESC LIMIT ?",
+            (str(guild_id),int(limit)),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def cancel_auction(self, guild_id, seller_id, auction_id):
+        guild_id,seller_id=str(guild_id),str(seller_id)
+        await self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            cur=await self._conn.execute(
+                "SELECT * FROM economy_auctions WHERE auction_id=? AND guild_id=? AND seller_id=? AND status='open'",
+                (int(auction_id),guild_id,seller_id),
+            )
+            row=await cur.fetchone()
+            if not row:
+                await self._conn.rollback(); return None,"missing"
+            if row["highest_bidder_id"]:
+                await self._conn.rollback(); return None,"bid"
+            await self._conn.execute(
+                "INSERT INTO inventory(guild_id,user_id,item_id,amount) VALUES(?,?,?,?) ON CONFLICT(guild_id,user_id,item_id) DO UPDATE SET amount=amount+excluded.amount",
+                (guild_id,seller_id,row["item_id"],int(row["amount"])),
+            )
+            await self._conn.execute("UPDATE economy_auctions SET status='cancelled' WHERE auction_id=?",(int(auction_id),))
+            await self._conn.commit()
+            return dict(row),"ok"
+        except Exception:
+            await self._conn.rollback(); raise
+
+    async def place_bid(self, guild_id, bidder_id, auction_id, amount):
+        guild_id,bidder_id=str(guild_id),str(bidder_id)
+        amount=int(amount)
+        if amount<=0: return None,"invalid"
+        await self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            cur=await self._conn.execute(
+                "SELECT * FROM economy_auctions WHERE auction_id=? AND guild_id=? AND status='open'",
+                (int(auction_id),guild_id),
+            )
+            row=await cur.fetchone()
+            if not row: await self._conn.rollback(); return None,"missing"
+            now=time.time()
+            if float(row["ends_at"])<=now: await self._conn.rollback(); return None,"ended"
+            if row["seller_id"]==bidder_id: await self._conn.rollback(); return None,"self"
+            current=int(row["highest_bid"]); previous=row["highest_bidder_id"]
+            delta=amount-current if previous==bidder_id else amount
+            if previous==bidder_id and delta<=0: await self._conn.rollback(); return None,"raise"
+            if previous!=bidder_id and amount<current: await self._conn.rollback(); return None,"low"
+            await self._conn.execute("INSERT OR IGNORE INTO users(guild_id,user_id,balance) VALUES(?,?,?)",(guild_id,bidder_id,STARTING_BALANCE))
+            cur=await self._conn.execute("UPDATE users SET balance=balance-? WHERE guild_id=? AND user_id=? AND balance>=?",(delta,guild_id,bidder_id,delta))
+            if cur.rowcount!=1: await self._conn.rollback(); return None,"balance"
+            if previous and previous!=bidder_id:
+                await self._conn.execute("UPDATE users SET balance=balance+? WHERE guild_id=? AND user_id=?",(current,guild_id,previous))
+            await self._conn.execute("UPDATE economy_auctions SET highest_bid=?,highest_bidder_id=? WHERE auction_id=?",(amount,bidder_id,int(auction_id)))
+            await self._conn.commit()
+            return {"auction":dict(row),"delta":delta,"previous":previous,"amount":amount},"ok"
+        except Exception:
+            await self._conn.rollback(); raise
+
+    async def settle_auction(self, guild_id, auction_id, force=False):
+        guild_id=str(guild_id)
+        await self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            cur=await self._conn.execute("SELECT * FROM economy_auctions WHERE auction_id=? AND guild_id=? AND status='open'",(int(auction_id),guild_id))
+            row=await cur.fetchone()
+            if not row: await self._conn.rollback(); return None,"missing"
+            if not force and float(row["ends_at"])>time.time(): await self._conn.rollback(); return None,"active"
+            winner=row["highest_bidder_id"]
+            if winner:
+                await self._conn.execute("UPDATE users SET balance=balance+? WHERE guild_id=? AND user_id=?",(int(row["highest_bid"]),guild_id,row["seller_id"]))
+                await self._conn.execute("INSERT INTO inventory(guild_id,user_id,item_id,amount) VALUES(?,?,?,?) ON CONFLICT(guild_id,user_id,item_id) DO UPDATE SET amount=amount+excluded.amount",(guild_id,winner,row["item_id"],int(row["amount"])))
+            else:
+                await self._conn.execute("INSERT INTO inventory(guild_id,user_id,item_id,amount) VALUES(?,?,?,?) ON CONFLICT(guild_id,user_id,item_id) DO UPDATE SET amount=amount+excluded.amount",(guild_id,row["seller_id"],row["item_id"],int(row["amount"])))
+            await self._conn.execute("UPDATE economy_auctions SET status='ended' WHERE auction_id=?",(int(auction_id),))
+            await self._conn.commit()
+            return dict(row),"ok"
+        except Exception:
+            await self._conn.rollback(); raise
+
+    async def settle_expired_auctions(self, guild_id):
+        guild_id=str(guild_id)
+        cur=await self._conn.execute("SELECT auction_id FROM economy_auctions WHERE guild_id=? AND status='open' AND ends_at<=?",(guild_id,time.time()))
+        ids=[int(r["auction_id"]) for r in await cur.fetchall()]
+        count=0
+        for auction_id in ids:
+            row,reason=await self.settle_auction(guild_id,auction_id)
+            if row is not None and reason=="ok": count+=1
+        return count
+
     async def get_collectibles(self, guild_id, user_id):
         cur=await self._conn.execute("SELECT collectible_id,amount FROM economy_collectibles WHERE guild_id=? AND user_id=? AND amount>0 ORDER BY amount DESC,collectible_id",(str(guild_id),str(user_id)))
         return [dict(r) for r in await cur.fetchall()]
