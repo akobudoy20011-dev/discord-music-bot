@@ -2015,7 +2015,8 @@ class Database:
         guild_id, user_id = str(guild_id), str(user_id)
         allowed = {
             "enemy_id", "enemy_name", "enemy_hp", "enemy_max_hp",
-            "enemy_attack", "turn", "guarding", "created_at"
+            "enemy_attack", "turn", "guarding", "created_at",
+            "effects", "special_cooldowns"
         }
         fields = {k: v for k, v in fields.items() if k in allowed}
         values = (
@@ -2029,17 +2030,20 @@ class Database:
             int(fields.get("turn", 1)),
             int(fields.get("guarding", 0)),
             float(fields.get("created_at", time.time())),
+            str(fields.get("effects", "{}")),
+            str(fields.get("special_cooldowns", "{}")),
         )
         sql = (
             "INSERT INTO rpg_battles "
             "(guild_id,user_id,enemy_id,enemy_name,enemy_hp,enemy_max_hp,"
-            "enemy_attack,turn,guarding,created_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?) "
+            "enemy_attack,turn,guarding,created_at,effects,special_cooldowns) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?) "
             "ON CONFLICT(guild_id,user_id) DO UPDATE SET "
             "enemy_id=excluded.enemy_id, enemy_name=excluded.enemy_name, "
             "enemy_hp=excluded.enemy_hp, enemy_max_hp=excluded.enemy_max_hp, "
             "enemy_attack=excluded.enemy_attack, turn=excluded.turn, "
-            "guarding=excluded.guarding, created_at=excluded.created_at"
+            "guarding=excluded.guarding, created_at=excluded.created_at, "
+            "effects=excluded.effects, special_cooldowns=excluded.special_cooldowns"
         )
         await self._conn.execute(sql, values)
         await self._conn.commit()
@@ -2168,6 +2172,31 @@ class Database:
         rows = await self.get_rpg_materials(guild_id, user_id)
         have = {r["material_id"]: int(r["amount"]) for r in rows}
         return all(have.get(mid, 0) >= int(amount) for mid, amount in costs.items())
+
+    async def get_rpg_specials(self, guild_id, user_id):
+        cur = await self._conn.execute(
+            "SELECT special_id FROM rpg_specials "
+            "WHERE guild_id=? AND user_id=? AND unlocked=1 ORDER BY special_id",
+            (str(guild_id), str(user_id))
+        )
+        return [r["special_id"] for r in await cur.fetchall()]
+
+    async def unlock_rpg_special(self, guild_id, user_id, special_id, source="level"):
+        await self._conn.execute(
+            "INSERT INTO rpg_specials "
+            "(guild_id,user_id,special_id,unlocked,unlocked_at,source) VALUES (?,?,?,?,?,?) "
+            "ON CONFLICT(guild_id,user_id,special_id) DO UPDATE SET unlocked=1",
+            (str(guild_id), str(user_id), str(special_id), 1, time.time(), str(source))
+        )
+        await self._conn.commit()
+
+    async def has_rpg_special(self, guild_id, user_id, special_id):
+        cur = await self._conn.execute(
+            "SELECT 1 FROM rpg_specials "
+            "WHERE guild_id=? AND user_id=? AND special_id=? AND unlocked=1",
+            (str(guild_id), str(user_id), str(special_id))
+        )
+        return await cur.fetchone() is not None
 
     async def clear_warnings(self, guild_id, user_id):
         await self._conn.execute(
