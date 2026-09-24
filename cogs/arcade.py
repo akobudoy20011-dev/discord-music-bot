@@ -13,7 +13,7 @@ import time
 import discord
 from discord.ext import commands
 
-from constants import COLOR_GOLD, COLOR_PRIMARY
+from constants import COLOR_GOLD, COLOR_PRIMARY, check_achievements, rank_title
 
 
 MAX_BET = 1_000_000
@@ -39,10 +39,34 @@ class Arcade(commands.Cog):
         await self.db.add_balance(guild_id, user_id, -amount)
         return True
 
-    async def finish(self, guild_id, user_id, game_id, result, wager=0, net=0):
+    async def finish(self, guild_id, user_id, game_id, result, wager=0, net=0, ctx=None):
         await self.db.record_game(guild_id, user_id, game_id, result, wager, net)
+
+        xp_reward = {"win": 60, "tie": 30, "loss": 20}.get(result, 0)
+        old_level, new_level, _ = await self.db.add_xp(
+            guild_id, user_id, xp_reward
+        )
+
         day_key = time.strftime("%Y-%m-%d", time.gmtime())
         await self.db.advance_arcade_daily(guild_id, user_id, day_key, result)
+
+        if ctx is not None:
+            user = await self.db.get_user(guild_id, user_id)
+
+            class _FakeCtx:
+                pass
+
+            fake = _FakeCtx()
+            fake.guild = ctx.guild
+            fake.channel = ctx.channel
+            fake.author = ctx.guild.get_member(int(user_id)) or ctx.author
+
+            await check_achievements(self.db, fake, fake.author, user)
+
+            if new_level > old_level:
+                await ctx.channel.send(
+                    f"🎮 **Arcade level up!** <@{user_id}> reached **Level {new_level}** — *{rank_title(new_level)}*"
+                )
 
     @commands.command(name="arcade")
     async def arcade(self, ctx):
@@ -53,6 +77,28 @@ class Arcade(commands.Cog):
             "📜 **Daily** — !dailies · !claimdaily\n\n"
             f"PvP wagers cap at **{MAX_BET:,} coins**."
         ))
+
+    @commands.command(name="arcadeprofile", aliases=["ap", "arcadeid"])
+    async def arcadeprofile(self, ctx, member: discord.Member = None):
+        member = member or ctx.author
+        user = await self.db.get_user(ctx.guild.id, member.id)
+        wins = int(user.get("arcade_wins", 0))
+        plays = int(user.get("arcade_plays", 0))
+        losses = max(0, plays - wins)
+        wagered = int(user.get("arcade_wagered", 0))
+        net = int(user.get("arcade_net", 0))
+        best = int(user.get("arcade_best_streak", 0))
+        winrate = (wins / plays * 100) if plays else 0
+        embed = self.embed(
+            f"🎮 {member.display_name} · ARCADE IDENTITY",
+            f"**{plays:,}** games · **{wins:,}** wins · **{losses:,}** losses\\n"
+            f"Win rate: **{winrate:.1f}%** · Best streak: **{best}**\\n"
+            f"Wagered: **{wagered:,}** · Net: **{net:+,}** coins\\n\\n"
+            f"Arcade XP: **{user['xp']:,} / {user['level'] * 100:,}**\\n"
+            f"Level **{user['level']}** · *{rank_title(user['level'])}*"
+        )
+        embed.set_thumbnail(url=member.display_avatar.url)
+        await ctx.send(embed=embed)
 
     @commands.command(name="gamestats", aliases=["gstats"])
     async def gamestats(self, ctx, member: discord.Member = None):
@@ -155,16 +201,16 @@ class Arcade(commands.Cog):
             if bet:
                 await self.db.add_balance(ctx.guild.id, ctx.author.id, bet)
                 await self.db.add_balance(ctx.guild.id, opponent.id, bet)
-            await self.finish(ctx.guild.id, ctx.author.id, "dicebattle", "tie", bet, 0)
-            await self.finish(ctx.guild.id, opponent.id, "dicebattle", "tie", bet, 0)
+            await self.finish(ctx.guild.id, ctx.author.id, "dicebattle", "tie", bet, 0, ctx)
+            await self.finish(ctx.guild.id, opponent.id, "dicebattle", "tie", bet, 0, ctx)
             text = f"🎲 {ctx.author.mention}: **{a}**\n🎲 {opponent.mention}: **{b}**\n\n👔 **DRAW.**"
         else:
             winner = ctx.author if a > b else opponent
             loser = opponent if winner.id == ctx.author.id else ctx.author
             if bet:
                 await self.db.add_balance(ctx.guild.id, winner.id, bet * 2)
-            await self.finish(ctx.guild.id, winner.id, "dicebattle", "win", bet, bet)
-            await self.finish(ctx.guild.id, loser.id, "dicebattle", "loss", bet, -bet)
+            await self.finish(ctx.guild.id, winner.id, "dicebattle", "win", bet, bet, ctx)
+            await self.finish(ctx.guild.id, loser.id, "dicebattle", "loss", bet, -bet, ctx)
             text = f"🎲 {ctx.author.mention}: **{a}**\n🎲 {opponent.mention}: **{b}**\n\n🏆 **{winner.display_name} wins.**"
         await ctx.send(embed=self.embed("🎲 DICE BATTLE", text))
 
@@ -224,7 +270,7 @@ class Arcade(commands.Cog):
                                     for p in players:
                                         await cog.db.add_balance(ctx.guild.id, p.id, bet)
                                 for p in players:
-                                    await cog.finish(ctx.guild.id, p.id, "ttt", "tie", bet, 0)
+                                    await cog.finish(ctx.guild.id, p.id, "ttt", "tie", bet, 0, ctx)
                                 text = "👔 **DRAW.** Bets returned." if bet else "👔 **DRAW.**"
                                 color = COLOR_GOLD
                             else:
@@ -232,8 +278,8 @@ class Arcade(commands.Cog):
                                 loser_user = players[1 - winner]
                                 if bet:
                                     await cog.db.add_balance(ctx.guild.id, winner_user.id, bet * 2)
-                                await cog.finish(ctx.guild.id, winner_user.id, "ttt", "win", bet, bet)
-                                await cog.finish(ctx.guild.id, loser_user.id, "ttt", "loss", bet, -bet)
+                                await cog.finish(ctx.guild.id, winner_user.id, "ttt", "win", bet, bet, ctx)
+                                await cog.finish(ctx.guild.id, loser_user.id, "ttt", "loss", bet, -bet, ctx)
                                 text = f"🏆 **{winner_user.display_name} wins.**"
                                 color = discord.Color.green()
                             await interaction.response.edit_message(
@@ -351,7 +397,7 @@ class Arcade(commands.Cog):
                                 for p in players:
                                     await cog.db.add_balance(ctx.guild.id, p.id, bet)
                             for p in players:
-                                await cog.finish(ctx.guild.id, p.id, "connect4", "tie", bet, 0)
+                                await cog.finish(ctx.guild.id, p.id, "connect4", "tie", bet, 0, ctx)
                             text = "👔 **DRAW.** Bets returned." if bet else "👔 **DRAW.**"
                             color = COLOR_GOLD
                         else:
@@ -359,8 +405,8 @@ class Arcade(commands.Cog):
                             loser_user = players[1 - winner]
                             if bet:
                                 await cog.db.add_balance(ctx.guild.id, winner_user.id, bet * 2)
-                            await cog.finish(ctx.guild.id, winner_user.id, "connect4", "win", bet, bet)
-                            await cog.finish(ctx.guild.id, loser_user.id, "connect4", "loss", bet, -bet)
+                            await cog.finish(ctx.guild.id, winner_user.id, "connect4", "win", bet, bet, ctx)
+                            await cog.finish(ctx.guild.id, loser_user.id, "connect4", "loss", bet, -bet, ctx)
                             text = f"🏆 **{winner_user.display_name} wins.**"
                             color = discord.Color.green()
                         for child in view.children:
