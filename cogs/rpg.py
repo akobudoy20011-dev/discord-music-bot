@@ -8,6 +8,11 @@ from rpg.equipment import grant_starter_gear, inventory
 from rpg.skills import get_skills
 from rpg.skills_service import ensure_class_skills, unlock_skill
 from rpg.combat import start as start_battle, attack as combat_attack, flee as flee_battle
+from rpg.quests import ensure_quests, list_quests, claim as claim_quest
+from rpg.world import list_regions, get_region, list_events, get_event
+from rpg.exploration import world_status, travel, explore
+from rpg.towns import town_status, inn, shrine, alchemist, buy
+from rpg.items import get_item
 
 
 def xp_bar(current, maximum, length=14):
@@ -25,6 +30,7 @@ class RPG(commands.Cog):
     async def profile(self,ctx):
         player=await get_player(self.db,ctx.guild.id,ctx.author.id); cls=get_class(player["class_key"]); need=max(1,player['level']*100)
         embed=discord.Embed(title=f"♡ ECLIPSE · {cls['icon']} {cls['name']} ♡",description=f"**{ctx.author.display_name}**\nLevel **{player['level']}** · {cls['description']}\n\n{xp_bar(player['xp'],need)} **{player['xp']}/{need} XP**",color=COLOR_PRIMARY)
+        embed.add_field(name="♡ REALM",value=f"{get_region(player.get('region'))['icon']} {get_region(player.get('region'))['name']}" if get_region(player.get("region")) else "Unknown",inline=False)
         embed.add_field(name="♡ VITALS",value=f"❤️ {player['hp']}/{player['max_hp']} HP\n💠 {player['mp']}/{player['max_mp']} MP\n💰 {player['gold']:,} RPG gold",inline=True)
         embed.add_field(name="♡ STATS",value=f"⚔️ {player['strength']} STR\n🛡️ {player['defense']} DEF\n🔮 {player['magic']} MAG\n🪽 {player['agility']} AGI",inline=True)
         embed.set_thumbnail(url=ctx.author.display_avatar.url); embed.set_footer(text="୨୧ !rpg class · !rpg adventure · !rpg rest"); await ctx.send(embed=embed)
@@ -40,7 +46,7 @@ class RPG(commands.Cog):
         await ensure_class_skills(self.db, ctx.guild.id, ctx.author.id, key.lower())
         await ctx.send(f"{chosen['icon']} **{ctx.author.display_name}** is now a **{chosen['name']}**.\n{chosen['description']}\n\n🎒 Starter gear and your first skill have been unlocked.")
 
-    @rpg.command(name="adventure",aliases=["explore","hunt"])
+    @rpg.command(name="adventure",aliases=["hunt"])
     @commands.cooldown(1,ADVENTURE_COOLDOWN,commands.BucketType.user)
     async def adventure_command(self,ctx):
         result=await adventure(self.db,ctx.guild.id,ctx.author.id)
@@ -49,6 +55,133 @@ class RPG(commands.Cog):
         level_text="\n✦ **LEVEL UP**" if result["new_level"]>result["old_level"] else ""
         await ctx.send(embed=discord.Embed(title=f"🌙 {result['event']}",description=f"{result['narrative']}\n\n**Rewards:** {reward} · +{result['xp']} XP{level_text}",color=COLOR_GOLD))
 
+    @rpg.command(name="world", aliases=["map", "realm"])
+    async def world_command(self, ctx):
+        world = await world_status(self.db, ctx.guild.id)
+        player = await get_player(self.db, ctx.guild.id, ctx.author.id)
+        current = get_region(player.get("region"))
+        lines = []
+        for rid, region in list_regions():
+            state = "📍 HERE" if rid == player.get("region") else f"Danger {region['danger']}/4"
+            lines.append(f"{region['icon']} **{region['name']}** · {state}\\n{region['description']}")
+        active = get_event(world["active_event"]) if world.get("active_event") else None
+        event_line = f"\\n{active['icon']} **{active['name']}** · active" if active else ""
+        embed = discord.Embed(title="♡ ECLIPSE · THE VEILED REALMS ♡", description=f"**World Day {world['day']}** · {world['weather'].title()} · Instability {world['instability']}/10{event_line}\\n\\n" + "\\n\\n".join(lines), color=COLOR_PRIMARY)
+        embed.set_footer(text=f"୨୧ Current realm: {current['name'] if current else 'Unknown'} · !rpg travel <region>")
+        await ctx.send(embed=embed)
+
+    @rpg.command(name="travel", aliases=["go", "journey"])
+    async def travel_command(self, ctx, region_id: str = None):
+        if not region_id:
+            lines = [f"{r['icon']} {rid} — **{r['name']}** · danger {r['danger']}/4" for rid, r in list_regions()]
+            await ctx.send("🗺️ **Choose a realm:**\\n" + "\\n".join(lines))
+            return
+        result = await travel(self.db, ctx.guild.id, ctx.author.id, region_id)
+        if not result["ok"]:
+            await ctx.send(f"❌ {result['message']}")
+            return
+        region = result["region"]
+        await ctx.send(f"🪽 **THE ROAD OPENS**\\n\\n{region['icon']} **{region['name']}**\\n{region['description']}\\n\\nTravel time: **{result['duration']:.0f}s**. Your journey has begun.")
+
+    @rpg.command(name="explore", aliases=["scout", "search"])
+    async def explore_command(self, ctx):
+        result = await explore(self.db, ctx.guild.id, ctx.author.id)
+        if not result["ok"]:
+            await ctx.send(f"❌ {result['message']}")
+            return
+        region = result["region"]
+        if result["kind"] == "world_event":
+            event = result["event"]
+            await ctx.send(f"{event['icon']} **WORLD EVENT · {event['name']}**\\n\\n{event['description']}\\n\\nThe realm itself has changed.")
+            return
+
+        if result["kind"] == "guardian":
+            enemy = result["enemy"]
+            battle = await start_battle(self.db, ctx.guild.id, ctx.author.id, enemy_override=enemy)
+            if not battle["ok"]:
+                await ctx.send(f"⚔️ **{enemy['name']}** is already confronting you. Use !rpg attack.")
+                return
+            await ctx.send(f"{region['icon']} **{region['name']}**\\n\\n👑 **REALM GUARDIAN**\\n**{enemy['name']}** · ❤️ {enemy['hp']}/{enemy['hp']} HP\\nDefeat it to change the history of this realm.")
+            return
+
+        if result["kind"] == "discovery":
+            discovery = result["discovery"]
+            level_text = "\\n✦ **LEVEL UP**" if result["new_level"] > result["old_level"] else ""
+            await ctx.send(f"{discovery['icon']} **DISCOVERY · {discovery['name']}**\\n\\n{discovery['description']}\\n\\n**Found:** +{discovery['gold']:,} gold · +{discovery['xp']} XP{level_text}")
+            return
+
+        if result["kind"] == "enemy":
+            enemy = result["enemy"]
+            battle = await start_battle(self.db, ctx.guild.id, ctx.author.id, enemy_override=enemy)
+            if not battle["ok"]:
+                await ctx.send(f"⚔️ **{enemy['name']}** finds you before you can prepare. Use !rpg attack.")
+                return
+            await ctx.send(f"{region['icon']} **{region['name']}**\\n\\n⚔️ **AN ENCOUNTER**\\n**{enemy['name']}** · ❤️ {enemy['hp']}/{enemy['hp']} HP\\nThe realm has noticed you. Use !rpg attack, !rpg skill <id>, or !rpg flee.")
+            return
+        event = result["event"]
+        level_text = "\\n✦ **LEVEL UP**" if result["new_level"] > result["old_level"] else ""
+        await ctx.send(f"{region['icon']} **{region['name']}**\\n\\n{event['text']}\\n\\n**Found:** +{event['gold']:,} gold · +{event['xp']} XP{level_text}")
+    @rpg.command(name="discoveries", aliases=["codex", "lore"])
+    async def discoveries_command(self, ctx):
+        rows = await self.db.get_rpg_discoveries(ctx.guild.id, ctx.author.id)
+        found = {row["discovery_id"] for row in rows}
+        lines = []
+        from rpg.world import DISCOVERIES
+        for did, data in DISCOVERIES.items():
+            state = "✦ DISCOVERED" if did in found else "○ UNKNOWN"
+            lines.append(f"{state} {data['icon']} **{data['name']}** · {data['region']}")
+        await ctx.send(embed=discord.Embed(
+            title="♡ ECLIPSE · CODEX ♡",
+            description="\\n".join(lines),
+            color=COLOR_PRIMARY
+        ))
+
+    @rpg.command(name="town", aliases=["towns", "settlement"])
+    async def town_command(self, ctx, action: str = None, item_id: str = None):
+        if not action:
+            s = await town_status(self.db, ctx.guild.id, ctx.author.id)
+            if not s["ok"]:
+                await ctx.send(f"❌ {s['message']}")
+                return
+            t = s["town"]
+            services = "\n".join(f"• `{x}`" for x in t["services"])
+            await ctx.send(embed=discord.Embed(title=f"{t['icon']} ECLIPSE · {t['name']}", description=f"{t['description']}\n\n**Services**\n{services}\n\n`!rpg town shop` to browse the local merchant.", color=COLOR_PRIMARY))
+            return
+        action = action.lower()
+        if action in {"shop", "merchant", "buy"} and not item_id:
+            s = await town_status(self.db, ctx.guild.id, ctx.author.id)
+            if not s["ok"]:
+                await ctx.send(f"❌ {s['message']}")
+                return
+            lines = []
+            for iid, offer in s["town"]["merchant"].items():
+                item = get_item(iid)
+                lines.append(f"`{iid}` — **{item['name']}** · 💰 {offer['price']:,}")
+            await ctx.send(f"🛒 **{s['town']['name']} MERCHANT**\n\n" + "\n".join(lines) + "\n\nBuy with `!rpg town buy <item>`.")
+            return
+        if action in {"shop", "merchant", "buy"}:
+            result = await buy(self.db, ctx.guild.id, ctx.author.id, item_id)
+            if not result["ok"]:
+                await ctx.send(f"❌ {result['message']}")
+                return
+            await ctx.send(f"🛒 **PURCHASED** · {result['item']['icon']} **{result['item']['name']}**\nPaid **{result['price']:,} RPG gold**.")
+            return
+        handlers = {"inn": inn, "shrine": shrine, "alchemist": alchemist}
+        handler = handlers.get(action)
+        if handler is None:
+            await ctx.send("Use `!rpg town`, `!rpg town shop`, `!rpg town buy <item>`, `!rpg town inn`, `!rpg town shrine`, or `!rpg town alchemist`.")
+            return
+        result = await handler(self.db, ctx.guild.id, ctx.author.id)
+        if not result["ok"]:
+            await ctx.send(f"❌ {result['message']}")
+            return
+        if action == "inn":
+            await ctx.send(f"🛏️ **{result['town']['name']} INN**\nYou wake restored to full HP and MP. · **-{result['cost']} gold**")
+        elif action == "shrine":
+            level = "\n✦ **LEVEL UP**" if result["new_level"] > result["old_level"] else ""
+            await ctx.send(f"🕯️ **{result['town']['name']} SHRINE**\nA blessing settles over you. · **+{result['xp']} XP** · **-{result['cost']} gold**{level}")
+        else:
+            await ctx.send(f"⚗️ **{result['town']['name']} ALCHEMIST**\nYour MP has been restored. · **-{result['cost']} gold**")
     @rpg.command(name="rest",aliases=["heal"])
     async def rest_command(self,ctx):
         player=await rest(self.db,ctx.guild.id,ctx.author.id); await ctx.send(f"🪽 **{ctx.author.display_name}** rests beneath the ECLIPSE.\n❤️ HP restored to **{player['hp']}/{player['max_hp']}** · 💠 MP restored to **{player['mp']}/{player['max_mp']}**")
@@ -99,6 +232,30 @@ class RPG(commands.Cog):
         else:
             await ctx.send("There is no active battle.")
 
+    @rpg.command(name="quests", aliases=["quest"])
+    async def quests_command(self, ctx):
+        rows = await ensure_quests(self.db, ctx.guild.id, ctx.author.id)
+        by_id = {r["quest_id"]: r for r in rows}
+        lines = []
+        for qid, quest in list_quests():
+            row = by_id[qid]
+            status = "✓ COMPLETE" if row["completed"] else f"{row['progress']}/{quest['goal']}"
+            lines.append(f"**{quest['name']}** · {status}\n{quest['description']} · +{quest['xp']} XP · +{quest['gold']} gold")
+        await ctx.send(embed=discord.Embed(title="♡ ECLIPSE · QUESTS ♡", description="\n\n".join(lines), color=COLOR_PRIMARY))
+
+    @rpg.command(name="claim", aliases=["claimquest"])
+    async def claim_quest_command(self, ctx, quest_id: str = None):
+        if not quest_id:
+            await ctx.send("Use !rpg quests to see quest IDs, then !rpg claim <id>.")
+            return
+        result = await claim_quest(self.db, ctx.guild.id, ctx.author.id, quest_id)
+        if not result["ok"]:
+            await ctx.send(f"❌ {result['message']}")
+            return
+        q = result["quest"]
+        extra = "\n✦ **LEVEL UP**" if result["level_up"] else ""
+        item_text = f" · 🎁 `{q['item']}`" if q.get("item") else ""
+        await ctx.send(f"🏆 **{q['name']}** reward claimed · +{q['xp']} XP · +{q['gold']} gold{item_text}{extra}")
     @rpg.command(name="inventory", aliases=["inv", "gear"])
     async def inventory_command(self, ctx):
         items = await inventory(self.db, ctx.guild.id, ctx.author.id)

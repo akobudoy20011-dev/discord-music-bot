@@ -13,7 +13,7 @@ class Help(commands.Cog):
         embed.add_field(name="🎀 CORE", value="!rank · !profile · !stats · !achievements", inline=False)
         embed.add_field(name="💗 ECONOMY", value="!balance · !daily · !work · !pay · !shop · !buy · !inventory", inline=False)
         embed.add_field(name="🎮 GAMES", value="!games · !trivia · !rps · !roll · !guess · !coinflip · !slots · !blackjack · !8ball · !chamber", inline=False)
-        embed.add_field(name="⚔️ RPG", value="!rpg · !rpg class · !rpg profile · !rpg adventure · !rpg rest", inline=False)
+        embed.add_field(name="⚔️ RPG", value="!rpg · !rpg profile · !rpg class · !rpg world · !rpg travel · !rpg explore · !rpg discoveries · !rpg town · !rpg adventure · !rpg battle · !rpg quests", inline=False)
         embed.add_field(name="🎵 MUSIC", value="!play · !queue · !nowplaying · !pause · !resume · !skip · !stop · !volume · !loop · !shuffle", inline=False)
         embed.add_field(name="🛡️ STAFF", value="!kick · !ban · !mute · !warn · !clear · !config", inline=False)
         embed.add_field(name="🤖 AI", value="!chat · !ask · !ai", inline=False)
