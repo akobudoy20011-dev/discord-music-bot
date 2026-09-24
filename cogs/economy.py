@@ -473,7 +473,7 @@ class Economy(commands.Cog):
                     await ctx.send("❌ Your new bid must be higher.")
                     return
             else:
-                if amount <= current:
+                if amount < current:
                     await self.db._conn.rollback()
                     await ctx.send("❌ Your bid must exceed the current bid.")
                     return
