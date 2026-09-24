@@ -698,9 +698,9 @@ class Music(commands.Cog):
             return
         next_query = None
         requester_name = None
-        if state.loop_mode == "single" and state.current:
-            next_query = state.current["query"]
-            requester_name = state.current["requester_name"]
+        if state.loop_mode == "single" and state.last_track:
+            next_query = state.last_track["query"]
+            requester_name = state.last_track["requester_name"]
         elif state.queue:
             item = state.queue.popleft()
             next_query = item["query"]
