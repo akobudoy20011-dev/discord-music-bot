@@ -354,13 +354,24 @@ class Games(commands.Cog):
             description=(
                 "Test your luck and skills to earn coins!\n\n"
                 "🧠 `!trivia` — Answer questions for bonus coins.\n"
-                "🪨 `!rps [choice] [bet]` — Play Rock, Paper, Scissors.\n"
-                "🎲 `!roll <bet>` — Roll a die (55+ wins 2x).\n"
-                "🔢 `!guess <1-10> <bet>` — Guess secret number (5x payout!).\n"
-                "🪙 `!coinflip <heads/tails> <bet>` — Flip a coin (2x payout).\n"
-                "🎰 `!slots <bet>` — Spin the slot machine reels.\n"
-                "🃏 `!blackjack <bet>` — Interactive card table.\n"
-                "🎱 `!8ball <question>` — Ask the mysterious magic 8-ball."
+                "🪨 `!rps [choice] [bet]` — Rock, Paper, Scissors.\n"
+                "🎲 `!roll <bet>` — Dice.\n"
+                "🔢 `!guess <1-10> <bet>` — Guess the secret number.\n"
+                "🪙 `!coinflip <heads/tails> <bet>` — Coinflip.\n"
+                "🎰 `!slots <bet>` — Slot machine.\n"
+                "🃏 `!blackjack <bet>` — Blackjack.\n"
+                "🔴 `!roulette <red/black/green> <bet>` — Roulette.\n"
+                "💣 `!mines <bet>` — Risk/reward minefield.\n"
+                "🃏 `!war <bet>` — Card war.\n"
+                "🎴 `!baccarat <bet>` — Player/Banker/Tie.\n"
+                "🔮 `!higherlower <bet>` — Build a multiplier chain.\n"
+                "☯ `!oddeven <odd/even> <bet>` — Odd or even.\n"
+                "🎯 `!target [bet]` — Hit the hidden number.\n"
+                "⚡ `!reaction [bet]` — Reflex challenge.\n"
+                "🔤 `!scramble [bet]` — Word scramble.\n"
+                "🕯️ `!hangman [bet]` — Hangman.\n"
+                "🧩 `!mastermind [bet]` — Code breaker.\n"
+                "🎱 `!8ball <question>` — Magic 8-ball."
             ),
             color=COLOR_PRIMARY
         )
@@ -817,6 +828,10 @@ class Games(commands.Cog):
 
     MAX_BET = 1_000_000
 
+    async def _balance(self, ctx):
+        user = await self.db.get_user(ctx.guild.id, ctx.author.id)
+        return int(user["balance"])
+
     async def _take_bet(self, ctx, amount):
         try:
             amount = int(amount)
@@ -1198,147 +1213,3 @@ class Games(commands.Cog):
             await ctx.send(f"🕯️ HANGMAN: {masked}\nMisses: {misses}/6\nType one letter.")
             def check(message):
                 return message.author.id == ctx.author.id and message.channel.id == ctx.channel.id and len(message.content.strip()) == 1 and message.content.isalpha()
-            try:
-                answer = await self.bot.wait_for("message", timeout=20, check=check)
-            except asyncio.TimeoutError:
-                await ctx.send(f"⏰ Time. Word was {word}.")
-                return
-            letter = answer.content.lower()
-            if letter in guessed:
-                continue
-            guessed.add(letter)
-            if letter not in word:
-                misses += 1
-        balance = (await self.db.get_user(ctx.guild.id, ctx.author.id))["balance"]
-        await ctx.send(f"🕯️ HANGMAN LOST — word was {word}.\nBalance: {balance:,}")
-
-    @commands.command(name="mastermind", aliases=["codebreaker"])
-    async def mastermind(self, ctx, bet: int = 0):
-        if bet:
-            ok, result = await self._take_bet(ctx, bet)
-            if not ok:
-                await ctx.send(f"❌ {result}")
-                return
-        else:
-            result = 0
-        code = "".join(random.sample("0123456789", 4))
-        await ctx.send(embed=self._game_embed("🧩 MASTERMIND", "Break the 4-digit code. No repeated digits. You have 8 guesses.\nReply with four unique digits."))
-        def check(message):
-            return message.author.id == ctx.author.id and message.channel.id == ctx.channel.id and message.content.isdigit() and len(message.content) == 4 and len(set(message.content)) == 4
-        for attempt in range(1, 9):
-            try:
-                answer = await self.bot.wait_for("message", timeout=25, check=check)
-            except asyncio.TimeoutError:
-                await ctx.send(f"⏰ Time. Code was {code}.")
-                return
-            guess = answer.content
-            exact = sum(a == b for a, b in zip(code, guess))
-            misplaced = sum(min(code.count(d), guess.count(d)) for d in set(guess)) - exact
-            if exact == 4:
-                if result:
-                    payout, balance = await self._payout(ctx, result, 6)
-                    await ctx.send(f"🧩 CODE BROKEN in {attempt} guesses.\n🎉 Payout: {payout:,} · Balance: {balance:,}")
-                else:
-                    await ctx.send(f"🧩 CODE BROKEN: {code}")
-                return
-            await ctx.send(f"Attempt {attempt}/8 · Exact: {exact} · Misplaced: {misplaced}")
-        balance = (await self.db.get_user(ctx.guild.id, ctx.author.id))["balance"]
-        await ctx.send(f"🧩 LOCKED — code was {code}.\nBalance: {balance:,}")
-
-    @commands.command(name="mines")
-    async def mines(self, ctx, bet: int):
-        ok, result = await self._take_bet(ctx, bet)
-        if not ok:
-            await ctx.send(f"❌ {result}")
-            return
-        mine_positions = set(random.sample(range(25), 4))
-        revealed = set()
-        multiplier = 1.0
-        cog = self
-
-        class MinesView(discord.ui.View):
-            def __init__(view):
-                super().__init__(timeout=120)
-                view.done = False
-                for index in range(25):
-                    button = discord.ui.Button(label="·", style=discord.ButtonStyle.secondary, row=index // 5)
-                    async def reveal(interaction, idx=index, btn=button):
-                        nonlocal multiplier
-                        if interaction.user.id != ctx.author.id:
-                            await interaction.response.send_message("❌ This minefield is not yours.", ephemeral=True)
-                            return
-                        if view.done or idx in revealed:
-                            return
-                        revealed.add(idx)
-                        if idx in mine_positions:
-                            view.done = True
-                            view.stop()
-                            for child in view.children:
-                                child.disabled = True
-                            for pos, child in enumerate(view.children[:25]):
-                                child.label = "💣" if pos in mine_positions else ("💎" if pos in revealed else "·")
-                            balance = await cog._balance(ctx)
-                            await interaction.response.edit_message(
-                                embed=cog._game_embed("💣 MINES · DETONATED", f"Safe tiles: {len(revealed)-1}\n\n❌ Mine hit.\nBalance: {balance:,}", discord.Color.red()),
-                                view=view,
-                            )
-                            return
-                        btn.label = "💎"
-                        btn.style = discord.ButtonStyle.success
-                        multiplier = min(8.0, multiplier + 0.35)
-                        if len(revealed) == 21:
-                            view.done = True
-                            view.stop()
-                            for child in view.children:
-                                child.disabled = True
-                            payout, balance = await cog._payout(ctx, result, multiplier)
-                            text = f"All safe tiles cleared.\n\n🎉 {multiplier:.2f}x payout: {payout:,}\nBalance: {balance:,}"
-                            color = discord.Color.gold()
-                        else:
-                            text = f"Safe tiles: {len(revealed)}/21\nMultiplier: {multiplier:.2f}x\n\nCash out before a mine."
-                            color = COLOR_PRIMARY
-                        await interaction.response.edit_message(embed=cog._game_embed("💣 MINES", text, color), view=view)
-
-                    button.callback = reveal
-                    view.add_item(button)
-
-                cash = discord.ui.Button(label="Cash Out 💰", style=discord.ButtonStyle.primary, row=4)
-                async def cashout(interaction):
-                    if interaction.user.id != ctx.author.id:
-                        await interaction.response.send_message("❌ This minefield is not yours.", ephemeral=True)
-                        return
-                    if view.done:
-                        return
-                    view.done = True
-                    view.stop()
-                    for child in view.children:
-                        child.disabled = True
-                    if not revealed:
-                        balance = await cog._refund(ctx, result)
-                        text = f"No tiles opened. Bet returned.\nBalance: {balance:,}"
-                        color = COLOR_GOLD
-                    else:
-                        payout, balance = await cog._payout(ctx, result, multiplier)
-                        text = f"Safe tiles: {len(revealed)}\n\n💰 {multiplier:.2f}x payout: {payout:,}\nBalance: {balance:,}"
-                        color = discord.Color.green()
-                    await interaction.response.edit_message(embed=cog._game_embed("💣 MINES · CASHED OUT", text, color), view=view)
-                cash.callback = cashout
-                view.add_item(cash)
-
-        await ctx.send(embed=self._game_embed("💣 MINES", f"5×5 field · 4 mines · Bet: {result:,}\nReveal safe tiles to raise the multiplier."), view=MinesView())
-
-    @commands.command(name="gamehall", aliases=["newgames", "games2"])
-    async def gamehall(self, ctx):
-        embed = self._game_embed(
-            "୨୧ ECLIPSE · EXPANDED ARCADE ୨୧",
-            "🎰 **Casino** — roulette · mines · war · baccarat · higher/lower\n"
-            "🧠 **Mind** — trivia · guess · mastermind · scramble · hangman · 8ball\n"
-            "⚡ **Reflex** — reaction · target\n"
-            "🎮 **Classics** — rps · roll · coinflip · slots · blackjack\n\n"
-            "All betting games cap individual wagers at 1,000,000 coins."
-        )
-        await ctx.send(embed=footer(embed, ctx))
-
-
-async def setup(bot):
-    await bot.add_cog(Games(bot))
