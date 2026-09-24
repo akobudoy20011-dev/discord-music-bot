@@ -157,6 +157,14 @@ CREATE TABLE IF NOT EXISTS rpg_skills (
     PRIMARY KEY (guild_id, user_id, skill_id)
 );
 
+CREATE TABLE IF NOT EXISTS rpg_materials (
+    guild_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    material_id TEXT NOT NULL,
+    amount INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (guild_id, user_id, material_id)
+);
+
 CREATE TABLE IF NOT EXISTS warnings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     guild_id TEXT NOT NULL,
@@ -709,6 +717,81 @@ class Database:
             (str(guild_id), str(user_id), str(skill_id))
         )
         await self._conn.commit()
+
+    async def remove_rpg_item(self, guild_id, user_id, item_id, amount=1):
+        amount = int(amount)
+        if amount <= 0:
+            return True
+        cur = await self._conn.execute(
+            "SELECT amount FROM rpg_items WHERE guild_id=? AND user_id=? AND item_id=?",
+            (str(guild_id), str(user_id), str(item_id))
+        )
+        row = await cur.fetchone()
+        if not row or int(row["amount"]) < amount:
+            return False
+        remaining = int(row["amount"]) - amount
+        await self._conn.execute(
+            "UPDATE rpg_items SET amount=?, equipped=CASE WHEN ?=0 THEN 0 ELSE equipped END "
+            "WHERE guild_id=? AND user_id=? AND item_id=?",
+            (remaining, remaining, str(guild_id), str(user_id), str(item_id))
+        )
+        if remaining <= 0:
+            await self._conn.execute(
+                "DELETE FROM rpg_items WHERE guild_id=? AND user_id=? AND item_id=?",
+                (str(guild_id), str(user_id), str(item_id))
+            )
+        await self._conn.commit()
+        return True
+
+    async def get_rpg_materials(self, guild_id, user_id):
+        cur = await self._conn.execute(
+            "SELECT material_id, amount FROM rpg_materials "
+            "WHERE guild_id=? AND user_id=? AND amount > 0 ORDER BY material_id",
+            (str(guild_id), str(user_id))
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def add_rpg_material(self, guild_id, user_id, material_id, amount=1):
+        amount = int(amount)
+        if amount <= 0:
+            return
+        await self._conn.execute(
+            "INSERT INTO rpg_materials (guild_id,user_id,material_id,amount) VALUES (?,?,?,?) "
+            "ON CONFLICT(guild_id,user_id,material_id) "
+            "DO UPDATE SET amount=amount+excluded.amount",
+            (str(guild_id), str(user_id), str(material_id), amount)
+        )
+        await self._conn.commit()
+
+    async def remove_rpg_material(self, guild_id, user_id, material_id, amount=1):
+        amount = int(amount)
+        if amount <= 0:
+            return True
+        cur = await self._conn.execute(
+            "SELECT amount FROM rpg_materials WHERE guild_id=? AND user_id=? AND material_id=?",
+            (str(guild_id), str(user_id), str(material_id))
+        )
+        row = await cur.fetchone()
+        if not row or int(row["amount"]) < amount:
+            return False
+        remaining = int(row["amount"]) - amount
+        if remaining:
+            await self._conn.execute(
+                "UPDATE rpg_materials SET amount=? WHERE guild_id=? AND user_id=? AND material_id=?",
+                (remaining, str(guild_id), str(user_id), str(material_id))
+            )
+        else:
+            await self._conn.execute(
+                "DELETE FROM rpg_materials WHERE guild_id=? AND user_id=? AND material_id=?",
+                (str(guild_id), str(user_id), str(material_id))
+            )
+        await self._conn.commit()
+        return True
+
+    async def has_rpg_materials(self, guild_id, user_id, costs):
+        rows = await self.get_rpg_materials(guild_id, user_id)
+        have = {r["material_id"]: int(r["amount"]) for r in rows}
+        return all(have.get(mid, 0) >= int(amount) for mid, amount in costs.items())
 
     async def clear_warnings(self, guild_id, user_id):
         await self._conn.execute(

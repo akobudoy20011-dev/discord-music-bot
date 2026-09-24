@@ -24,7 +24,7 @@ from constants import COLOR_MUSIC, footer
 
 logger = logging.getLogger("music_bot")
 
-YTDLP_COOKIES_FILE = os.getenv("YTDLP_COOKIES_FILE") or "cookies.txt"
+YTDLP_COOKIES_FILE = os.getenv("YTDLP_COOKIES_FILE") or ""
 
 # yt-dlp rewrites the cookie file after every request (YouTube rotates
 # session cookies), so it needs a writable path. Render (and similar
@@ -66,11 +66,14 @@ YTDL_OPTIONS = {
     "no_warnings": True,
     "default_search": "auto",
     "source_address": "0.0.0.0",
-    "extractor_args": {"youtube": {"player_client": ["android"]}},
+    "retries": 3,
+    "extractor_retries": 3,
+    "fragment_retries": 3,
+    "socket_timeout": 20,
 
 }
 
-if YTDLP_COOKIES_FILE:
+if YTDLP_COOKIES_FILE and os.path.isfile(YTDLP_COOKIES_FILE):
     YTDL_OPTIONS["cookiefile"] = YTDLP_COOKIES_FILE
 
 FFMPEG_OPTIONS = {
@@ -87,90 +90,182 @@ class SongDownloadError(Exception):
     pass
 
 
+def _youtube_error_message(error, action="play"):
+    message = str(error)
+    lowered = message.lower()
+
+    if "sign in to confirm" in lowered or "confirm you're not a bot" in lowered:
+        return (
+            f"YouTube blocked this {action} request as automated traffic. "
+            "Use a fresh yt-dlp build and, if the host is challenged, "
+            "configure YTDLP_COOKIES_FILE or a supported PO-token provider."
+        )
+
+    if "po token" in lowered or "poh" in lowered:
+        return (
+            f"YouTube requires a PO token for this {action} request. "
+            "The bot is no longer forcing the legacy Android client; "
+            "configure a supported PO-token provider if YouTube still requires one."
+        )
+
+    if "403" in lowered or "forbidden" in lowered:
+        return (
+            f"YouTube returned HTTP 403 while trying to {action} this track. "
+            "Persistent 403s require cookies/PO-token support."
+        )
+
+    if "age-restricted" in lowered or "sign in" in lowered:
+        return f"This YouTube track requires authentication before it can be used to {action}."
+
+    return f"yt-dlp could not {action} this track: {message}"
+
+
+def _build_ytdl_options(client=None):
+    options = dict(YTDL_OPTIONS)
+    if client:
+        options["extractor_args"] = {"youtube": {"player_client": [client]}}
+    return options
+
+
+def _select_playable_entry(entries):
+    """Pick a useful search result instead of blindly trusting entry #1."""
+    usable = []
+
+    for entry in entries:
+        if not entry:
+            continue
+
+        if not entry.get("url") or not entry.get("webpage_url"):
+            continue
+
+        availability = str(entry.get("availability") or "").lower()
+        if availability in {"private", "premium only", "needs_auth"}:
+            continue
+
+        is_live = bool(entry.get("is_live"))
+        duration_missing = entry.get("duration") is None
+        title_length = len(entry.get("title") or "")
+        usable.append((is_live, duration_missing, title_length, entry))
+
+    if not usable:
+        return None
+
+    usable.sort(key=lambda item: (item[0], item[1], item[2]))
+    return usable[0][3]
+
+
 async def resolve_query(loop, query):
-    """Runs yt-dlp for `query`, returns the info dict (blocking call offloaded)."""
+    """Resolve a YouTube URL/search query with maintained-client fallbacks."""
+    is_url = query.startswith("http")
+    q = query if is_url else f"ytsearch5:{query}"
+    clients = [None, "web", "mweb"]
+    last_error = None
 
-    q = query if query.startswith("http") else f"ytsearch1:{query}"
+    for client in clients:
+        options = _build_ytdl_options(client)
 
-    def extract():
-        return ytdl.extract_info(q, download=False)
+        def extract(options=options):
+            with yt_dlp.YoutubeDL(options) as extractor:
+                return extractor.extract_info(q, download=False)
 
-    try:
-        data = await loop.run_in_executor(None, extract)
-    except Exception as e:
-        logger.exception("yt-dlp extraction failed")
+        try:
+            data = await loop.run_in_executor(None, extract)
 
-        if "Sign in to confirm" in str(e):
-            raise SongDownloadError(
-                "YouTube is blocking this server as a bot — needs "
-                "YTDLP_COOKIES_FILE configured."
-            ) from e
+            if not data:
+                raise SongDownloadError("YouTube returned no playable result.")
 
-        raise SongDownloadError(str(e)) from e
+            if "entries" in data:
+                entries = [entry for entry in data["entries"] if entry]
+                if not entries:
+                    raise SongDownloadError("YouTube returned no search results for that query.")
+                data = _select_playable_entry(entries)
+                if data is None:
+                    raise SongDownloadError("YouTube returned results, but none had a usable audio stream.")
 
-    if "entries" in data:
-        data = data["entries"][0]
+            if not data.get("url"):
+                raise SongDownloadError("yt-dlp returned a result without a playable stream URL.")
 
-    return data
+            return data
+
+        except SongDownloadError as error:
+            last_error = error
+            logger.warning("yt-dlp resolve rejected %s using client=%s: %s", query, client or "default", error)
+        except Exception as error:
+            last_error = error
+            logger.warning("yt-dlp resolve failed for %s using client=%s: %s", query, client or "default", error)
+
+    raise SongDownloadError(_youtube_error_message(last_error or "unknown error", "play"))
 
 
 async def fetch_song_mp3(query):
     """
-    Downloads `query` to an mp3 on disk for !download / the AI chat
-    tool. Returns (title, mp3_path); caller must delete the file.
+    Download a query to mp3 for !download. Retries maintained YouTube
+    clients because extraction rules can differ between playback/download.
     """
-
-    q = query if query.startswith("http") else f"ytsearch1:{query}"
-
+    q = query if query.startswith("http") else f"ytsearch5:{query}"
     os.makedirs("downloads", exist_ok=True)
-
-    dl_opts = {
-        "format": "bestaudio/best",
-        "outtmpl": "downloads/%(id)s.%(ext)s",
-        "postprocessors": [{
-            "key": "FFmpegExtractAudio",
-            "preferredcodec": "mp3",
-            "preferredquality": "192",
-        }],
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": True,
-        "extractor_args": {"youtube": {"player_client": ["android"]}},
-    
-    }
-
-    if YTDLP_COOKIES_FILE:
-        dl_opts["cookiefile"] = YTDLP_COOKIES_FILE
-
     loop = asyncio.get_event_loop()
+    clients = [None, "web", "mweb"]
+    last_error = None
 
-    try:
-        with yt_dlp.YoutubeDL(dl_opts) as ydl:
-            info = await loop.run_in_executor(
-                None, lambda: ydl.extract_info(q, download=True)
-            )
+    for client in clients:
+        dl_opts = {
+            "format": "bestaudio/best",
+            "outtmpl": "downloads/%(id)s.%(ext)s",
+            "postprocessors": [{
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": "192",
+            }],
+            "quiet": True,
+            "no_warnings": True,
+            "noplaylist": True,
+            "retries": 3,
+            "extractor_retries": 3,
+            "fragment_retries": 3,
+            "socket_timeout": 20,
+        }
+
+        if client:
+            dl_opts["extractor_args"] = {"youtube": {"player_client": [client]}}
+
+        if YTDLP_COOKIES_FILE and os.path.isfile(YTDLP_COOKIES_FILE):
+            dl_opts["cookiefile"] = YTDLP_COOKIES_FILE
+
+        try:
+            def download():
+                with yt_dlp.YoutubeDL(dl_opts) as extractor:
+                    return extractor.extract_info(q, download=True)
+
+            info = await loop.run_in_executor(None, download)
+
+            if not info:
+                raise SongDownloadError("YouTube returned no downloadable result.")
 
             if "entries" in info:
-                info = info["entries"][0]
+                entries = [entry for entry in info["entries"] if entry]
+                if not entries:
+                    raise SongDownloadError("YouTube returned no downloadable search result.")
+                info = entries[0]
 
-            base, _ = os.path.splitext(ydl.prepare_filename(info))
+            with yt_dlp.YoutubeDL(dl_opts) as extractor:
+                base = os.path.splitext(extractor.prepare_filename(info))[0]
+
             mp3_path = base + ".mp3"
 
-    except Exception as e:
-        logger.exception("Download failed")
+            if not os.path.exists(mp3_path):
+                raise SongDownloadError("MP3 conversion failed.")
 
-        if "Sign in to confirm" in str(e):
-            raise SongDownloadError(
-                "YouTube is blocking this server as a bot — needs "
-                "YTDLP_COOKIES_FILE configured."
-            ) from e
+            return info.get("title", "audio"), mp3_path
 
-        raise SongDownloadError(str(e)) from e
+        except SongDownloadError as error:
+            last_error = error
+            logger.warning("YouTube download failed using client=%s: %s", client or "default", error)
+        except Exception as error:
+            last_error = error
+            logger.warning("YouTube download failed using client=%s: %s", client or "default", error)
 
-    if not os.path.exists(mp3_path):
-        raise SongDownloadError("MP3 conversion failed.")
-
-    return info.get("title", "audio"), mp3_path
+    raise SongDownloadError(_youtube_error_message(last_error or "unknown error", "download"))
 
 
 async def send_song_as_file(channel, query, guild=None):
@@ -284,6 +379,79 @@ class Music(commands.Cog):
     async def play(self, ctx, *, query):
         await self.enqueue(ctx, query)
 
+    async def _resolve_for_playback(self, guild, query):
+        """Resolve a fresh stream URL immediately before playback."""
+        loop = asyncio.get_event_loop()
+        return await resolve_query(loop, query)
+
+    async def _start_resolved_track(self, guild, state, query, requester_name, data):
+        stream_url = data.get("url")
+        if not stream_url:
+            raise SongDownloadError("YouTube returned no stream URL.")
+
+        title = data.get("title", query)
+        webpage_url = data.get("webpage_url")
+
+        state.current = {
+            "query": query,
+            "title": title,
+            "webpage_url": webpage_url,
+            "requester_name": requester_name,
+            "stream_url": stream_url,
+        }
+
+        source = discord.FFmpegPCMAudio(stream_url, **FFMPEG_OPTIONS)
+        source = discord.PCMVolumeTransformer(source, volume=state.volume)
+
+        def after_playing(error):
+            fut = asyncio.run_coroutine_threadsafe(
+                self._handle_player_end(guild, query, requester_name, error),
+                self.bot.loop
+            )
+            try:
+                fut.result()
+            except Exception:
+                logger.exception("Error handling playback completion")
+
+    async def _handle_player_end(self, guild, query, requester_name, error):
+        state = self.states.get(guild.id)
+        if state is None:
+            return
+
+        if error:
+            logger.error("FFmpeg/player error for '%s': %s", query, error)
+            try:
+                fresh = await self._resolve_for_playback(guild, query)
+                if guild.voice_client is not None:
+                    await self._start_resolved_track(
+                        guild, state, query, requester_name, fresh
+                    )
+                    if state.text_channel:
+                        await state.text_channel.send(
+                            "🔄 YouTube stream failed; refreshed and resumed."
+                        )
+                    return
+            except Exception as refresh_error:
+                logger.error(
+                    "Automatic stream refresh failed for '%s': %s",
+                    query,
+                    refresh_error,
+                )
+
+        state.current = None
+        await self._play_next(guild)
+
+        guild.voice_client.play(source, after=after_playing)
+
+        if state.text_channel:
+            embed = discord.Embed(
+                title="🎵 Now Playing",
+                description=f"**{title}**\\n{webpage_url or ''}",
+                color=COLOR_MUSIC
+            )
+            embed.set_footer(text=f"Requested by {requester_name}")
+            await state.text_channel.send(embed=embed)
+
     async def _play_next(self, guild):
         state = self.states.get(guild.id)
 
@@ -309,57 +477,81 @@ class Music(commands.Cog):
 
         if next_query is None:
             state.current = None
-
             if state.text_channel:
                 await state.text_channel.send("📭 Queue finished.")
             return
 
         loop = asyncio.get_event_loop()
 
+        # Resolve a fresh URL. Stream URLs are intentionally never stored
+        # in the queue because they expire.
         try:
-            data = await resolve_query(loop, next_query)
-        except SongDownloadError as e:
+            data = await self._resolve_for_playback(guild, next_query)
+        except SongDownloadError as first_error:
             if state.text_channel:
-                await state.text_channel.send(f"❌ Skipping '{next_query}': {e}")
-            await self._play_next(guild)
-            return
+                await state.text_channel.send(
+                    f"❌ Couldn't start '{next_query}': {first_error}"
+                )
 
-        stream_url = data["url"]
-        title = data.get("title", next_query)
-        webpage_url = data.get("webpage_url")
+            state.current = None
 
-        state.current = {
-            "query": next_query,
-            "title": title,
-            "webpage_url": webpage_url,
-            "requester_name": requester_name
-        }
+            while state.queue:
+                failed = state.queue.popleft()
+                try:
+                    data = await self._resolve_for_playback(guild, failed["query"])
+                    next_query = failed["query"]
+                    requester_name = failed["requester_name"]
+                    break
+                except SongDownloadError as retry_error:
+                    if state.text_channel:
+                        await state.text_channel.send(
+                            "❌ Skipping '{}' : {}".format(
+                                failed["query"], retry_error
+                            )
+                        )
+            else:
+                if state.text_channel:
+                    await state.text_channel.send("📭 Queue finished.")
+                return
 
-        source = discord.FFmpegPCMAudio(stream_url, **FFMPEG_OPTIONS)
-        source = discord.PCMVolumeTransformer(source, volume=state.volume)
-
-        def after_playing(error):
-            if error:
-                logger.error(f"Player error: {error}")
-
-            fut = asyncio.run_coroutine_threadsafe(
-                self._play_next(guild), self.bot.loop
+        try:
+            await self._start_resolved_track(
+                guild, state, next_query, requester_name, data
             )
+        except Exception as playback_error:
+            logger.error(
+                "Playback start failed for '%s': %s",
+                next_query,
+                playback_error,
+            )
+
+            # One complete re-resolution is important here: a freshly
+            # extracted YouTube URL can still be rejected by FFmpeg if
+            # it expires or is invalidated between extraction and opening.
             try:
-                fut.result()
-            except Exception:
-                logger.exception("Error advancing queue")
+                fresh = await self._resolve_for_playback(guild, next_query)
+                await self._start_resolved_track(
+                    guild, state, next_query, requester_name, fresh
+                )
+                if state.text_channel:
+                    await state.text_channel.send(
+                        "🔄 Stream refreshed and playback restarted."
+                    )
+                return
+            except Exception as refresh_error:
+                logger.error(
+                    "Stream refresh failed for '%s': %s",
+                    next_query,
+                    refresh_error,
+                )
+                state.current = None
 
-        guild.voice_client.play(source, after=after_playing)
+                if state.text_channel:
+                    await state.text_channel.send(
+                        f"❌ Couldn't start **{next_query}** after a stream refresh."
+                    )
 
-        if state.text_channel:
-            embed = discord.Embed(
-                title="🎵 Now Playing",
-                description=f"**{title}**\n{webpage_url or ''}",
-                color=COLOR_MUSIC
-            )
-            embed.set_footer(text=f"Requested by {requester_name}")
-            await state.text_channel.send(embed=embed)
+                await self._play_next(guild)
 
     # ------------------------------------------------------------
     @commands.command(name="pause")

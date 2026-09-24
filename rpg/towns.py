@@ -11,17 +11,17 @@ TOWNS = {
     "whispering_wood": {
         "name":"Thornmere","icon":"🌿","description":"A forest town of rope bridges, herbalists, and old stone homes.",
         "services":["inn","merchant","alchemist","shrine"],
-        "merchant":{"shadow_dagger":{"price":300,"stock":3},"mana_charm":{"price":340,"stock":2},"guardian_mail":{"price":380,"stock":2}},
+        "merchant":{"shadow_dagger":{"price":300,"stock":3},"mana_charm":{"price":340,"stock":2},"thornblade":{"price":520,"stock":2},"thornmantle":{"price":560,"stock":2},"veilring":{"price":620,"stock":2}},
     },
     "ashen_crown": {
         "name":"Emberhold","icon":"🔥","description":"A fortified mining town whose furnaces never seem to cool.",
         "services":["inn","merchant","blacksmith","shrine"],
-        "merchant":{"iron_sword":{"price":450,"stock":4},"shadow_dagger":{"price":500,"stock":3},"guardian_mail":{"price":600,"stock":2}},
+        "merchant":{"embercleaver":{"price":1200,"stock":2},"ashplate":{"price":1350,"stock":2},"shadow_dagger":{"price":500,"stock":3}},
     },
     "starfall_coast": {
         "name":"Starwatch","icon":"🌠","description":"A cliffside harbor where astronomers trade fragments of fallen stars.",
         "services":["inn","merchant","alchemist","shrine"],
-        "merchant":{"moon_staff":{"price":750,"stock":3},"mana_charm":{"price":900,"stock":2},"guardian_mail":{"price":850,"stock":2}},
+        "merchant":{"starfall_staff":{"price":2200,"stock":2},"starweave":{"price":2400,"stock":2},"mana_charm":{"price":900,"stock":2}},
     },
 }
 INN_COST=35
