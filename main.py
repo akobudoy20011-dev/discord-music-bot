@@ -57,6 +57,7 @@ COGS = [
     "cogs.games",
     "cogs.arcade",
     "cogs.music",
+    "cogs.premium",
     "cogs.fun",
     "cogs.admin",
     "cogs.ai",
