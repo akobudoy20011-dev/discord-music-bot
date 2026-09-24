@@ -40,6 +40,13 @@ SHOP_ITEMS = {
     "eternal_treasure": {"name": "✨ Eternal Treasure", "price": 300000, "min_tier": 10, "description": "Use for a massive 25,000-100,000 coin payout."},
 }
 
+COLLECTIBLES = {
+    "moon_shard": {"name": "🌙 Moon Shard", "rarity": "Rare", "value": 5000},
+    "void_eye": {"name": "👁️ Void Eye", "rarity": "Epic", "value": 15000},
+    "eclipse_relic": {"name": "🌌 Eclipse Relic", "rarity": "Legendary", "value": 50000},
+    "sovereign_sigil": {"name": "👑 Sovereign Sigil", "rarity": "Mythic", "value": 150000},
+}
+
 ECONOMY_TIER_BONUS = 0.02
 
 def economy_multiplier(tier):
