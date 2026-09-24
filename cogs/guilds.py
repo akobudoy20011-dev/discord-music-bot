@@ -341,7 +341,7 @@ class Guilds(commands.Cog):
             return
         await ctx.send(embed=self._embed(
             "⚔️ Guild Raid",
-            f"Boss HP: **{raid['boss_hp']:,}/{raid['max_hp']:,}**\n"
+            f"Boss HP: **{raid['boss_hp']:,}/{raid['max_hp']:,}**\nPhase: **{ {1:"Awakening",2:"Enraged",3:"Cataclysm"}.get(int(raid.get("phase",1)),"Awakening") }**\n"
             f"Reward: **{raid['reward_coins']:,} coins + {raid['reward_xp']:,} XP**\n"
             f"Ends: <t:{int(raid['ends_at'])}:R>"
         ))
@@ -374,12 +374,20 @@ class Guilds(commands.Cog):
             return
         player = await self.db.get_rpg_player(ctx.guild.id, ctx.author.id)
         gear = await equipment_stats(self.db, ctx.guild.id, ctx.author.id)
-        damage = max(50, int(player["strength"]) * 6 + int(player["level"]) * 10 + int(gear["power"]) * 5)
+        raid = await self.db.get_guild_raid(mine["guild_id"])
+        if not raid or raid["status"]!="active":
+            await ctx.send("❌ No active raid.")
+            return
+        phase=int(raid.get("phase",1))
+        phase_names={1:"Awakening",2:"Enraged",3:"Cataclysm"}
+        phase_mult={1:1.0,2:1.20,3:1.45}
+        base=max(50, int(player["strength"])*6 + int(player["level"])*10 + int(gear["power"])*5)
+        damage=max(50,int(base*phase_mult.get(phase,1.0)))
         ok, reason, hp = await self.db.damage_guild_raid(mine["guild_id"], ctx.author.id, damage)
         if not ok:
             await ctx.send("❌ No active raid or you are not a member.")
             return
-        await ctx.send(f"⚔️ Raid damage: **{damage}** · Boss HP: **{hp:,}**.")
+        await ctx.send(f"⚔️ Raid **{phase_names.get(phase, "Awakening")}**: **{damage:,}** damage · Boss HP: **{hp:,}**.")
         if reason == "completed":
             await ctx.send("🏆 **RAID CLEARED.** Contributors can claim with `!guild raid claim`.")
 
