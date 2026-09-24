@@ -15,6 +15,9 @@ from rpg.exploration import world_status, travel, explore
 from rpg.towns import town_status, inn, shrine, alchemist, buy
 from rpg.items import get_item
 from rpg.crafting import MATERIALS, list_recipes, craft, salvage
+from rpg.dungeons import list_dungeons, start as start_dungeon, status as dungeon_status, advance as advance_dungeon, retreat as retreat_dungeon
+from rpg.gathering import RESOURCE_NODES, profile as gathering_profile, gather as gather_resource, collections as gathering_collections
+from rpg.achievements import ACHIEVEMENTS, check as check_achievements, list_unlocked as unlocked_achievements
 
 
 def xp_bar(current, maximum, length=14):
@@ -178,6 +181,8 @@ RPG_HELP_PAGES = {
             "**WORLD**\n"
             "\`!rpg world\` · \`!rpg travel <region>\` · \`!rpg explore\`\n"
             "\`!rpg adventure\` · \`!rpg rest\` · \`!rpg town\`\n"
+            "\`!rpg dungeon\` · \`!rpg gather\` · \`!rpg collection\`\n"
+            "\`!rpg achievements\`\n"
             "\`!rpg town shop\` · \`!rpg town buy <item>\` · \`!rpg town inn\`\n"
             "\`!rpg town shrine\` · \`!rpg town alchemist\`\n\n"
             "**COMBAT**\n"
@@ -657,6 +662,154 @@ class RPG(commands.Cog):
             for mid, amount in result["yields"].items()
         )
         await ctx.send(f"♻️ **SALVAGED** · {item['icon']} **{item['name']}**\nRecovered: {yields}")
+
+
+    @rpg.group(name="dungeon", aliases=["delve", "dungeons"], invoke_without_command=True)
+    async def dungeon_command(self, ctx):
+        await ctx.send(
+            "🕯️ ECLIPSE DUNGEONS\n\n"
+            + "\n".join(
+                f"{d['icon']} {d['name']} · Level {d['min_level']}+ · 12 floors · Boss: {d['boss']}"
+                for _, d in list_dungeons()
+            )
+            + "\n\nUse !rpg dungeon start <id> → advance → retreat."
+        )
+
+    @dungeon_command.command(name="list")
+    async def dungeon_list_command(self, ctx):
+        lines = [
+            f"{did} · {d['icon']} {d['name']} · Level {d['min_level']}+ · {d['boss']}"
+            for did, d in list_dungeons()
+        ]
+        await ctx.send("🕯️ DUNGEON CODEX\n" + "\n".join(lines))
+
+    @dungeon_command.command(name="start")
+    async def dungeon_start_command(self, ctx, dungeon_id: str = None):
+        if not dungeon_id:
+            await self.dungeon_command(ctx)
+            return
+        result = await start_dungeon(self.db, ctx.guild.id, ctx.author.id, dungeon_id)
+        if not result["ok"]:
+            await ctx.send(f"❌ {result['message']}")
+            return
+        d = result["dungeon"]
+        await ctx.send(
+            f"{d['icon']} {d['name']} BEGINS\n"
+            f"12 floors stand between you and {d['boss']}.\n"
+            "Use !rpg dungeon advance to enter the next room."
+        )
+
+    @dungeon_command.command(name="status")
+    async def dungeon_status_command(self, ctx):
+        run = await dungeon_status(self.db, ctx.guild.id, ctx.author.id)
+        if not run:
+            await ctx.send("🕯️ No dungeon run has been started.")
+            return
+        await ctx.send(
+            f"🕯️ {run['dungeon_id'].upper()} · {run['status'].upper()}\n"
+            f"Floor: {run['floor']}/12 · Rooms: {run['rooms']}\n"
+            f"Run gold: {run['gold']:,} · Run XP: {run['xp']:,}"
+        )
+
+    @dungeon_command.command(name="advance", aliases=["next", "enter"])
+    async def dungeon_advance_command(self, ctx):
+        result = await advance_dungeon(self.db, ctx.guild.id, ctx.author.id)
+        if not result["ok"]:
+            await ctx.send(f"❌ {result['message']}")
+            return
+        d = result["dungeon"]
+        result_name = result["result"]
+        if result_name == "boss_cleared":
+            await ctx.send(
+                f"👑 DUNGEON CLEARED — {d['name']}\n"
+                f"Boss: {d['boss']}\n"
+                f"💰 +{result['gold']:,} RPG gold · ✦ +{result['xp']} XP\n"
+                f"🎁 {result['item']} dropped."
+            )
+        elif result_name in {"boss_failed", "defeated"}:
+            await ctx.send(
+                f"💀 THE DELVE ENDS — {d['name']}\n"
+                f"You reached floor {result['floor']} and took {result['damage']} damage."
+            )
+        else:
+            await ctx.send(
+                f"{d['icon']} Floor {result['floor']}/12 · {result_name.title()}\n"
+                f"❤️ Damage: {result['damage']} · 💰 +{result['gold']:,} · ✦ +{result['xp']} XP"
+            )
+        unlocked = await check_achievements(self.db, ctx.guild.id, ctx.author.id)
+        if unlocked:
+            names = ", ".join(ACHIEVEMENTS[a][1] for a in unlocked)
+            await ctx.send(f"🏆 Achievement unlocked: {names}")
+
+    @dungeon_command.command(name="retreat", aliases=["leave", "exit"])
+    async def dungeon_retreat_command(self, ctx):
+        result = await retreat_dungeon(self.db, ctx.guild.id, ctx.author.id)
+        if not result["ok"]:
+            await ctx.send(f"❌ {result['message']}")
+            return
+        await ctx.send(
+            f"↩️ You retreated from floor {result['floor']}/12.\n"
+            f"Your run kept {result['gold']:,} gold and {result['xp']:,} XP."
+        )
+
+    @rpg.command(name="gather", aliases=["harvest"])
+    async def gather_command(self, ctx, skill_id: str = None):
+        if not skill_id:
+            rows = await gathering_profile(self.db, ctx.guild.id, ctx.author.id)
+            levels = {r["skill_id"]: f"Lv.{r['level']} ({r['xp']} XP)" for r in rows}
+            lines = [
+                f"{data['icon']} {sid} — {data['name']} · {levels.get(sid, 'Lv.1')}"
+                for sid, data in RESOURCE_NODES.items()
+            ]
+            await ctx.send("🌿 GATHERING\n" + "\n".join(lines) + "\n\nUse !rpg gather <skill>.")
+            return
+        result = await gather_resource(self.db, ctx.guild.id, ctx.author.id, skill_id)
+        if not result["ok"]:
+            await ctx.send(f"❌ {result['message']}")
+            return
+        skill = result["skill"]
+        rare = " ✨ RARE YIELD" if result["rarity"] == "rare" else ""
+        await ctx.send(
+            f"{skill['icon']} {skill['name']} · {result['region'].replace('_', ' ').title()}\n"
+            f"Found {result['item_id']} ×{result['amount']}.{rare}\n"
+            f"Skill: Lv.{result['level']} · +{result['gained_xp']} XP"
+        )
+        unlocked = await check_achievements(self.db, ctx.guild.id, ctx.author.id)
+        if unlocked:
+            names = ", ".join(ACHIEVEMENTS[a][1] for a in unlocked)
+            await ctx.send(f"🏆 Achievement unlocked: {names}")
+
+    @rpg.command(name="gathering", aliases=["professions"])
+    async def gathering_command(self, ctx):
+        rows = await gathering_profile(self.db, ctx.guild.id, ctx.author.id)
+        known = {r["skill_id"]: r for r in rows}
+        lines = [
+            f"{data['icon']} {data['name']} · Level {known.get(sid, {}).get('level', 1)} · XP {known.get(sid, {}).get('xp', 0)}"
+            for sid, data in RESOURCE_NODES.items()
+        ]
+        await ctx.send(embed=discord.Embed(title="🌿 ECLIPSE · PROFESSIONS", description="\n".join(lines), color=COLOR_PRIMARY))
+
+    @rpg.command(name="collection", aliases=["collections", "collect"])
+    async def collection_command(self, ctx):
+        rows = await gathering_collections(self.db, ctx.guild.id, ctx.author.id)
+        if not rows:
+            await ctx.send("📚 Your resource collection is empty. Use !rpg gather.")
+            return
+        lines = [f"{row['collection_id']} × {row['amount']}" for row in rows]
+        await ctx.send(embed=discord.Embed(title="📚 ECLIPSE · COLLECTION", description="\n".join(lines), color=COLOR_PRIMARY))
+
+    @rpg.command(name="achievements", aliases=["badges"])
+    async def achievements_command(self, ctx):
+        rows = await unlocked_achievements(self.db, ctx.guild.id, ctx.author.id)
+        if not rows:
+            await ctx.send("🏆 No RPG achievements unlocked yet. Explore, gather, and clear dungeons.")
+            return
+        lines = []
+        for row in rows:
+            data = ACHIEVEMENTS.get(row["achievement_id"])
+            if data:
+                lines.append(f"{data[0]} {data[1]} — {data[2]}")
+        await ctx.send(embed=discord.Embed(title="🏆 ECLIPSE · RPG ACHIEVEMENTS", description="\n".join(lines), color=COLOR_GOLD))
 
     @rpg.command(name="skills")
     async def skills_command(self, ctx):
