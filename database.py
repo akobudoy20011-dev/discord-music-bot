@@ -452,6 +452,7 @@ class Database:
 
     async def record_game(self, guild_id, user_id, game_id, result, wager=0, net=0):
         guild_id, user_id, game_id = str(guild_id), str(user_id), str(game_id)
+        await self.get_user(guild_id, user_id)
         win = 1 if result == "win" else 0
         loss = 1 if result == "loss" else 0
         tie = 1 if result == "tie" else 0
