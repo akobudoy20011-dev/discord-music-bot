@@ -15,6 +15,7 @@ from discord.ext import commands
 from dotenv import load_dotenv
 
 from database import Database
+from systems.arcade_tournament_db import bind_database
 from web.server import start_web_server
 
 load_dotenv()
@@ -66,6 +67,7 @@ COGS = [
 @bot.event
 async def setup_hook():
     bot.db = Database()
+    bind_database(Database)
     await bot.db.connect()
 
     for cog in COGS:
