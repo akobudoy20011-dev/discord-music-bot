@@ -127,9 +127,37 @@ def _build_ytdl_options(client=None):
     return options
 
 
+def _select_playable_entry(entries):
+    """Pick a useful search result instead of blindly trusting entry #1."""
+    usable = []
+
+    for entry in entries:
+        if not entry:
+            continue
+
+        if not entry.get("url") or not entry.get("webpage_url"):
+            continue
+
+        availability = str(entry.get("availability") or "").lower()
+        if availability in {"private", "premium only", "needs_auth"}:
+            continue
+
+        is_live = bool(entry.get("is_live"))
+        duration_missing = entry.get("duration") is None
+        title_length = len(entry.get("title") or "")
+        usable.append((is_live, duration_missing, title_length, entry))
+
+    if not usable:
+        return None
+
+    usable.sort(key=lambda item: (item[0], item[1], item[2]))
+    return usable[0][3]
+
+
 async def resolve_query(loop, query):
     """Resolve a YouTube URL/search query with maintained-client fallbacks."""
-    q = query if query.startswith("http") else f"ytsearch1:{query}"
+    is_url = query.startswith("http")
+    q = query if is_url else f"ytsearch5:{query}"
     clients = [None, "web", "mweb"]
     last_error = None
 
@@ -149,24 +177,22 @@ async def resolve_query(loop, query):
             if "entries" in data:
                 entries = [entry for entry in data["entries"] if entry]
                 if not entries:
-                    raise SongDownloadError("YouTube returned no playable search result.")
-                data = entries[0]
+                    raise SongDownloadError("YouTube returned no search results for that query.")
+                data = _select_playable_entry(entries)
+                if data is None:
+                    raise SongDownloadError("YouTube returned results, but none had a usable audio stream.")
 
             if not data.get("url"):
-                raise SongDownloadError("yt-dlp returned a result without a stream URL.")
+                raise SongDownloadError("yt-dlp returned a result without a playable stream URL.")
 
             return data
 
-        except SongDownloadError:
-            raise
+        except SongDownloadError as error:
+            last_error = error
+            logger.warning("yt-dlp resolve rejected %s using client=%s: %s", query, client or "default", error)
         except Exception as error:
             last_error = error
-            logger.warning(
-                "yt-dlp resolve failed for %s using client=%s: %s",
-                query,
-                client or "default",
-                error,
-            )
+            logger.warning("yt-dlp resolve failed for %s using client=%s: %s", query, client or "default", error)
 
     raise SongDownloadError(_youtube_error_message(last_error or "unknown error", "play"))
 
