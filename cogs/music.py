@@ -90,32 +90,85 @@ class SongDownloadError(Exception):
     pass
 
 
+def _youtube_error_message(error, action="play"):
+    message = str(error)
+    lowered = message.lower()
+
+    if "sign in to confirm" in lowered or "confirm you're not a bot" in lowered:
+        return (
+            f"YouTube blocked this {action} request as automated traffic. "
+            "Use a fresh yt-dlp build and, if the host is challenged, "
+            "configure YTDLP_COOKIES_FILE or a supported PO-token provider."
+        )
+
+    if "po token" in lowered or "poh" in lowered:
+        return (
+            f"YouTube requires a PO token for this {action} request. "
+            "The bot is no longer forcing the legacy Android client; "
+            "configure a supported PO-token provider if YouTube still requires one."
+        )
+
+    if "403" in lowered or "forbidden" in lowered:
+        return (
+            f"YouTube returned HTTP 403 while trying to {action} this track. "
+            "Persistent 403s require cookies/PO-token support."
+        )
+
+    if "age-restricted" in lowered or "sign in" in lowered:
+        return f"This YouTube track requires authentication before it can be used to {action}."
+
+    return f"yt-dlp could not {action} this track: {message}"
+
+
+def _build_ytdl_options(client=None):
+    options = dict(YTDL_OPTIONS)
+    if client:
+        options["extractor_args"] = {"youtube": {"player_client": [client]}}
+    return options
+
+
 async def resolve_query(loop, query):
-    """Runs yt-dlp for `query`, returns the info dict (blocking call offloaded)."""
-
+    """Resolve a YouTube URL/search query with maintained-client fallbacks."""
     q = query if query.startswith("http") else f"ytsearch1:{query}"
+    clients = [None, "web", "mweb"]
+    last_error = None
 
-    def extract():
-        return ytdl.extract_info(q, download=False)
+    for client in clients:
+        options = _build_ytdl_options(client)
 
-    try:
-        data = await loop.run_in_executor(None, extract)
-    except Exception as e:
-        logger.exception("yt-dlp extraction failed")
+        def extract(options=options):
+            with yt_dlp.YoutubeDL(options) as extractor:
+                return extractor.extract_info(q, download=False)
 
-        if "Sign in to confirm" in str(e):
-            raise SongDownloadError(
-                "YouTube rejected this request (403/PO-token challenge). "
-                "Update yt-dlp first; if the host still gets challenged, "
-                "configure a valid YTDLP_COOKIES_FILE or PO-token provider."
-            ) from e
+        try:
+            data = await loop.run_in_executor(None, extract)
 
-        raise SongDownloadError(str(e)) from e
+            if not data:
+                raise SongDownloadError("YouTube returned no playable result.")
 
-    if "entries" in data:
-        data = data["entries"][0]
+            if "entries" in data:
+                entries = [entry for entry in data["entries"] if entry]
+                if not entries:
+                    raise SongDownloadError("YouTube returned no playable search result.")
+                data = entries[0]
 
-    return data
+            if not data.get("url"):
+                raise SongDownloadError("yt-dlp returned a result without a stream URL.")
+
+            return data
+
+        except SongDownloadError:
+            raise
+        except Exception as error:
+            last_error = error
+            logger.warning(
+                "yt-dlp resolve failed for %s using client=%s: %s",
+                query,
+                client or "default",
+                error,
+            )
+
+    raise SongDownloadError(_youtube_error_message(last_error or "unknown error", "play"))
 
 
 async def fetch_song_mp3(query):
