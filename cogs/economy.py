@@ -184,6 +184,118 @@ class Economy(commands.Cog):
         await check_achievements(self.db, ctx, ctx.author, user)
 
     # ------------------------------------------------------------
+    @commands.command(name="bank", aliases=["vault"])
+    async def bank(self, ctx):
+        user = await self.db.get_user(ctx.guild.id, ctx.author.id)
+        interest, bank = await self.db.apply_bank_interest(ctx.guild.id, ctx.author.id)
+        if interest:
+            await self.db.record_economy_activity(ctx.guild.id, ctx.author.id, earned=interest)
+        user = await self.db.get_user(ctx.guild.id, ctx.author.id)
+        embed = discord.Embed(
+            title="🏦 Economy Vault",
+            description=(
+                f"💰 Wallet: **{int(user['balance']):,}**\n"
+                f"🏦 Vault: **{int(user['bank_balance']):,}**\n"
+                f"📦 Total liquid wealth: **{int(user['balance']) + int(user['bank_balance']):,}**\n"
+                f"📈 Interest: **1% every 24h**"
+                + (f"\n✨ Interest credited: **+{interest:,}**" if interest else "")
+            ),
+            color=COLOR_GOLD
+        )
+        await ctx.send(embed=footer(embed, ctx))
+
+    @commands.command(name="deposit", aliases=["dep"])
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def deposit(self, ctx, amount: int):
+        if amount <= 0:
+            await ctx.send("❌ Amount must be positive.")
+            return
+        ok, reason, _ = await self.db.bank_deposit(ctx.guild.id, ctx.author.id, amount)
+        if not ok:
+            user = await self.db.get_user(ctx.guild.id, ctx.author.id)
+            await ctx.send(f"💸 You only have **{int(user['balance']):,}** coins available.")
+            return
+        await self.db.record_economy_activity(ctx.guild.id, ctx.author.id, spent=amount)
+        user = await self.db.get_user(ctx.guild.id, ctx.author.id)
+        await ctx.send(f"🏦 Deposited **{amount:,} coins**. Vault balance: **{int(user['bank_balance']):,}**.")
+
+    @commands.command(name="withdraw", aliases=["wd"])
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def withdraw(self, ctx, amount: int):
+        if amount <= 0:
+            await ctx.send("❌ Amount must be positive.")
+            return
+        ok, reason, _ = await self.db.bank_withdraw(ctx.guild.id, ctx.author.id, amount)
+        if not ok:
+            user = await self.db.get_user(ctx.guild.id, ctx.author.id)
+            await ctx.send(f"🏦 Your vault only contains **{int(user['bank_balance']):,}** coins.")
+            return
+        await self.db.record_economy_activity(ctx.guild.id, ctx.author.id, earned=amount)
+        user = await self.db.get_user(ctx.guild.id, ctx.author.id)
+        await ctx.send(f"💰 Withdrew **{amount:,} coins**. Wallet balance: **{int(user['balance']):,}**.")
+
+    @commands.command(name="invest", aliases=["investment"])
+    @commands.cooldown(1, 5, commands.BucketType.user)
+    async def invest(self, ctx, amount: int, plan: str = "stable"):
+        plans = {
+            "stable": (1.08, 24 * 3600, "8% after 24h"),
+            "growth": (1.20, 3 * 24 * 3600, "20% after 3 days"),
+            "eclipse": (1.50, 7 * 24 * 3600, "50% after 7 days"),
+        }
+        plan = plan.lower()
+        if plan not in plans:
+            await ctx.send("❌ Plans: stable, growth, eclipse.")
+            return
+        if amount < 1000:
+            await ctx.send("❌ Minimum investment is **1,000 coins**.")
+            return
+        multiplier, duration, label = plans[plan]
+        investment_id, reason = await self.db.create_investment(ctx.guild.id, ctx.author.id, amount, multiplier, duration)
+        if investment_id is None:
+            await ctx.send("💸 You don't have enough coins for that investment.")
+            return
+        await self.db.record_economy_activity(ctx.guild.id, ctx.author.id, spent=amount)
+        await ctx.send(
+            f"📈 **{plan.title()} Investment #{investment_id}** created.\n"
+            f"💰 Principal: **{amount:,}**\n"
+            f"✨ Return: **{int(amount * multiplier):,}**\n"
+            f"⏳ {label}.\n"
+            f"Use !investments to track it."
+        )
+
+    @commands.command(name="investments", aliases=["portfolio"])
+    async def investments(self, ctx):
+        rows = await self.db.get_investments(ctx.guild.id, ctx.author.id, active_only=True)
+        if not rows:
+            await ctx.send("📈 You have no active investments.")
+            return
+        lines = []
+        now = time.time()
+        for row in rows[:10]:
+            remaining = max(0, int(float(row["matures_at"]) - now))
+            lines.append(
+                f"**#{row['investment_id']}** — {int(row['principal']):,} → "
+                f"**{int(int(row['principal']) * float(row['multiplier'])):,}** "
+                f"({fmt_time(remaining)} remaining)"
+            )
+        embed = discord.Embed(title="📈 Investment Portfolio", description="\n".join(lines), color=COLOR_GOLD)
+        embed.set_footer(text="Use !redeem <id> after maturity.")
+        await ctx.send(embed=footer(embed, ctx))
+
+    @commands.command(name="redeem")
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def redeem(self, ctx, investment_id: int):
+        payout, reason = await self.db.redeem_investment(ctx.guild.id, ctx.author.id, investment_id)
+        if payout is None:
+            if reason == "missing":
+                await ctx.send("❌ Investment not found or already redeemed.")
+            else:
+                await ctx.send(f"⏳ Investment matures in **{fmt_time(reason)}**.")
+            return
+        await self.db.record_economy_activity(ctx.guild.id, ctx.author.id, earned=payout)
+        await ctx.send(f"✨ Investment **#{investment_id}** matured. You received **{payout:,} coins**.")
+
+    # ------------------------------------------------------------
     @commands.command(name="pay", aliases=["give"])
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def pay(self, ctx, member: discord.Member, amount: int):
