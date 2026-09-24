@@ -51,11 +51,13 @@ COGS = [
     "cogs.leveling",
     "cogs.economy",
     "cogs.games",
+    "cogs.arcade",
     "cogs.music",
     "cogs.fun",
     "cogs.admin",
     "cogs.ai",
     "cogs.help",
+    "cogs.eclipse",
     "cogs.science_game",
     "cogs.rpg",
 ]
@@ -157,12 +159,3 @@ async def on_command_error(ctx, error):
         return
 
     logger.error(f"Unhandled command error in !{ctx.command}: {error}")
-
-
-async def main():
-    async with bot:
-        await bot.start(DISCORD_TOKEN)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())

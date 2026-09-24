@@ -811,5 +811,534 @@ class Games(commands.Cog):
             await ctx.send(embed=footer(embed, ctx))
 
 
+    # ============================================================
+    # ECLIPSE EXPANSION — NEW GAME HALL
+    # ============================================================
+
+    MAX_BET = 1_000_000
+
+    async def _take_bet(self, ctx, amount):
+        try:
+            amount = int(amount)
+        except (TypeError, ValueError):
+            return False, "Invalid bet."
+        if amount <= 0:
+            return False, "Bet must be positive."
+        if amount > self.MAX_BET:
+            return False, f"Maximum bet is {self.MAX_BET:,} coins."
+        user = await self.db.get_user(ctx.guild.id, ctx.author.id)
+        if int(user["balance"]) < amount:
+            return False, f"You only have {int(user['balance']):,} coins."
+        await self.db.add_balance(ctx.guild.id, ctx.author.id, -amount)
+        return True, amount
+
+    async def _payout(self, ctx, bet, multiplier):
+        amount = int(bet * multiplier)
+        balance = await self.db.add_balance(ctx.guild.id, ctx.author.id, amount)
+        return amount, balance
+
+    async def _refund(self, ctx, bet):
+        return await self.db.add_balance(ctx.guild.id, ctx.author.id, bet)
+
+    def _game_embed(self, title, text, color=COLOR_PRIMARY):
+        return discord.Embed(title=title, description=text, color=color)
+
+    @commands.command(name="roulette", aliases=["wheel"])
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def roulette(self, ctx, choice: str, bet: int):
+        choice = {"r": "red", "b": "black", "g": "green"}.get(choice.lower(), choice.lower())
+        if choice not in {"red", "black", "green"}:
+            await ctx.send("Use red, black, or green.")
+            return
+        ok, result = await self._take_bet(ctx, bet)
+        if not ok:
+            await ctx.send(f"❌ {result}")
+            return
+        number = random.randint(0, 36)
+        landed = "green" if number == 0 else ("red" if number % 2 else "black")
+        multiplier = {"red": 2, "black": 2, "green": 14}[choice] if landed == choice else 0
+        if multiplier:
+            payout, balance = await self._payout(ctx, result, multiplier)
+            text = f"Wheel: {number} · {landed.upper()}\n\n🎉 {multiplier}x payout: {payout:,} coins\nBalance: {balance:,}"
+            color = discord.Color.green()
+        else:
+            balance = (await self.db.get_user(ctx.guild.id, ctx.author.id))["balance"]
+            text = f"Wheel: {number} · {landed.upper()}\n\n❌ You lost {result:,} coins.\nBalance: {balance:,}"
+            color = discord.Color.red()
+        await ctx.send(embed=self._game_embed("🔴 ROULETTE", text, color))
+
+    @commands.command(name="oddeven", aliases=["oe"])
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def oddeven(self, ctx, choice: str, bet: int):
+        choice = choice.lower()
+        if choice not in {"odd", "even"}:
+            await ctx.send("Use odd or even.")
+            return
+        ok, result = await self._take_bet(ctx, bet)
+        if not ok:
+            await ctx.send(f"❌ {result}")
+            return
+        number = random.randint(1, 100)
+        actual = "odd" if number % 2 else "even"
+        if actual == choice:
+            payout, balance = await self._payout(ctx, result, 2)
+            text = f"Rolled {number} — {actual}.\n\n🎉 Payout: {payout:,} coins\nBalance: {balance:,}"
+            color = discord.Color.green()
+        else:
+            balance = (await self.db.get_user(ctx.guild.id, ctx.author.id))["balance"]
+            text = f"Rolled {number} — {actual}.\n\n❌ Lost {result:,} coins.\nBalance: {balance:,}"
+            color = discord.Color.red()
+        await ctx.send(embed=self._game_embed("☯ ODD OR EVEN", text, color))
+
+    @commands.command(name="war", aliases=["cardwar"])
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def war(self, ctx, bet: int):
+        ok, result = await self._take_bet(ctx, bet)
+        if not ok:
+            await ctx.send(f"❌ {result}")
+            return
+        player = random.randint(2, 14)
+        house = random.randint(2, 14)
+        names = {11: "J", 12: "Q", 13: "K", 14: "A"}
+        p = names.get(player, str(player))
+        h = names.get(house, str(house))
+        if player > house:
+            payout, balance = await self._payout(ctx, result, 2)
+            text = f"Your card: {p}\nHouse card: {h}\n\n🎉 You win: {payout:,} coins\nBalance: {balance:,}"
+            color = discord.Color.green()
+        elif player == house:
+            balance = await self._refund(ctx, result)
+            text = f"Your card: {p}\nHouse card: {h}\n\n👔 Tie — bet returned.\nBalance: {balance:,}"
+            color = COLOR_GOLD
+        else:
+            balance = (await self.db.get_user(ctx.guild.id, ctx.author.id))["balance"]
+            text = f"Your card: {p}\nHouse card: {h}\n\n❌ You lose.\nBalance: {balance:,}"
+            color = discord.Color.red()
+        await ctx.send(embed=self._game_embed("🃏 WAR", text, color))
+
+    @commands.command(name="baccarat", aliases=["bacc"])
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def baccarat(self, ctx, bet: int):
+        ok, result = await self._take_bet(ctx, bet)
+        if not ok:
+            await ctx.send(f"❌ {result}")
+            return
+
+        cog = self
+
+        class BaccaratView(discord.ui.View):
+            def __init__(view):
+                super().__init__(timeout=30)
+                view.done = False
+
+            async def resolve(view, interaction, side):
+                if interaction.user.id != ctx.author.id:
+                    await interaction.response.send_message("❌ This table is not yours.", ephemeral=True)
+                    return
+                if view.done:
+                    return
+                view.done = True
+                view.stop()
+                player = random.randint(0, 9)
+                banker = random.randint(0, 9)
+                winner = "tie" if player == banker else ("player" if player > banker else "banker")
+                for child in view.children:
+                    child.disabled = True
+                if winner == side:
+                    multiplier = 8 if side == "tie" else 2
+                    payout, balance = await cog._payout(ctx, result, multiplier)
+                    text = f"Player: {player} · Banker: {banker}\n\n🎉 {winner.upper()} wins.\nPayout: {payout:,} coins\nBalance: {balance:,}"
+                    color = discord.Color.green()
+                else:
+                    balance = (await cog.db.get_user(ctx.guild.id, ctx.author.id))["balance"]
+                    text = f"Player: {player} · Banker: {banker}\n\n❌ Winning side: {winner.upper()}\nBalance: {balance:,}"
+                    color = discord.Color.red()
+                await interaction.response.edit_message(embed=cog._game_embed("🎴 BACCARAT", text, color), view=view)
+
+            @discord.ui.button(label="Player", style=discord.ButtonStyle.primary)
+            async def player(view, interaction, button):
+                await view.resolve(interaction, "player")
+
+            @discord.ui.button(label="Banker", style=discord.ButtonStyle.secondary)
+            async def banker(view, interaction, button):
+                await view.resolve(interaction, "banker")
+
+            @discord.ui.button(label="Tie", style=discord.ButtonStyle.success)
+            async def tie(view, interaction, button):
+                await view.resolve(interaction, "tie")
+
+        await ctx.send(
+            embed=self._game_embed("🎴 BACCARAT", f"Bet: {result:,} coins\nChoose your side."),
+            view=BaccaratView(),
+        )
+
+    @commands.command(name="higherlower", aliases=["hl", "highlow"])
+    @commands.cooldown(1, 4, commands.BucketType.user)
+    async def higherlower(self, ctx, bet: int):
+        ok, result = await self._take_bet(ctx, bet)
+        if not ok:
+            await ctx.send(f"❌ {result}")
+            return
+        cog = self
+        current = random.randint(1, 100)
+        multiplier = 1.5
+
+        class HLView(discord.ui.View):
+            def __init__(view):
+                super().__init__(timeout=60)
+                view.done = False
+
+            async def choose(view, interaction, direction):
+                nonlocal current, multiplier
+                if interaction.user.id != ctx.author.id:
+                    await interaction.response.send_message("❌ This game is not yours.", ephemeral=True)
+                    return
+                if view.done:
+                    return
+                nxt = random.randint(1, 100)
+                win = nxt == current or (direction == "higher" and nxt > current) or (direction == "lower" and nxt < current)
+                if not win:
+                    view.done = True
+                    view.stop()
+                    for child in view.children:
+                        child.disabled = True
+                    await interaction.response.edit_message(
+                        embed=cog._game_embed("🔮 HIGHER / LOWER · LOST", f"{current} → {nxt}\n\n❌ Chain broken. Bet lost.", discord.Color.red()),
+                        view=view,
+                    )
+                    return
+                current = nxt
+                multiplier = min(5.0, multiplier + 0.75)
+                if multiplier >= 5:
+                    view.done = True
+                    view.stop()
+                    for child in view.children:
+                        child.disabled = True
+                    payout, balance = await cog._payout(ctx, result, multiplier)
+                    await interaction.response.edit_message(
+                        embed=cog._game_embed("🔮 HIGHER / LOWER · MAX", f"Final: {current}\n\n🎉 5x payout: {payout:,}\nBalance: {balance:,}", discord.Color.gold()),
+                        view=view,
+                    )
+                    return
+                await interaction.response.edit_message(
+                    embed=cog._game_embed("🔮 HIGHER / LOWER", f"Current number: {current}\nMultiplier: {multiplier:.2f}x\n\nPredict the next number."),
+                    view=view,
+                )
+
+            @discord.ui.button(label="Higher ↑", style=discord.ButtonStyle.success)
+            async def higher(view, interaction, button):
+                await view.choose(interaction, "higher")
+
+            @discord.ui.button(label="Lower ↓", style=discord.ButtonStyle.danger)
+            async def lower(view, interaction, button):
+                await view.choose(interaction, "lower")
+
+            @discord.ui.button(label="Cash Out 💰", style=discord.ButtonStyle.primary)
+            async def cash(view, interaction, button):
+                if interaction.user.id != ctx.author.id:
+                    await interaction.response.send_message("❌ This game is not yours.", ephemeral=True)
+                    return
+                if view.done:
+                    return
+                view.done = True
+                view.stop()
+                for child in view.children:
+                    child.disabled = True
+                payout, balance = await cog._payout(ctx, result, multiplier)
+                await interaction.response.edit_message(
+                    embed=cog._game_embed("🔮 HIGHER / LOWER · CASHED OUT", f"Final: {current}\n\n💰 {multiplier:.2f}x payout: {payout:,}\nBalance: {balance:,}", discord.Color.green()),
+                    view=view,
+                )
+
+        await ctx.send(
+            embed=self._game_embed("🔮 HIGHER / LOWER", f"Starting number: {current}\nMultiplier: 1.50x\nChoose higher, lower, or cash out."),
+            view=HLView(),
+        )
+
+    @commands.command(name="target")
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def target(self, ctx, bet: int = 100):
+        ok, result = await self._take_bet(ctx, bet)
+        if not ok:
+            await ctx.send(f"❌ {result}")
+            return
+        target = random.randint(1, 100)
+        roll = random.randint(1, 100)
+        distance = abs(target - roll)
+        multiplier = 10 if distance == 0 else 5 if distance <= 3 else 3 if distance <= 7 else 1.5 if distance <= 15 else 0
+        if multiplier:
+            payout, balance = await self._payout(ctx, result, multiplier)
+            text = f"Target: {target}\nRoll: {roll}\nDistance: {distance}\n\n🎯 {multiplier}x payout: {payout:,}\nBalance: {balance:,}"
+            color = discord.Color.green()
+        else:
+            balance = (await self.db.get_user(ctx.guild.id, ctx.author.id))["balance"]
+            text = f"Target: {target}\nRoll: {roll}\nDistance: {distance}\n\n❌ Missed.\nBalance: {balance:,}"
+            color = discord.Color.red()
+        await ctx.send(embed=self._game_embed("🎯 TARGET", text, color))
+
+    @commands.command(name="reaction", aliases=["reflex"])
+    async def reaction(self, ctx, bet: int = 0):
+        if bet:
+            ok, result = await self._take_bet(ctx, bet)
+            if not ok:
+                await ctx.send(f"❌ {result}")
+                return
+        else:
+            result = 0
+        cog = self
+
+        class ReactionView(discord.ui.View):
+            def __init__(view):
+                super().__init__(timeout=12)
+                view.go = False
+                view.done = False
+
+            @discord.ui.button(label="WAIT…", style=discord.ButtonStyle.secondary)
+            async def press(view, interaction, button):
+                if interaction.user.id != ctx.author.id:
+                    await interaction.response.send_message("❌ This reaction test is not yours.", ephemeral=True)
+                    return
+                if view.done:
+                    return
+                view.done = True
+                view.stop()
+                for child in view.children:
+                    child.disabled = True
+                if not view.go:
+                    balance = await cog._balance(ctx)
+                    text = f"❌ False start.\nBalance: {balance:,}"
+                    color = discord.Color.red()
+                else:
+                    elapsed = time.monotonic() - view.go_time
+                    multiplier = 3 if elapsed <= 0.35 else 2 if elapsed <= 0.65 else 1.5 if elapsed <= 1 else 0
+                    if result and multiplier:
+                        payout, balance = await cog._payout(ctx, result, multiplier)
+                        text = f"Reaction: {elapsed:.3f}s\n\n🎉 {multiplier}x payout: {payout:,}\nBalance: {balance:,}"
+                        color = discord.Color.green()
+                    elif result:
+                        balance = await cog._balance(ctx)
+                        text = f"Reaction: {elapsed:.3f}s\n\n❌ Too slow.\nBalance: {balance:,}"
+                        color = discord.Color.red()
+                    else:
+                        text = f"Reaction: {elapsed:.3f}s\n\n✦ Clean run."
+                        color = COLOR_PRIMARY
+                await interaction.response.edit_message(embed=cog._game_embed("⚡ REACTION", text, color), view=view)
+
+        view = ReactionView()
+        msg = await ctx.send(embed=self._game_embed("⚡ REACTION TEST", "Wait for GO. Do not click early."), view=view)
+        await asyncio.sleep(random.uniform(1.5, 4))
+        if not view.done:
+            view.go = True
+            view.go_time = time.monotonic()
+            view.children[0].label = "GO! ⚡"
+            view.children[0].style = discord.ButtonStyle.success
+            try:
+                await msg.edit(view=view)
+            except discord.HTTPException:
+                pass
+
+    @commands.command(name="scramble", aliases=["anagram"])
+    async def scramble(self, ctx, bet: int = 0):
+        words = ["eclipse", "phantom", "velvet", "sovereign", "moonlight", "crystal", "seraph", "midnight", "cathedral", "nebula", "obsidian", "astral", "kingdom", "whisper", "celestial", "starlight"]
+        if bet:
+            ok, result = await self._take_bet(ctx, bet)
+            if not ok:
+                await ctx.send(f"❌ {result}")
+                return
+        else:
+            result = 0
+        word = random.choice(words)
+        letters = list(word)
+        for _ in range(10):
+            random.shuffle(letters)
+            if "".join(letters) != word:
+                break
+        scrambled = "".join(letters)
+
+        await ctx.send(embed=self._game_embed("🔤 WORD SCRAMBLE", f"Unscramble: {scrambled}\nYou have 20 seconds."))
+        def check(message):
+            return message.author.id == ctx.author.id and message.channel.id == ctx.channel.id
+        try:
+            answer = await self.bot.wait_for("message", timeout=20, check=check)
+        except asyncio.TimeoutError:
+            await ctx.send(f"⏰ Time. The word was {word}.")
+            return
+        if answer.content.strip().lower() == word:
+            if result:
+                payout, balance = await self._payout(ctx, result, 3)
+                await ctx.send(f"🔤 Correct — {word}.\n🎉 Payout: {payout:,} · Balance: {balance:,}")
+            else:
+                await ctx.send(f"🔤 Correct — {word}.")
+        else:
+            balance = (await self.db.get_user(ctx.guild.id, ctx.author.id))["balance"]
+            await ctx.send(f"❌ Wrong. The word was {word}.\nBalance: {balance:,}")
+
+    @commands.command(name="hangman")
+    async def hangman(self, ctx, bet: int = 0):
+        words = ["eclipse", "phantom", "velvet", "sovereign", "moonlight", "crystal", "seraph", "midnight", "nebula", "obsidian"]
+        if bet:
+            ok, result = await self._take_bet(ctx, bet)
+            if not ok:
+                await ctx.send(f"❌ {result}")
+                return
+        else:
+            result = 0
+        word = random.choice(words)
+        guessed = set()
+        misses = 0
+        while misses < 6:
+            masked = " ".join(c if c in guessed else "_" for c in word)
+            if all(c in guessed for c in word):
+                if result:
+                    payout, balance = await self._payout(ctx, result, 4)
+                    await ctx.send(f"🕯️ SOLVED — {masked}\n🎉 Payout: {payout:,} · Balance: {balance:,}")
+                else:
+                    await ctx.send(f"🕯️ SOLVED — {masked}")
+                return
+            await ctx.send(f"🕯️ HANGMAN: {masked}\nMisses: {misses}/6\nType one letter.")
+            def check(message):
+                return message.author.id == ctx.author.id and message.channel.id == ctx.channel.id and len(message.content.strip()) == 1 and message.content.isalpha()
+            try:
+                answer = await self.bot.wait_for("message", timeout=20, check=check)
+            except asyncio.TimeoutError:
+                await ctx.send(f"⏰ Time. Word was {word}.")
+                return
+            letter = answer.content.lower()
+            if letter in guessed:
+                continue
+            guessed.add(letter)
+            if letter not in word:
+                misses += 1
+        balance = (await self.db.get_user(ctx.guild.id, ctx.author.id))["balance"]
+        await ctx.send(f"🕯️ HANGMAN LOST — word was {word}.\nBalance: {balance:,}")
+
+    @commands.command(name="mastermind", aliases=["codebreaker"])
+    async def mastermind(self, ctx, bet: int = 0):
+        if bet:
+            ok, result = await self._take_bet(ctx, bet)
+            if not ok:
+                await ctx.send(f"❌ {result}")
+                return
+        else:
+            result = 0
+        code = "".join(random.sample("0123456789", 4))
+        await ctx.send(embed=self._game_embed("🧩 MASTERMIND", "Break the 4-digit code. No repeated digits. You have 8 guesses.\nReply with four unique digits."))
+        def check(message):
+            return message.author.id == ctx.author.id and message.channel.id == ctx.channel.id and message.content.isdigit() and len(message.content) == 4 and len(set(message.content)) == 4
+        for attempt in range(1, 9):
+            try:
+                answer = await self.bot.wait_for("message", timeout=25, check=check)
+            except asyncio.TimeoutError:
+                await ctx.send(f"⏰ Time. Code was {code}.")
+                return
+            guess = answer.content
+            exact = sum(a == b for a, b in zip(code, guess))
+            misplaced = sum(min(code.count(d), guess.count(d)) for d in set(guess)) - exact
+            if exact == 4:
+                if result:
+                    payout, balance = await self._payout(ctx, result, 6)
+                    await ctx.send(f"🧩 CODE BROKEN in {attempt} guesses.\n🎉 Payout: {payout:,} · Balance: {balance:,}")
+                else:
+                    await ctx.send(f"🧩 CODE BROKEN: {code}")
+                return
+            await ctx.send(f"Attempt {attempt}/8 · Exact: {exact} · Misplaced: {misplaced}")
+        balance = (await self.db.get_user(ctx.guild.id, ctx.author.id))["balance"]
+        await ctx.send(f"🧩 LOCKED — code was {code}.\nBalance: {balance:,}")
+
+    @commands.command(name="mines")
+    async def mines(self, ctx, bet: int):
+        ok, result = await self._take_bet(ctx, bet)
+        if not ok:
+            await ctx.send(f"❌ {result}")
+            return
+        mine_positions = set(random.sample(range(25), 4))
+        revealed = set()
+        multiplier = 1.0
+        cog = self
+
+        class MinesView(discord.ui.View):
+            def __init__(view):
+                super().__init__(timeout=120)
+                view.done = False
+                for index in range(25):
+                    button = discord.ui.Button(label="·", style=discord.ButtonStyle.secondary, row=index // 5)
+                    async def reveal(interaction, idx=index, btn=button):
+                        nonlocal multiplier
+                        if interaction.user.id != ctx.author.id:
+                            await interaction.response.send_message("❌ This minefield is not yours.", ephemeral=True)
+                            return
+                        if view.done or idx in revealed:
+                            return
+                        revealed.add(idx)
+                        if idx in mine_positions:
+                            view.done = True
+                            view.stop()
+                            for child in view.children:
+                                child.disabled = True
+                            for pos, child in enumerate(view.children[:25]):
+                                child.label = "💣" if pos in mine_positions else ("💎" if pos in revealed else "·")
+                            balance = await cog._balance(ctx)
+                            await interaction.response.edit_message(
+                                embed=cog._game_embed("💣 MINES · DETONATED", f"Safe tiles: {len(revealed)-1}\n\n❌ Mine hit.\nBalance: {balance:,}", discord.Color.red()),
+                                view=view,
+                            )
+                            return
+                        btn.label = "💎"
+                        btn.style = discord.ButtonStyle.success
+                        multiplier = min(8.0, multiplier + 0.35)
+                        if len(revealed) == 21:
+                            view.done = True
+                            view.stop()
+                            for child in view.children:
+                                child.disabled = True
+                            payout, balance = await cog._payout(ctx, result, multiplier)
+                            text = f"All safe tiles cleared.\n\n🎉 {multiplier:.2f}x payout: {payout:,}\nBalance: {balance:,}"
+                            color = discord.Color.gold()
+                        else:
+                            text = f"Safe tiles: {len(revealed)}/21\nMultiplier: {multiplier:.2f}x\n\nCash out before a mine."
+                            color = COLOR_PRIMARY
+                        await interaction.response.edit_message(embed=cog._game_embed("💣 MINES", text, color), view=view)
+
+                    button.callback = reveal
+                    view.add_item(button)
+
+                cash = discord.ui.Button(label="Cash Out 💰", style=discord.ButtonStyle.primary, row=4)
+                async def cashout(interaction):
+                    if interaction.user.id != ctx.author.id:
+                        await interaction.response.send_message("❌ This minefield is not yours.", ephemeral=True)
+                        return
+                    if view.done:
+                        return
+                    view.done = True
+                    view.stop()
+                    for child in view.children:
+                        child.disabled = True
+                    if not revealed:
+                        balance = await cog._refund(ctx, result)
+                        text = f"No tiles opened. Bet returned.\nBalance: {balance:,}"
+                        color = COLOR_GOLD
+                    else:
+                        payout, balance = await cog._payout(ctx, result, multiplier)
+                        text = f"Safe tiles: {len(revealed)}\n\n💰 {multiplier:.2f}x payout: {payout:,}\nBalance: {balance:,}"
+                        color = discord.Color.green()
+                    await interaction.response.edit_message(embed=cog._game_embed("💣 MINES · CASHED OUT", text, color), view=view)
+                cash.callback = cashout
+                view.add_item(cash)
+
+        await ctx.send(embed=self._game_embed("💣 MINES", f"5×5 field · 4 mines · Bet: {result:,}\nReveal safe tiles to raise the multiplier."), view=MinesView())
+
+    @commands.command(name="gamehall", aliases=["newgames", "games2"])
+    async def gamehall(self, ctx):
+        embed = self._game_embed(
+            "୨୧ ECLIPSE · EXPANDED ARCADE ୨୧",
+            "🎰 **Casino** — roulette · mines · war · baccarat · higher/lower\n"
+            "🧠 **Mind** — trivia · guess · mastermind · scramble · hangman · 8ball\n"
+            "⚡ **Reflex** — reaction · target\n"
+            "🎮 **Classics** — rps · roll · coinflip · slots · blackjack\n\n"
+            "All betting games cap individual wagers at 1,000,000 coins."
+        )
+        await ctx.send(embed=footer(embed, ctx))
+
+
 async def setup(bot):
     await bot.add_cog(Games(bot))

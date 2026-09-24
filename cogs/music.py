@@ -297,81 +297,289 @@ async def send_song_as_file(channel, query, guild=None):
             os.remove(mp3_path)
 
 
+
 class GuildMusicState:
     def __init__(self):
-        self.queue = deque()            # list of {"query", "requester_name"}
-        self.current = None             # currently playing track dict
+        self.queue = deque()
+        self.current = None
+        self.last_track = None
+        self.recent = deque(maxlen=12)
         self.volume = 0.5
-        self.loop_mode = "off"          # off / single / queue
+        self.loop_mode = "off"
+        self.autoplay = False
+        self.twentyfour_seven = False
+        self.auto_disconnect = True
+        self.queue_limit = 50
+        self.search_behavior = "youtube"
+        self.dj_role_id = None
+        self.voice_channel_id = None
         self.text_channel = None
+        self.playback_generation = 0
+        self.intentional_stop_generation = None
+        self.settings_loaded = False
+        self.auto_disconnect_task = None
+        self.reconnect_task = None
+        self.manual_disconnect = False
+
+
+class MusicControlView(discord.ui.View):
+    def __init__(self, cog, guild_id):
+        super().__init__(timeout=300)
+        self.cog = cog
+        self.guild_id = guild_id
+
+    async def interaction_check(self, interaction):
+        if interaction.guild is None or interaction.guild.id != self.guild_id:
+            await interaction.response.send_message("This control panel belongs to another server.", ephemeral=True)
+            return False
+        if not self.cog.can_control_member(interaction.guild, interaction.user):
+            await interaction.response.send_message("You need the DJ role or Manage Server permission to use this control.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="Pause", emoji="⏸️", style=discord.ButtonStyle.secondary)
+    async def pause_button(self, interaction, button):
+        vc = interaction.guild.voice_client
+        if vc and vc.is_playing():
+            vc.pause()
+            await interaction.response.send_message("⏸️ Paused.", ephemeral=True)
+        elif vc and vc.is_paused():
+            vc.resume()
+            await interaction.response.send_message("▶️ Resumed.", ephemeral=True)
+        else:
+            await interaction.response.send_message("Nothing is playing.", ephemeral=True)
+
+    @discord.ui.button(label="Skip", emoji="⏭️", style=discord.ButtonStyle.primary)
+    async def skip_button(self, interaction, button):
+        await self.cog._skip_guild(interaction.guild, interaction.channel, announce=False)
+        await interaction.response.send_message("⏭️ Skipped.", ephemeral=True)
+
+    @discord.ui.button(label="Stop", emoji="⏹️", style=discord.ButtonStyle.danger)
+    async def stop_button(self, interaction, button):
+        await self.cog._stop_guild(interaction.guild, disconnect=False)
+        await interaction.response.send_message("⏹️ Stopped and cleared.", ephemeral=True)
+
+    @discord.ui.button(label="Loop", emoji="🔁", style=discord.ButtonStyle.secondary)
+    async def loop_button(self, interaction, button):
+        state = await self.cog.ensure_settings(interaction.guild.id)
+        modes = ["off", "single", "queue"]
+        state.loop_mode = modes[(modes.index(state.loop_mode) + 1) % len(modes)]
+        await self.cog.persist_settings(interaction.guild.id, state)
+        await interaction.response.send_message(f"🔁 Loop: {state.loop_mode}.", ephemeral=True)
+
+    @discord.ui.button(label="Shuffle", emoji="🔀", style=discord.ButtonStyle.secondary)
+    async def shuffle_button(self, interaction, button):
+        state = await self.cog.ensure_settings(interaction.guild.id)
+        if len(state.queue) < 2:
+            await interaction.response.send_message("Not enough songs to shuffle.", ephemeral=True)
+            return
+        items = list(state.queue)
+        random.shuffle(items)
+        state.queue = deque(items)
+        await interaction.response.send_message("🔀 Queue shuffled.", ephemeral=True)
+
+    @discord.ui.button(label="Queue", emoji="📜", style=discord.ButtonStyle.secondary)
+    async def queue_button(self, interaction, button):
+        await self.cog.send_queue(interaction.guild, interaction.channel, interaction=interaction)
 
 
 class Music(commands.Cog):
-    """Voice playback: queue, skip, pause/resume, loop, volume, shuffle."""
+    AUTODISCONNECT_SECONDS = 300
+    MAX_RECOVERY_ATTEMPTS = 2
 
     def __init__(self, bot):
         self.bot = bot
-        self.states: dict[int, GuildMusicState] = {}
+        self.states = {}
 
-    def state_for(self, guild_id) -> GuildMusicState:
+    def state_for(self, guild_id):
         if guild_id not in self.states:
             self.states[guild_id] = GuildMusicState()
         return self.states[guild_id]
 
-    # ------------------------------------------------------------
+    async def ensure_settings(self, guild_id):
+        state = self.state_for(guild_id)
+        if state.settings_loaded:
+            return state
+        config = await self.bot.db.get_music_config(guild_id)
+        state.volume = config["volume"]
+        state.loop_mode = config["loop_mode"] if config["loop_mode"] in {"off", "single", "queue"} else "off"
+        state.autoplay = config["autoplay"]
+        state.twentyfour_seven = config["twentyfour_seven"]
+        state.auto_disconnect = config["auto_disconnect"]
+        state.queue_limit = config["queue_limit"]
+        state.search_behavior = config["search_behavior"]
+        state.dj_role_id = config["dj_role_id"]
+        state.voice_channel_id = config["voice_channel_id"]
+        state.settings_loaded = True
+        return state
+
+    async def persist_settings(self, guild_id, state):
+        await self.bot.db.set_music_config(
+            guild_id,
+            volume=float(state.volume),
+            loop_mode=state.loop_mode,
+            autoplay=int(state.autoplay),
+            twentyfour_seven=int(state.twentyfour_seven),
+            auto_disconnect=int(state.auto_disconnect),
+            queue_limit=int(state.queue_limit),
+            search_behavior=state.search_behavior,
+            dj_role_id=state.dj_role_id,
+            voice_channel_id=state.voice_channel_id,
+        )
+
+    def can_control_member(self, guild, member):
+        if member.guild_permissions.manage_guild or member.guild_permissions.manage_channels:
+            return True
+        state = self.state_for(guild.id)
+        if state.dj_role_id:
+            return any(str(role.id) == str(state.dj_role_id) for role in getattr(member, "roles", []))
+        return False
+
+    async def require_control(self, ctx):
+        await self.ensure_settings(ctx.guild.id)
+        if not self.can_control_member(ctx.guild, ctx.author):
+            await ctx.send("🛡️ Music control requires the configured DJ role or Manage Server.")
+            return None
+        return self.state_for(ctx.guild.id)
+
+    def _cancel_autodisconnect(self, state):
+        task = state.auto_disconnect_task
+        if task and not task.done():
+            task.cancel()
+        state.auto_disconnect_task = None
+
+    def _schedule_autodisconnect(self, guild):
+        state = self.state_for(guild.id)
+        self._cancel_autodisconnect(state)
+        if state.twentyfour_seven or not state.auto_disconnect:
+            return
+        async def worker():
+            try:
+                await asyncio.sleep(self.AUTODISCONNECT_SECONDS)
+                vc = guild.voice_client
+                if vc and not vc.is_playing() and not vc.is_paused() and not state.queue:
+                    state.manual_disconnect = True
+                    await vc.disconnect()
+                    state.current = None
+                    if state.text_channel:
+                        await state.text_channel.send("👋 Left voice after 5 minutes of inactivity.")
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.exception("Auto-disconnect failed for guild %s", guild.id)
+        state.auto_disconnect_task = asyncio.create_task(worker())
+
+    async def _connect_to_channel(self, guild, channel):
+        vc = guild.voice_client
+        if vc:
+            try:
+                if vc.channel.id != channel.id:
+                    await vc.move_to(channel)
+            except Exception:
+                logger.exception("Voice move failed for guild %s", guild.id)
+            return guild.voice_client
+        return await channel.connect(reconnect=True, self_deaf=True)
+
+    async def _remember_voice(self, guild, channel):
+        state = await self.ensure_settings(guild.id)
+        state.voice_channel_id = str(channel.id)
+        state.manual_disconnect = False
+        await self.persist_settings(guild.id, state)
+
+    async def _restore_24_7(self, guild):
+        state = await self.ensure_settings(guild.id)
+        if not state.twentyfour_seven or state.manual_disconnect or not state.voice_channel_id:
+            return
+        channel = guild.get_channel(int(state.voice_channel_id))
+        if channel is None or not hasattr(channel, "connect"):
+            return
+        if guild.voice_client:
+            return
+        try:
+            await self._connect_to_channel(guild, channel)
+        except Exception as error:
+            logger.warning("24/7 reconnect failed for %s: %s", guild.id, error)
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        for guild in self.bot.guilds:
+            asyncio.create_task(self._restore_24_7(guild))
+
+    @commands.Cog.listener()
+    async def on_voice_state_update(self, member, before, after):
+        if not self.bot.user or member.id != self.bot.user.id or before.channel is after.channel:
+            return
+        guild = member.guild
+        state = await self.ensure_settings(guild.id)
+        if after.channel is None and before.channel is not None and state.twentyfour_seven and not state.manual_disconnect:
+            if state.reconnect_task and not state.reconnect_task.done():
+                return
+            async def reconnect():
+                try:
+                    await asyncio.sleep(2)
+                    channel = guild.get_channel(int(state.voice_channel_id)) if state.voice_channel_id else None
+                    if channel and guild.voice_client is None and state.twentyfour_seven and not state.manual_disconnect:
+                        await self._connect_to_channel(guild, channel)
+                        if state.current:
+                            current = dict(state.current)
+                            state.queue.appendleft({"query": current["query"], "requester_name": current["requester_name"]})
+                            state.current = None
+                            await self._play_next(guild)
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    logger.exception("24/7 voice reconnect failed for guild %s", guild.id)
+                finally:
+                    state.reconnect_task = None
+            state.reconnect_task = asyncio.create_task(reconnect())
+
     @commands.command(name="join")
     async def join(self, ctx):
-        if ctx.author.voice is None or ctx.author.voice.channel is None:
+        if not ctx.author.voice or not ctx.author.voice.channel:
             await ctx.send("🎤 Join a voice channel first.")
             return
-
         channel = ctx.author.voice.channel
-
-        if ctx.voice_client:
-            await ctx.voice_client.move_to(channel)
-        else:
-            await channel.connect()
-
+        await self._connect_to_channel(ctx.guild, channel)
+        await self._remember_voice(ctx.guild, channel)
         await ctx.send(f"🎵 Joined **{channel.name}**.")
 
     @commands.command(name="leave", aliases=["disconnect", "dc"])
     async def leave(self, ctx):
+        if not await self.require_control(ctx):
+            return
         if ctx.voice_client is None:
             await ctx.send("I'm not in a voice channel.")
             return
-
-        state = self.state_for(ctx.guild.id)
+        state = await self.ensure_settings(ctx.guild.id)
+        state.manual_disconnect = True
+        self._cancel_autodisconnect(state)
         state.queue.clear()
+        if ctx.voice_client.is_playing() or ctx.voice_client.is_paused():
+            generation = state.current.get("generation") if state.current else None
+            state.intentional_stop_generation = generation
+            ctx.voice_client.stop()
         state.current = None
-
         await ctx.voice_client.disconnect()
         await ctx.send("👋 Disconnected.")
 
-    # ------------------------------------------------------------
     async def enqueue(self, ctx, query):
-        """Adds `query` to the guild queue and starts playback if idle."""
-
         if ctx.voice_client is None:
-            if ctx.author.voice is None or ctx.author.voice.channel is None:
+            if not ctx.author.voice or not ctx.author.voice.channel:
                 await ctx.send("🎤 Join a voice channel first.")
                 return
-
-            await ctx.author.voice.channel.connect()
-
-        state = self.state_for(ctx.guild.id)
+            await self._connect_to_channel(ctx.guild, ctx.author.voice.channel)
+            await self._remember_voice(ctx.guild, ctx.author.voice.channel)
+        state = await self.ensure_settings(ctx.guild.id)
         state.text_channel = ctx.channel
-
-        state.queue.append({
-            "query": query,
-            "requester_name": ctx.author.display_name
-        })
-
+        state.manual_disconnect = False
+        self._cancel_autodisconnect(state)
+        if len(state.queue) >= state.queue_limit:
+            await ctx.send(f"🧱 Queue limit reached ({state.queue_limit}).")
+            return
+        state.queue.append({"query": query.strip(), "requester_name": ctx.author.display_name})
         vc = ctx.voice_client
-
-        if vc.is_playing() or vc.is_paused():
-            await ctx.send(
-                f"➕ Queued **{query}** (position {len(state.queue)})."
-            )
+        if vc and (vc.is_playing() or vc.is_paused()):
+            await ctx.send(f"➕ Queued **{query}** · position **{len(state.queue)}**.")
         else:
             await self._play_next(ctx.guild)
 
@@ -380,121 +588,156 @@ class Music(commands.Cog):
         await self.enqueue(ctx, query)
 
     async def _resolve_for_playback(self, guild, query):
-        """Resolve a fresh stream URL immediately before playback."""
-        loop = asyncio.get_event_loop()
-        return await resolve_query(loop, query)
+        return await resolve_query(asyncio.get_running_loop(), query)
+
+    async def _autoplay_candidate(self, guild, seed):
+        loop = asyncio.get_running_loop()
+        q = seed if seed.startswith("http") else f"ytsearch5:{seed}"
+        options = _build_ytdl_options(None)
+        def extract():
+            with yt_dlp.YoutubeDL(options) as extractor:
+                return extractor.extract_info(q, download=False)
+        data = await loop.run_in_executor(None, extract)
+        entries = [e for e in (data or {}).get("entries", []) if e]
+        state = self.state_for(guild.id)
+        for entry in entries:
+            if not entry.get("url") or not entry.get("webpage_url"):
+                continue
+            availability = str(entry.get("availability") or "").lower()
+            if availability in {"private", "premium only", "needs_auth"}:
+                continue
+            key = entry.get("webpage_url") or entry.get("id")
+            if key and key in state.recent:
+                continue
+            return entry
+        return None
 
     async def _start_resolved_track(self, guild, state, query, requester_name, data):
         stream_url = data.get("url")
         if not stream_url:
             raise SongDownloadError("YouTube returned no stream URL.")
-
         title = data.get("title", query)
         webpage_url = data.get("webpage_url")
-
+        state.playback_generation += 1
+        generation = state.playback_generation
+        state.intentional_stop_generation = None
         state.current = {
             "query": query,
             "title": title,
             "webpage_url": webpage_url,
             "requester_name": requester_name,
             "stream_url": stream_url,
+            "generation": generation,
+            "key": webpage_url or data.get("id") or query,
         }
-
+        state.recent.append(state.current["key"])
         source = discord.FFmpegPCMAudio(stream_url, **FFMPEG_OPTIONS)
         source = discord.PCMVolumeTransformer(source, volume=state.volume)
 
         def after_playing(error):
-            fut = asyncio.run_coroutine_threadsafe(
-                self._handle_player_end(guild, query, requester_name, error),
-                self.bot.loop
-            )
             try:
-                fut.result()
-            except Exception:
-                logger.exception("Error handling playback completion")
-
-    async def _handle_player_end(self, guild, query, requester_name, error):
-        state = self.states.get(guild.id)
-        if state is None:
-            return
-
-        if error:
-            logger.error("FFmpeg/player error for '%s': %s", query, error)
-            try:
-                fresh = await self._resolve_for_playback(guild, query)
-                if guild.voice_client is not None:
-                    await self._start_resolved_track(
-                        guild, state, query, requester_name, fresh
-                    )
-                    if state.text_channel:
-                        await state.text_channel.send(
-                            "🔄 YouTube stream failed; refreshed and resumed."
-                        )
-                    return
-            except Exception as refresh_error:
-                logger.error(
-                    "Automatic stream refresh failed for '%s': %s",
-                    query,
-                    refresh_error,
+                asyncio.run_coroutine_threadsafe(
+                    self._handle_player_end(guild, query, requester_name, generation, error),
+                    self.bot.loop,
                 )
+            except Exception:
+                logger.exception("Could not schedule player-end callback for guild %s", guild.id)
 
-        state.current = None
-        await self._play_next(guild)
-
-        guild.voice_client.play(source, after=after_playing)
-
+        try:
+            vc = guild.voice_client
+            if vc is None:
+                raise RuntimeError("Voice connection disappeared before playback started.")
+            vc.play(source, after=after_playing)
+        except Exception:
+            if state.playback_generation == generation:
+                state.current = None
+            raise
         if state.text_channel:
             embed = discord.Embed(
                 title="🎵 Now Playing",
-                description=f"**{title}**\\n{webpage_url or ''}",
-                color=COLOR_MUSIC
+                description=f"**{title}**\n{webpage_url or ''}",
+                color=COLOR_MUSIC,
             )
             embed.set_footer(text=f"Requested by {requester_name}")
-            await state.text_channel.send(embed=embed)
+            await state.text_channel.send(embed=embed, view=MusicControlView(self, guild.id))
+
+    async def _handle_player_end(self, guild, query, requester_name, generation, error):
+        state = self.states.get(guild.id)
+        if state is None or generation != state.playback_generation:
+            return
+        if state.intentional_stop_generation == generation:
+            state.intentional_stop_generation = None
+            if state.current and state.current.get("generation") == generation:
+                state.current = None
+            if state.current is None and not state.queue:
+                return
+            await self._play_next(guild)
+            return
+        if error:
+            logger.error("FFmpeg/player error for '%s': %s", query, error)
+            for _ in range(self.MAX_RECOVERY_ATTEMPTS):
+                try:
+                    fresh = await self._resolve_for_playback(guild, query)
+                    if guild.voice_client is not None:
+                        await self._start_resolved_track(guild, state, query, requester_name, fresh)
+                        if state.text_channel:
+                            await state.text_channel.send("🔄 Stream failed; ECLIPSE refreshed the source.")
+                        return
+                except Exception as refresh_error:
+                    logger.warning("Playback recovery failed for '%s': %s", query, refresh_error)
+        if state.current and state.current.get("generation") == generation:
+            state.last_track = dict(state.current)
+            state.current = None
+        await self._play_next(guild)
 
     async def _play_next(self, guild):
         state = self.states.get(guild.id)
-
-        if state is None or guild.voice_client is None:
+        if state is None:
             return
-
+        await self.ensure_settings(guild.id)
+        vc = guild.voice_client
+        if vc is None:
+            if state.twentyfour_seven and state.voice_channel_id and not state.manual_disconnect:
+                await self._restore_24_7(guild)
+            return
         next_query = None
         requester_name = None
-
-        if state.loop_mode == "single" and state.current:
-            next_query = state.current["query"]
-            requester_name = state.current["requester_name"]
+        if state.loop_mode == "single" and state.last_track:
+            next_query = state.last_track["query"]
+            requester_name = state.last_track["requester_name"]
         elif state.queue:
             item = state.queue.popleft()
             next_query = item["query"]
             requester_name = item["requester_name"]
-
-            if state.loop_mode == "queue" and state.current:
-                state.queue.append({
-                    "query": state.current["query"],
-                    "requester_name": state.current["requester_name"]
-                })
-
+            if state.loop_mode == "queue" and state.last_track:
+                state.queue.append({"query": state.last_track["query"], "requester_name": state.last_track["requester_name"]})
+        if next_query is None and state.autoplay and state.last_track and state.loop_mode == "off":
+            try:
+                candidate = await self._autoplay_candidate(guild, state.last_track.get("title") or state.last_track.get("query", ""))
+                if candidate:
+                    next_query = candidate.get("webpage_url") or candidate.get("url")
+                    requester_name = "ECLIPSE Autoplay"
+                    data = candidate
+                else:
+                    data = None
+            except Exception as error:
+                logger.warning("Autoplay search failed for guild %s: %s", guild.id, error)
+                data = None
+        else:
+            data = None
         if next_query is None:
             state.current = None
             if state.text_channel:
                 await state.text_channel.send("📭 Queue finished.")
+            self._schedule_autodisconnect(guild)
             return
-
-        loop = asyncio.get_event_loop()
-
-        # Resolve a fresh URL. Stream URLs are intentionally never stored
-        # in the queue because they expire.
+        self._cancel_autodisconnect(state)
         try:
-            data = await self._resolve_for_playback(guild, next_query)
-        except SongDownloadError as first_error:
+            data = data or await self._resolve_for_playback(guild, next_query)
+        except Exception as first_error:
             if state.text_channel:
-                await state.text_channel.send(
-                    f"❌ Couldn't start '{next_query}': {first_error}"
-                )
-
+                await state.text_channel.send(f"❌ Couldn't start **{next_query}**: {first_error}")
             state.current = None
-
             while state.queue:
                 failed = state.queue.popleft()
                 try:
@@ -502,199 +745,322 @@ class Music(commands.Cog):
                     next_query = failed["query"]
                     requester_name = failed["requester_name"]
                     break
-                except SongDownloadError as retry_error:
+                except Exception as retry_error:
                     if state.text_channel:
-                        await state.text_channel.send(
-                            "❌ Skipping '{}' : {}".format(
-                                failed["query"], retry_error
-                            )
-                        )
+                        await state.text_channel.send(f"❌ Skipping **{failed['query']}**: {retry_error}")
             else:
-                if state.text_channel:
-                    await state.text_channel.send("📭 Queue finished.")
+                self._schedule_autodisconnect(guild)
                 return
-
         try:
-            await self._start_resolved_track(
-                guild, state, next_query, requester_name, data
-            )
+            await self._start_resolved_track(guild, state, next_query, requester_name, data)
         except Exception as playback_error:
-            logger.error(
-                "Playback start failed for '%s': %s",
-                next_query,
-                playback_error,
-            )
-
-            # One complete re-resolution is important here: a freshly
-            # extracted YouTube URL can still be rejected by FFmpeg if
-            # it expires or is invalidated between extraction and opening.
+            logger.error("Playback start failed for '%s': %s", next_query, playback_error)
             try:
                 fresh = await self._resolve_for_playback(guild, next_query)
-                await self._start_resolved_track(
-                    guild, state, next_query, requester_name, fresh
-                )
+                await self._start_resolved_track(guild, state, next_query, requester_name, fresh)
                 if state.text_channel:
-                    await state.text_channel.send(
-                        "🔄 Stream refreshed and playback restarted."
-                    )
+                    await state.text_channel.send("🔄 Stream refreshed and playback restarted.")
                 return
-            except Exception as refresh_error:
-                logger.error(
-                    "Stream refresh failed for '%s': %s",
-                    next_query,
-                    refresh_error,
-                )
+            except Exception:
                 state.current = None
-
-                if state.text_channel:
-                    await state.text_channel.send(
-                        f"❌ Couldn't start **{next_query}** after a stream refresh."
-                    )
-
                 await self._play_next(guild)
 
-    # ------------------------------------------------------------
+    async def _skip_guild(self, guild, channel=None, announce=False):
+        state = await self.ensure_settings(guild.id)
+        vc = guild.voice_client
+        if vc is None or not (vc.is_playing() or vc.is_paused()):
+            if channel and announce:
+                await channel.send("Nothing to skip.")
+            return False
+        generation = state.current.get("generation") if state.current else None
+        state.intentional_stop_generation = generation
+        vc.stop()
+        if channel and announce:
+            await channel.send("⏭️ Skipped.")
+        return True
+
+    async def _stop_guild(self, guild, disconnect=False):
+        state = await self.ensure_settings(guild.id)
+        state.queue.clear()
+        self._cancel_autodisconnect(state)
+        vc = guild.voice_client
+        if vc and (vc.is_playing() or vc.is_paused()):
+            generation = state.current.get("generation") if state.current else None
+            state.intentional_stop_generation = generation
+            vc.stop()
+        state.current = None
+        if disconnect and vc:
+            state.manual_disconnect = True
+            await vc.disconnect()
+
+    async def send_queue(self, guild, channel, interaction=None):
+        state = await self.ensure_settings(guild.id)
+        lines = []
+        if state.current:
+            lines.append(f"▶️ **{state.current['title']}** · {state.current['requester_name']}")
+        for i, item in enumerate(state.queue, 1):
+            lines.append(f"{i:02} · {item['query']} · {item['requester_name']}")
+        content = "📭 The queue is empty." if not lines else "\n".join(lines[:25])
+        if len(lines) > 25:
+            content += f"\n… and {len(lines)-25} more."
+        embed = discord.Embed(title="🎵 ECLIPSE QUEUE", description=content, color=COLOR_MUSIC)
+        embed.set_footer(text=f"Loop: {state.loop_mode} · Autoplay: {'on' if state.autoplay else 'off'} · Limit: {state.queue_limit}")
+        if interaction:
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+        else:
+            await channel.send(embed=embed, view=MusicControlView(self, guild.id))
+
     @commands.command(name="pause")
     async def pause(self, ctx):
+        await self.ensure_settings(ctx.guild.id)
         vc = ctx.voice_client
-
         if vc is None or not vc.is_playing():
             await ctx.send("Nothing is playing.")
             return
-
+        if not self.can_control_member(ctx.guild, ctx.author):
+            await ctx.send("🛡️ You need the DJ role or Manage Server.")
+            return
         vc.pause()
         await ctx.send("⏸️ Paused.")
 
     @commands.command(name="resume")
     async def resume(self, ctx):
+        await self.ensure_settings(ctx.guild.id)
         vc = ctx.voice_client
-
         if vc is None or not vc.is_paused():
             await ctx.send("Nothing is paused.")
             return
-
+        if not self.can_control_member(ctx.guild, ctx.author):
+            await ctx.send("🛡️ You need the DJ role or Manage Server.")
+            return
         vc.resume()
         await ctx.send("▶️ Resumed.")
 
     @commands.command(name="skip")
     async def skip(self, ctx):
-        vc = ctx.voice_client
-
-        if vc is None or not (vc.is_playing() or vc.is_paused()):
-            await ctx.send("Nothing to skip.")
+        if not await self.require_control(ctx):
             return
-
-        vc.stop()  # triggers after_playing -> _play_next
-        await ctx.send("⏭️ Skipped.")
+        await self._skip_guild(ctx.guild, ctx.channel, announce=True)
 
     @commands.command(name="stop")
     async def stop(self, ctx):
-        vc = ctx.voice_client
-        state = self.state_for(ctx.guild.id)
-
-        state.queue.clear()
-        state.current = None
-
-        if vc:
-            vc.stop()
-
+        if not await self.require_control(ctx):
+            return
+        await self._stop_guild(ctx.guild)
         await ctx.send("⏹️ Stopped and cleared the queue.")
 
-    # ------------------------------------------------------------
     @commands.command(name="queue", aliases=["q"])
     async def queue_cmd(self, ctx):
+        await self.send_queue(ctx.guild, ctx.channel)
+
+    @commands.command(name="remove")
+    async def remove(self, ctx, position: int):
+        if not await self.require_control(ctx):
+            return
         state = self.state_for(ctx.guild.id)
-
-        lines = []
-
-        if state.current:
-            lines.append(f"▶️ **{state.current['title']}** *(now playing)*")
-
-        for i, item in enumerate(state.queue, start=1):
-            lines.append(f"{i}. {item['query']} — added by {item['requester_name']}")
-
-        if not lines:
-            await ctx.send("📭 The queue is empty.")
+        items = list(state.queue)
+        if position < 1 or position > len(items):
+            await ctx.send("❌ Invalid queue position.")
             return
+        item = items.pop(position - 1)
+        state.queue = deque(items)
+        await ctx.send(f"🗑️ Removed **{item['query']}**.")
 
-        embed = discord.Embed(
-            title="🎵 Queue",
-            description="\n".join(lines[:15]),
-            color=COLOR_MUSIC
-        )
-        await ctx.send(embed=footer(embed, ctx))
-
-    @commands.command(name="nowplaying", aliases=["np"])
-    async def nowplaying(self, ctx):
+    @commands.command(name="move")
+    async def move(self, ctx, from_position: int, to_position: int):
+        if not await self.require_control(ctx):
+            return
         state = self.state_for(ctx.guild.id)
-
-        if not state.current:
-            await ctx.send("Nothing is playing.")
+        items = list(state.queue)
+        if not (1 <= from_position <= len(items) and 1 <= to_position <= len(items)):
+            await ctx.send("❌ Both positions must be inside the current queue.")
             return
+        item = items.pop(from_position - 1)
+        items.insert(to_position - 1, item)
+        state.queue = deque(items)
+        await ctx.send(f"↕️ Moved **{item['query']}** to position **{to_position}**.")
 
-        embed = discord.Embed(
-            title="🎵 Now Playing",
-            description=(
-                f"**{state.current['title']}**\n"
-                f"{state.current.get('webpage_url') or ''}"
-            ),
-            color=COLOR_MUSIC
-        )
-        embed.set_footer(text=f"Requested by {state.current['requester_name']}")
-        await ctx.send(embed=embed)
-
-    @commands.command(name="volume", aliases=["vol"])
-    async def volume(self, ctx, percent: int):
-        if percent < 0 or percent > 200:
-            await ctx.send("🔊 Choose a volume between 0 and 200.")
+    @commands.command(name="clear")
+    async def clear_queue(self, ctx):
+        if not await self.require_control(ctx):
             return
-
         state = self.state_for(ctx.guild.id)
-        state.volume = percent / 100
-
-        if ctx.voice_client and ctx.voice_client.source:
-            ctx.voice_client.source.volume = state.volume
-
-        await ctx.send(f"🔊 Volume set to **{percent}%**.")
-
-    @commands.command(name="loop")
-    async def loop_cmd(self, ctx, mode: str = None):
-        state = self.state_for(ctx.guild.id)
-
-        if mode is None:
-            await ctx.send(f"🔁 Current loop mode: **{state.loop_mode}**.")
-            return
-
-        mode = mode.lower()
-
-        if mode not in ("off", "single", "queue"):
-            await ctx.send("🔁 Choose `off`, `single`, or `queue`.")
-            return
-
-        state.loop_mode = mode
-        await ctx.send(f"🔁 Loop mode set to **{mode}**.")
+        count = len(state.queue)
+        state.queue.clear()
+        await ctx.send(f"🧹 Cleared {count} queued track(s).")
 
     @commands.command(name="shuffle")
     async def shuffle(self, ctx):
-        state = self.state_for(ctx.guild.id)
-
+        if not await self.require_control(ctx):
+            return
+        state = await self.ensure_settings(ctx.guild.id)
         if len(state.queue) < 2:
             await ctx.send("Not enough songs in the queue to shuffle.")
             return
-
         items = list(state.queue)
         random.shuffle(items)
         state.queue = deque(items)
-
         await ctx.send("🔀 Queue shuffled.")
 
-    # ------------------------------------------------------------
+    @commands.command(name="nowplaying", aliases=["np", "music"])
+    async def nowplaying(self, ctx):
+        state = await self.ensure_settings(ctx.guild.id)
+        if not state.current:
+            await ctx.send("Nothing is playing.")
+            return
+        embed = discord.Embed(
+            title="🎵 ECLIPSE NOW PLAYING",
+            description=f"**{state.current['title']}**\n{state.current.get('webpage_url') or ''}",
+            color=COLOR_MUSIC,
+        )
+        embed.set_footer(text=f"Requested by {state.current['requester_name']} · Loop {state.loop_mode}")
+        await ctx.send(embed=embed, view=MusicControlView(self, ctx.guild.id))
+
+    @commands.command(name="volume", aliases=["vol"])
+    async def volume(self, ctx, percent: int):
+        if not await self.require_control(ctx):
+            return
+        if not 0 <= percent <= 200:
+            await ctx.send("🔊 Choose a volume between 0 and 200.")
+            return
+        state = await self.ensure_settings(ctx.guild.id)
+        state.volume = percent / 100
+        if ctx.voice_client and ctx.voice_client.source:
+            try:
+                ctx.voice_client.source.volume = state.volume
+            except AttributeError:
+                pass
+        await self.persist_settings(ctx.guild.id, state)
+        await ctx.send(f"🔊 Volume set to {percent}% and saved.")
+
+    @commands.command(name="loop")
+    async def loop_cmd(self, ctx, mode: str = None):
+        if not await self.require_control(ctx):
+            return
+        state = await self.ensure_settings(ctx.guild.id)
+        if mode is None:
+            await ctx.send(f"🔁 Current loop mode: {state.loop_mode}.")
+            return
+        mode = mode.lower()
+        if mode not in ("off", "single", "queue"):
+            await ctx.send("🔁 Choose off, single, or queue.")
+            return
+        state.loop_mode = mode
+        await self.persist_settings(ctx.guild.id, state)
+        await ctx.send(f"🔁 Loop mode set to {mode} and saved.")
+
+    @commands.command(name="autoplay", aliases=["ap"])
+    async def autoplay(self, ctx, mode: str = None):
+        if not await self.require_control(ctx):
+            return
+        state = await self.ensure_settings(ctx.guild.id)
+        if mode is None:
+            await ctx.send(f"✨ Autoplay is {'on' if state.autoplay else 'off'}.")
+            return
+        mode = mode.lower()
+        if mode not in {"on", "off", "true", "false"}:
+            await ctx.send("✨ Use on or off.")
+            return
+        state.autoplay = mode in {"on", "true"}
+        await self.persist_settings(ctx.guild.id, state)
+        await ctx.send(f"✨ Autoplay {'enabled' if state.autoplay else 'disabled'}.")
+
+    @commands.command(name="247")
+    async def twentyfour_seven(self, ctx, mode: str = None):
+        if not await self.require_control(ctx):
+            return
+        state = await self.ensure_settings(ctx.guild.id)
+        if mode is None:
+            await ctx.send(f"♾️ 24/7 mode is {'on' if state.twentyfour_seven else 'off'}.")
+            return
+        mode = mode.lower()
+        if mode not in {"on", "off", "true", "false"}:
+            await ctx.send("♾️ Use on or off.")
+            return
+        state.twentyfour_seven = mode in {"on", "true"}
+        if state.twentyfour_seven:
+            state.auto_disconnect = False
+        await self.persist_settings(ctx.guild.id, state)
+        await ctx.send(f"♾️ 24/7 mode {'enabled' if state.twentyfour_seven else 'disabled'}.")
+
+    @commands.command(name="djrole")
+    @commands.has_guild_permissions(manage_guild=True)
+    async def djrole(self, ctx, role: discord.Role = None):
+        state = await self.ensure_settings(ctx.guild.id)
+        if role is None:
+            state.dj_role_id = None
+            await self.persist_settings(ctx.guild.id, state)
+            await ctx.send("🎧 DJ role cleared; Manage Server is now required for music controls.")
+            return
+        state.dj_role_id = str(role.id)
+        await self.persist_settings(ctx.guild.id, state)
+        await ctx.send(f"🎧 DJ role set to {role.name}.")
+
+    @commands.command(name="musicsettings", aliases=["musicconfig"])
+    @commands.has_guild_permissions(manage_guild=True)
+    async def musicsettings(self, ctx, setting: str = None, value: str = None):
+        state = await self.ensure_settings(ctx.guild.id)
+        if not setting:
+            description = (
+                f"Volume: {round(state.volume*100)}%\n"
+                f"Loop: {state.loop_mode}\n"
+                f"Autoplay: {'on' if state.autoplay else 'off'}\n"
+                f"24/7: {'on' if state.twentyfour_seven else 'off'}\n"
+                f"Auto-disconnect: {'on' if state.auto_disconnect else 'off'}\n"
+                f"Queue limit: {state.queue_limit}\n"
+                f"Search: {state.search_behavior}\n"
+                + (f"DJ role: <@&{state.dj_role_id}>" if state.dj_role_id else "DJ role: Manage Server")
+            )
+            embed = discord.Embed(title="🎵 ECLIPSE MUSIC SETTINGS", description=description, color=COLOR_MUSIC)
+            await ctx.send(embed=embed)
+            return
+        key = setting.lower().replace("-", "_")
+        if value is None:
+            await ctx.send("Provide a value for that setting.")
+            return
+        if key == "volume":
+            try: pct = int(value)
+            except ValueError:
+                await ctx.send("Volume must be 0-200."); return
+            if not 0 <= pct <= 200:
+                await ctx.send("Volume must be 0-200."); return
+            state.volume = pct / 100
+        elif key in {"loop", "loop_mode"}:
+            if value.lower() not in {"off", "single", "queue"}:
+                await ctx.send("Loop must be off, single, or queue."); return
+            state.loop_mode = value.lower()
+        elif key in {"autoplay", "auto_play"}:
+            state.autoplay = value.lower() in {"on", "true", "1", "yes"}
+        elif key in {"247", "24_7", "twentyfour_seven"}:
+            state.twentyfour_seven = value.lower() in {"on", "true", "1", "yes"}
+            if state.twentyfour_seven:
+                state.auto_disconnect = False
+        elif key in {"auto_disconnect", "autodisconnect"}:
+            state.auto_disconnect = value.lower() in {"on", "true", "1", "yes"}
+        elif key in {"queue_limit", "limit"}:
+            try: limit = int(value)
+            except ValueError:
+                await ctx.send("Queue limit must be 1-250."); return
+            if not 1 <= limit <= 250:
+                await ctx.send("Queue limit must be 1-250."); return
+            state.queue_limit = limit
+        elif key in {"search", "search_behavior"}:
+            if value.lower() not in {"youtube", "yt"}:
+                await ctx.send("Search behavior currently supports youtube."); return
+            state.search_behavior = "youtube"
+        else:
+            await ctx.send("Unknown setting. Use musicsettings without arguments to view them."); return
+        await self.persist_settings(ctx.guild.id, state)
+        await ctx.send(f"⚙️ Saved {key}.")
+
+    @commands.command(name="panel")
+    async def panel(self, ctx):
+        await self.nowplaying(ctx)
+
     @commands.command(name="download", aliases=["dl", "send"])
     async def download_song(self, ctx, *, query):
         status = await ctx.send(f"⏳ Fetching **{query}**...")
-
         ok, result_message = await send_song_as_file(ctx.channel, query, ctx.guild)
-
         if ok:
             await status.delete()
         else:

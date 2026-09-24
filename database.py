@@ -45,7 +45,76 @@ CREATE TABLE IF NOT EXISTS users (
     xp INTEGER NOT NULL DEFAULT 0,
     level INTEGER NOT NULL DEFAULT 1,
     achievements TEXT NOT NULL DEFAULT '[]',
+    bank_balance INTEGER NOT NULL DEFAULT 0,
+    last_bank_interest REAL,
+    equipped_title TEXT,
+    arcade_plays INTEGER NOT NULL DEFAULT 0,
+    arcade_wins INTEGER NOT NULL DEFAULT 0,
+    arcade_wagered INTEGER NOT NULL DEFAULT 0,
+    arcade_net INTEGER NOT NULL DEFAULT 0,
+    arcade_best_streak INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (guild_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS game_stats (
+    guild_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    game_id TEXT NOT NULL,
+    plays INTEGER NOT NULL DEFAULT 0,
+    wins INTEGER NOT NULL DEFAULT 0,
+    losses INTEGER NOT NULL DEFAULT 0,
+    ties INTEGER NOT NULL DEFAULT 0,
+    wagered INTEGER NOT NULL DEFAULT 0,
+    net_coins INTEGER NOT NULL DEFAULT 0,
+    best_streak INTEGER NOT NULL DEFAULT 0,
+    current_streak INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (guild_id, user_id, game_id)
+);
+
+CREATE TABLE IF NOT EXISTS arcade_tournaments (
+    guild_id TEXT NOT NULL,
+    tournament_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open',
+    entry_fee INTEGER NOT NULL DEFAULT 0,
+    prize_pool INTEGER NOT NULL DEFAULT 0,
+    max_players INTEGER NOT NULL DEFAULT 16,
+    winner_id TEXT,
+    created_at REAL NOT NULL,
+    started_at REAL,
+    finished_at REAL
+);
+
+CREATE TABLE IF NOT EXISTS arcade_tournament_players (
+    tournament_id INTEGER NOT NULL,
+    user_id TEXT NOT NULL,
+    seed INTEGER NOT NULL,
+    eliminated INTEGER NOT NULL DEFAULT 0,
+    wins INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (tournament_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS arcade_tournament_matches (
+    match_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tournament_id INTEGER NOT NULL,
+    round INTEGER NOT NULL,
+    slot INTEGER NOT NULL,
+    player_a TEXT,
+    player_b TEXT,
+    winner_id TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS arcade_daily (
+    guild_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    day_key TEXT NOT NULL,
+    challenge_id TEXT NOT NULL,
+    progress INTEGER NOT NULL DEFAULT 0,
+    claimed INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (guild_id, user_id, day_key)
 );
 
 CREATE TABLE IF NOT EXISTS inventory (
@@ -63,7 +132,16 @@ CREATE TABLE IF NOT EXISTS guild_config (
     xp_enabled INTEGER NOT NULL DEFAULT 1,
     economy_enabled INTEGER NOT NULL DEFAULT 1,
     level_announce INTEGER NOT NULL DEFAULT 1,
-    game_rewards INTEGER NOT NULL DEFAULT 1
+    game_rewards INTEGER NOT NULL DEFAULT 1,
+    music_volume REAL NOT NULL DEFAULT 0.5,
+    music_loop_mode TEXT NOT NULL DEFAULT 'off',
+    music_autoplay INTEGER NOT NULL DEFAULT 0,
+    music_24_7 INTEGER NOT NULL DEFAULT 0,
+    music_auto_disconnect INTEGER NOT NULL DEFAULT 1,
+    music_queue_limit INTEGER NOT NULL DEFAULT 50,
+    music_search_behavior TEXT NOT NULL DEFAULT 'youtube',
+    music_dj_role_id TEXT,
+    music_voice_channel_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS rpg_players (
@@ -165,6 +243,29 @@ CREATE TABLE IF NOT EXISTS rpg_materials (
     PRIMARY KEY (guild_id, user_id, material_id)
 );
 
+CREATE TABLE IF NOT EXISTS eclipse_world_events (
+    guild_id TEXT PRIMARY KEY,
+    event_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL,
+    target INTEGER NOT NULL DEFAULT 5000,
+    progress INTEGER NOT NULL DEFAULT 0,
+    reward_coins INTEGER NOT NULL DEFAULT 1000,
+    reward_xp INTEGER NOT NULL DEFAULT 100,
+    ends_at REAL NOT NULL,
+    completed INTEGER NOT NULL DEFAULT 0,
+    created_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS eclipse_world_contributors (
+    guild_id TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    contribution INTEGER NOT NULL DEFAULT 0,
+    rewarded INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (guild_id, event_id, user_id)
+);
+
 CREATE TABLE IF NOT EXISTS warnings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     guild_id TEXT NOT NULL,
@@ -185,7 +286,15 @@ DEFAULT_USER = {
     "games": 0,
     "xp": 0,
     "level": 1,
-    "achievements": []
+    "achievements": [],
+    "bank_balance": 0,
+    "last_bank_interest": None,
+    "equipped_title": None,
+    "arcade_plays": 0,
+    "arcade_wins": 0,
+    "arcade_wagered": 0,
+    "arcade_net": 0,
+    "arcade_best_streak": 0
 }
 
 
@@ -205,6 +314,41 @@ class Database:
             await self._conn.execute("ALTER TABLE rpg_players ADD COLUMN region TEXT NOT NULL DEFAULT 'moonlit_vale'")
         if "travel_until" not in columns:
             await self._conn.execute("ALTER TABLE rpg_players ADD COLUMN travel_until REAL NOT NULL DEFAULT 0")
+
+        user_cur = await self._conn.execute("PRAGMA table_info(users)")
+        user_columns = {row["name"] for row in await user_cur.fetchall()}
+        for name, definition in {
+            "bank_balance": "INTEGER NOT NULL DEFAULT 0",
+            "last_bank_interest": "REAL",
+            "equipped_title": "TEXT",
+            "arcade_plays": "INTEGER NOT NULL DEFAULT 0",
+            "arcade_wins": "INTEGER NOT NULL DEFAULT 0",
+            "arcade_wagered": "INTEGER NOT NULL DEFAULT 0",
+            "arcade_net": "INTEGER NOT NULL DEFAULT 0",
+            "arcade_best_streak": "INTEGER NOT NULL DEFAULT 0",
+        }.items():
+            if name not in user_columns:
+                await self._conn.execute(
+                    f"ALTER TABLE users ADD COLUMN {name} {definition}"
+                )
+
+        guild_cur = await self._conn.execute("PRAGMA table_info(guild_config)")
+        guild_columns = {row["name"] for row in await guild_cur.fetchall()}
+        for name, definition in {
+            "music_volume": "REAL NOT NULL DEFAULT 0.5",
+            "music_loop_mode": "TEXT NOT NULL DEFAULT 'off'",
+            "music_autoplay": "INTEGER NOT NULL DEFAULT 0",
+            "music_24_7": "INTEGER NOT NULL DEFAULT 0",
+            "music_auto_disconnect": "INTEGER NOT NULL DEFAULT 1",
+            "music_queue_limit": "INTEGER NOT NULL DEFAULT 50",
+            "music_search_behavior": "TEXT NOT NULL DEFAULT 'youtube'",
+            "music_dj_role_id": "TEXT",
+            "music_voice_channel_id": "TEXT",
+        }.items():
+            if name not in guild_columns:
+                await self._conn.execute(
+                    f"ALTER TABLE guild_config ADD COLUMN {name} {definition}"
+                )
 
         world_cur = await self._conn.execute("PRAGMA table_info(rpg_worlds)")
         world_columns = {row["name"] for row in await world_cur.fetchall()}
@@ -338,6 +482,343 @@ class Database:
         return len(rows) + 1
 
     # ------------------------------------------------------------
+    # ------------------------------------------------------------
+    # ARCADE PERSISTENCE
+    # ------------------------------------------------------------
+
+    async def record_game(self, guild_id, user_id, game_id, result, wager=0, net=0):
+        guild_id, user_id, game_id = str(guild_id), str(user_id), str(game_id)
+        await self.get_user(guild_id, user_id)
+        win = 1 if result == "win" else 0
+        loss = 1 if result == "loss" else 0
+        tie = 1 if result == "tie" else 0
+        wager = max(0, int(wager))
+        net = int(net)
+        cur = await self._conn.execute(
+            "SELECT current_streak, best_streak FROM game_stats "
+            "WHERE guild_id=? AND user_id=? AND game_id=?",
+            (guild_id, user_id, game_id)
+        )
+        row = await cur.fetchone()
+        streak = int(row["current_streak"]) if row else 0
+        best = int(row["best_streak"]) if row else 0
+        streak = streak + 1 if win else 0
+        best = max(best, streak)
+        await self._conn.execute(
+            "UPDATE users SET games=games+1, wins=wins+?, arcade_plays=arcade_plays+1, "
+            "arcade_wins=arcade_wins+?, arcade_wagered=arcade_wagered+?, arcade_net=arcade_net+?, "
+            "arcade_best_streak=MAX(arcade_best_streak, ?) WHERE guild_id=? AND user_id=?",
+            (win, win, wager, net, best, guild_id, user_id)
+        )
+        await self._conn.execute(
+            "INSERT INTO game_stats "
+            "(guild_id,user_id,game_id,plays,wins,losses,ties,wagered,net_coins,best_streak,current_streak) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(guild_id,user_id,game_id) DO UPDATE SET "
+            "plays=plays+1,wins=wins+?,losses=losses+?,ties=ties+?,wagered=wagered+?,"
+            "net_coins=net_coins+?,best_streak=?,current_streak=?",
+            (guild_id,user_id,game_id,1,win,loss,tie,wager,net,best,streak,
+             win,loss,tie,wager,net,best,streak)
+        )
+        await self._conn.commit()
+
+    async def get_game_stats(self, guild_id, user_id):
+        cur = await self._conn.execute(
+            "SELECT * FROM game_stats WHERE guild_id=? AND user_id=? ORDER BY plays DESC",
+            (str(guild_id), str(user_id))
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def game_leaderboard(self, guild_id, game_id, limit=10):
+        cur = await self._conn.execute(
+            "SELECT user_id,plays,wins,losses,ties,wagered,net_coins,best_streak "
+            "FROM game_stats WHERE guild_id=? AND game_id=? "
+            "ORDER BY wins DESC,best_streak DESC,net_coins DESC LIMIT ?",
+            (str(guild_id), str(game_id), int(limit))
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def get_arcade_daily(self, guild_id, user_id, day_key):
+        challenges = (
+            ("play3", "Play 3 PvP arcade games.", 3),
+            ("win2", "Win 2 PvP arcade games.", 2),
+            ("play5", "Play 5 PvP arcade games.", 5),
+            ("win1", "Win 1 PvP arcade game.", 1),
+        )
+        index = sum(ord(c) for c in str(day_key)) % len(challenges)
+        challenge_id, description, target = challenges[index]
+        await self._conn.execute(
+            "INSERT OR IGNORE INTO arcade_daily "
+            "(guild_id,user_id,day_key,challenge_id) VALUES (?,?,?,?)",
+            (str(guild_id), str(user_id), str(day_key), challenge_id)
+        )
+        cur = await self._conn.execute(
+            "SELECT * FROM arcade_daily WHERE guild_id=? AND user_id=? AND day_key=?",
+            (str(guild_id), str(user_id), str(day_key))
+        )
+        row = await cur.fetchone()
+        data = dict(row)
+        data["description"] = description
+        data["target"] = target
+        return data
+
+    async def advance_arcade_daily(self, guild_id, user_id, day_key, result):
+        data = await self.get_arcade_daily(guild_id, user_id, day_key)
+        amount = 1 if (
+            data["challenge_id"] in ("play3","play5")
+            or data["challenge_id"] == "win2" and result == "win"
+            or data["challenge_id"] == "win1" and result == "win"
+        ) else 0
+        if amount:
+            await self._conn.execute(
+                "UPDATE arcade_daily SET progress=MIN(progress+?,?) "
+                "WHERE guild_id=? AND user_id=? AND day_key=? AND claimed=0",
+                (amount,int(data["target"]),str(guild_id),str(user_id),str(day_key))
+            )
+            await self._conn.commit()
+
+    async def claim_arcade_daily(self, guild_id, user_id, day_key):
+        data = await self.get_arcade_daily(guild_id, user_id, day_key)
+        if data["claimed"]:
+            return False, "claimed", data
+        if int(data["progress"]) < int(data["target"]):
+            return False, "incomplete", data
+        await self._conn.execute(
+            "UPDATE arcade_daily SET claimed=1 "
+            "WHERE guild_id=? AND user_id=? AND day_key=? AND claimed=0",
+            (str(guild_id),str(user_id),str(day_key))
+        )
+        await self._conn.commit()
+        await self.add_balance(guild_id, user_id, 500)
+        await self.add_xp(guild_id, user_id, 150)
+        return True, "claimed", data
+
+    async def create_arcade_tournament(self, guild_id, game_id, name, entry_fee=0, max_players=16):
+        cur = await self._conn.execute(
+            "INSERT INTO arcade_tournaments(guild_id,game_id,name,entry_fee,max_players,created_at) VALUES(?,?,?,?,?,?)",
+            (str(guild_id), str(game_id), str(name), int(entry_fee), int(max_players), time.time())
+        )
+        await self._conn.commit()
+        return await self.get_arcade_tournament(guild_id, cur.lastrowid)
+
+    async def get_arcade_tournament(self, guild_id, tournament_id=None):
+        if tournament_id is None:
+            cur = await self._conn.execute("SELECT * FROM arcade_tournaments WHERE guild_id=? AND status IN ('open','active') ORDER BY tournament_id DESC LIMIT 1", (str(guild_id),))
+        else:
+            cur = await self._conn.execute("SELECT * FROM arcade_tournaments WHERE guild_id=? AND tournament_id=?", (str(guild_id), int(tournament_id)))
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def join_arcade_tournament(self, guild_id, tournament_id, user_id):
+        tournament = await self.get_arcade_tournament(guild_id, tournament_id)
+        if not tournament or tournament["status"] != "open": return False, "closed"
+        cur = await self._conn.execute("SELECT COUNT(*) AS n FROM arcade_tournament_players WHERE tournament_id=?", (int(tournament_id),))
+        count = (await cur.fetchone())["n"]
+        if count >= int(tournament["max_players"]): return False, "full"
+        cur = await self._conn.execute("SELECT 1 FROM arcade_tournament_players WHERE tournament_id=? AND user_id=?", (int(tournament_id), str(user_id)))
+        if await cur.fetchone(): return False, "joined"
+        fee=int(tournament["entry_fee"]); user=await self.get_user(guild_id,user_id)
+        if int(user["balance"]) < fee: return False, "balance"
+        if fee: await self.add_balance(guild_id,user_id,-fee)
+        await self._conn.execute("INSERT INTO arcade_tournament_players(tournament_id,user_id,seed) VALUES(?,?,?)",(int(tournament_id),str(user_id),count+1))
+        await self._conn.execute("UPDATE arcade_tournaments SET prize_pool=prize_pool+? WHERE tournament_id=?",(fee,int(tournament_id)))
+        await self._conn.commit(); return True, "joined"
+
+    async def get_arcade_tournament_players(self, tournament_id):
+        cur=await self._conn.execute("SELECT * FROM arcade_tournament_players WHERE tournament_id=? ORDER BY seed",(int(tournament_id),)); return [dict(r) for r in await cur.fetchall()]
+
+    async def start_arcade_tournament(self, guild_id, tournament_id):
+        t=await self.get_arcade_tournament(guild_id,tournament_id); players=await self.get_arcade_tournament_players(tournament_id) if t else []
+        if not t or t["status"]!="open": return False,"closed",[]
+        if len(players)<2: return False,"players",[]
+        import math
+        size=1
+        while size<len(players): size*=2
+        while len(players)<size: players.append({"user_id":None,"seed":len(players)+1})
+        await self._conn.execute("UPDATE arcade_tournaments SET status='active',started_at=? WHERE tournament_id=?",(time.time(),int(tournament_id)))
+        for i in range(0,size,2):
+            a=players[i]["user_id"]; b=players[i+1]["user_id"]
+            status="ready" if a and b else ("ready" if a else "bye")
+            await self._conn.execute("INSERT INTO arcade_tournament_matches(tournament_id,round,slot,player_a,player_b,status,created_at) VALUES(?,?,?,?,?,?,?)",(int(tournament_id),1,i//2,a,b,status,time.time()))
+        await self._conn.commit(); return True,"started",players[:size]
+
+    async def get_arcade_matches(self,tournament_id,round_no=None):
+        q="SELECT * FROM arcade_tournament_matches WHERE tournament_id=?"; args=[int(tournament_id)]
+        if round_no is not None: q+=" AND round=?"; args.append(int(round_no))
+        q+=" ORDER BY round,slot"; cur=await self._conn.execute(q,args); return [dict(r) for r in await cur.fetchall()]
+
+    async def resolve_arcade_match(self, match_id, winner_id):
+        cur=await self._conn.execute("SELECT * FROM arcade_tournament_matches WHERE match_id=?",(int(match_id),)); m=await cur.fetchone()
+        if not m or m["status"]!="ready" or str(winner_id) not in {str(m["player_a"]),str(m["player_b"])}: return False,None
+        await self._conn.execute("UPDATE arcade_tournament_matches SET winner_id=?,status='complete' WHERE match_id=?",(str(winner_id),int(match_id)))
+        loser=m["player_b"] if str(winner_id)==str(m["player_a"]) else m["player_a"]
+        await self._conn.execute("UPDATE arcade_tournament_players SET wins=wins+1 WHERE tournament_id=? AND user_id=?",(m["tournament_id"],str(winner_id)))
+        if loser: await self._conn.execute("UPDATE arcade_tournament_players SET eliminated=1 WHERE tournament_id=? AND user_id=?",(m["tournament_id"],str(loser)))
+        await self._conn.commit(); return True,dict(m)
+
+    # ECLIPSE PROFILE / BANK / MUSIC / WORLD
+    # ------------------------------------------------------------
+
+    async def set_equipped_title(self, guild_id, user_id, title):
+        await self.get_user(guild_id, user_id)
+        await self._conn.execute(
+            "UPDATE users SET equipped_title=? WHERE guild_id=? AND user_id=?",
+            (title, str(guild_id), str(user_id))
+        )
+        await self._conn.commit()
+        return await self.get_user(guild_id, user_id)
+
+    async def deposit_bank(self, guild_id, user_id, amount):
+        amount = int(amount)
+        if amount <= 0:
+            return False, "amount"
+        user = await self.get_user(guild_id, user_id)
+        if int(user["balance"]) < amount:
+            return False, "balance"
+        await self._conn.execute(
+            "UPDATE users SET balance=balance-?, bank_balance=bank_balance+? WHERE guild_id=? AND user_id=?",
+            (amount, amount, str(guild_id), str(user_id))
+        )
+        await self._conn.commit()
+        return True, await self.get_user(guild_id, user_id)
+
+    async def withdraw_bank(self, guild_id, user_id, amount):
+        amount = int(amount)
+        if amount <= 0:
+            return False, "amount"
+        user = await self.get_user(guild_id, user_id)
+        if int(user["bank_balance"]) < amount:
+            return False, "balance"
+        await self._conn.execute(
+            "UPDATE users SET balance=balance+?, bank_balance=bank_balance-? WHERE guild_id=? AND user_id=?",
+            (amount, amount, str(guild_id), str(user_id))
+        )
+        await self._conn.commit()
+        return True, await self.get_user(guild_id, user_id)
+
+    async def apply_bank_interest(self, guild_id, user_id, rate=0.01, period=86400):
+        user = await self.get_user(guild_id, user_id)
+        now = time.time()
+        last = user["last_bank_interest"]
+        if last is None:
+            last = now
+        periods = int(max(0, now - float(last)) // period)
+        if periods <= 0:
+            return 0, user
+        balance = int(user["bank_balance"])
+        if balance <= 0:
+            await self.update_user(guild_id, user_id, last_bank_interest=now)
+            return 0, await self.get_user(guild_id, user_id)
+        interest = int(balance * rate * periods)
+        await self._conn.execute(
+            "UPDATE users SET bank_balance=bank_balance+?, last_bank_interest=? WHERE guild_id=? AND user_id=?",
+            (interest, now, str(guild_id), str(user_id))
+        )
+        await self._conn.commit()
+        return interest, await self.get_user(guild_id, user_id)
+
+    async def get_music_config(self, guild_id):
+        config = await self.get_guild_config(guild_id)
+        return {
+            "volume": float(config.get("music_volume", 0.5)),
+            "loop_mode": str(config.get("music_loop_mode", "off") or "off"),
+            "autoplay": bool(config.get("music_autoplay", 0)),
+            "twentyfour_seven": bool(config.get("music_24_7", 0)),
+            "auto_disconnect": bool(config.get("music_auto_disconnect", 1)),
+            "queue_limit": max(1, min(250, int(config.get("music_queue_limit", 50)))),
+            "search_behavior": str(config.get("music_search_behavior", "youtube") or "youtube"),
+            "dj_role_id": str(config["music_dj_role_id"]) if config.get("music_dj_role_id") else None,
+            "voice_channel_id": str(config["music_voice_channel_id"]) if config.get("music_voice_channel_id") else None,
+        }
+
+    async def set_music_config(self, guild_id, **fields):
+        mapping = {
+            "volume": "music_volume",
+            "loop_mode": "music_loop_mode",
+            "autoplay": "music_autoplay",
+            "twentyfour_seven": "music_24_7",
+            "auto_disconnect": "music_auto_disconnect",
+            "queue_limit": "music_queue_limit",
+            "search_behavior": "music_search_behavior",
+            "dj_role_id": "music_dj_role_id",
+            "voice_channel_id": "music_voice_channel_id",
+        }
+        clean = {mapping[k]: v for k, v in fields.items() if k in mapping}
+        if clean:
+            await self.set_guild_config(guild_id, **clean)
+        return await self.get_music_config(guild_id)
+
+    async def get_world_event(self, guild_id):
+        cur = await self._conn.execute(
+            "SELECT * FROM eclipse_world_events WHERE guild_id=?",
+            (str(guild_id),)
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def create_world_event(self, guild_id, event_id, title, description, target, reward_coins, reward_xp, ends_at):
+        await self._conn.execute(
+            "INSERT INTO eclipse_world_events "
+            "(guild_id,event_id,title,description,target,progress,reward_coins,reward_xp,ends_at,completed,created_at) "
+            "VALUES (?,?,?,?,?,0,?,?,?,0,?) "
+            "ON CONFLICT(guild_id) DO UPDATE SET event_id=excluded.event_id,title=excluded.title,"
+            "description=excluded.description,target=excluded.target,progress=0,reward_coins=excluded.reward_coins,"
+            "reward_xp=excluded.reward_xp,ends_at=excluded.ends_at,completed=0,created_at=excluded.created_at",
+            (str(guild_id), event_id, title, description, int(target), int(reward_coins), int(reward_xp), float(ends_at), time.time())
+        )
+        await self._conn.commit()
+        return await self.get_world_event(guild_id)
+
+    async def contribute_world_event(self, guild_id, user_id, amount):
+        event = await self.get_world_event(guild_id)
+        if not event or event["completed"] or float(event["ends_at"]) <= time.time():
+            return False, "inactive"
+        amount = int(amount)
+        if amount <= 0:
+            return False, "amount"
+        user = await self.get_user(guild_id, user_id)
+        if int(user["balance"]) < amount:
+            return False, "balance"
+        await self._conn.execute(
+            "UPDATE users SET balance=balance-? WHERE guild_id=? AND user_id=?",
+            (amount, str(guild_id), str(user_id))
+        )
+        await self._conn.execute(
+            "INSERT INTO eclipse_world_contributors(guild_id,event_id,user_id,contribution,rewarded) "
+            "VALUES(?,?,?, ?,0) ON CONFLICT(guild_id,event_id,user_id) DO UPDATE SET contribution=contribution+excluded.contribution",
+            (str(guild_id), event["event_id"], str(user_id), amount)
+        )
+        new_progress=min(int(event["target"]), int(event["progress"])+amount)
+        completed=1 if new_progress>=int(event["target"]) else 0
+        await self._conn.execute(
+            "UPDATE eclipse_world_events SET progress=?, completed=? WHERE guild_id=?",
+            (new_progress, completed, str(guild_id))
+        )
+        await self._conn.commit()
+        return True, await self.get_world_event(guild_id)
+
+    async def reward_world_event_contributors(self, guild_id):
+        event = await self.get_world_event(guild_id)
+        if not event or not event["completed"]:
+            return 0
+        cur = await self._conn.execute(
+            "SELECT user_id FROM eclipse_world_contributors WHERE guild_id=? AND event_id=? AND rewarded=0",
+            (str(guild_id), event["event_id"])
+        )
+        rows = await cur.fetchall()
+        count=0
+        for row in rows:
+            await self.add_balance(guild_id, row["user_id"], int(event["reward_coins"]))
+            await self.add_xp(guild_id, row["user_id"], int(event["reward_xp"]))
+            await self._conn.execute(
+                "UPDATE eclipse_world_contributors SET rewarded=1 WHERE guild_id=? AND event_id=? AND user_id=?",
+                (str(guild_id), event["event_id"], row["user_id"])
+            )
+            count+=1
+        await self._conn.commit()
+        return count
+
+    # ------------------------------------------------------------
     # INVENTORY
     # ------------------------------------------------------------
 
@@ -392,7 +873,16 @@ class Database:
                 "xp_enabled": 1,
                 "economy_enabled": 1,
                 "level_announce": 1,
-                "game_rewards": 1
+                "game_rewards": 1,
+                "music_volume": 0.5,
+                "music_loop_mode": "off",
+                "music_autoplay": 0,
+                "music_24_7": 0,
+                "music_auto_disconnect": 1,
+                "music_queue_limit": 50,
+                "music_search_behavior": "youtube",
+                "music_dj_role_id": None,
+                "music_voice_channel_id": None
             }
 
         return dict(row)
@@ -657,15 +1147,35 @@ class Database:
 
     async def set_rpg_battle(self, guild_id, user_id, **fields):
         guild_id, user_id = str(guild_id), str(user_id)
-        allowed = {"enemy_id","enemy_name","enemy_hp","enemy_max_hp","enemy_attack","turn","guarding","created_at"}
-        fields = {k:v for k,v in fields.items() if k in allowed}
-        await self._conn.execute(
-            "INSERT INTO rpg_battles (guild_id,user_id,enemy_id,enemy_name,enemy_hp,enemy_max_hp,enemy_attack,turn,guarding,created_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?) "
-            "ON CONFLICT(guild_id,user_id) DO UPDATE SET " +
-            ",".join(f"{k}=excluded.{k}" for k in fields),
-            (guild_id,user_id,fields.get("enemy_id",""),fields.get("enemy_name",""),int(fields.get("enemy_hp",0)),int(fields.get("enemy_max_hp",0)),int(fields.get("enemy_attack",0)),int(fields.get("turn",1)),int(fields.get("guarding",0)),float(fields.get("created_at",time.time()))
+        allowed = {
+            "enemy_id", "enemy_name", "enemy_hp", "enemy_max_hp",
+            "enemy_attack", "turn", "guarding", "created_at"
+        }
+        fields = {k: v for k, v in fields.items() if k in allowed}
+        values = (
+            guild_id,
+            user_id,
+            fields.get("enemy_id", ""),
+            fields.get("enemy_name", ""),
+            int(fields.get("enemy_hp", 0)),
+            int(fields.get("enemy_max_hp", 0)),
+            int(fields.get("enemy_attack", 0)),
+            int(fields.get("turn", 1)),
+            int(fields.get("guarding", 0)),
+            float(fields.get("created_at", time.time())),
         )
+        sql = (
+            "INSERT INTO rpg_battles "
+            "(guild_id,user_id,enemy_id,enemy_name,enemy_hp,enemy_max_hp,"
+            "enemy_attack,turn,guarding,created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(guild_id,user_id) DO UPDATE SET "
+            "enemy_id=excluded.enemy_id, enemy_name=excluded.enemy_name, "
+            "enemy_hp=excluded.enemy_hp, enemy_max_hp=excluded.enemy_max_hp, "
+            "enemy_attack=excluded.enemy_attack, turn=excluded.turn, "
+            "guarding=excluded.guarding, created_at=excluded.created_at"
+        )
+        await self._conn.execute(sql, values)
         await self._conn.commit()
 
     async def delete_rpg_battle(self, guild_id, user_id):
