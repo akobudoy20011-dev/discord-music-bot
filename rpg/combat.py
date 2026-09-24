@@ -8,6 +8,7 @@ from .loot import roll_loot, describe
 from .quests import progress as quest_progress
 from .world import REGIONS, get_region
 from .equipment import equipment_stats
+from .crafting import MATERIALS
 
 async def _effective_stats(db, guild_id, user_id, player=None):
     player = player or await db.get_rpg_player(guild_id, user_id)
@@ -91,6 +92,27 @@ async def attack(db,guild_id,user_id,skill_id=None):
             )
         if loot:
             await db.add_rpg_item(guild_id,user_id,loot,1)
+
+        # Every victory feeds the crafting economy. Regional materials are
+        # common; guardian essence is reserved for realm guardians.
+        region_materials = {
+            "moonlit_vale": "moon_petal",
+            "whispering_wood": "thorn_fiber",
+            "ashen_crown": "ash_core",
+            "starfall_coast": "star_fragment",
+        }
+        material_id = region_materials.get(region.get("id")) if region.get("id") else None
+        if not material_id:
+            for rid, data in REGIONS.items():
+                if data.get("name") == region.get("name"):
+                    material_id = region_materials.get(rid)
+                    break
+        material_gain = random.randint(1, 2) + (1 if battle["enemy_id"] in guardian_regions else 0)
+        if material_id and material_id in MATERIALS:
+            await db.add_rpg_material(guild_id,user_id,material_id,material_gain)
+        if battle["enemy_id"] in guardian_regions:
+            await db.add_rpg_material(guild_id,user_id,"guardian_essence",3)
+
         await quest_progress(
             db,guild_id,user_id,"kills",1,battle["enemy_id"]
         )
