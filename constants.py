@@ -143,6 +143,22 @@ ACHIEVEMENTS = {
         "requirement": lambda u: u.get("arcade_net", 0) >= 1_000_000
     },
 
+    # Tournaments
+    "Tournament Debut": {
+        "emoji": "🏟️",
+        "description": "Enter your first ECLIPSE tournament.",
+        "requirement": lambda u: u.get("tournament_entries", 0) >= 1
+    },
+    "Tournament Victor": {
+        "emoji": "👑",
+        "description": "Win an ECLIPSE tournament.",
+        "requirement": lambda u: u.get("tournament_wins", 0) >= 1
+    },
+    "Tournament Royalty": {
+        "emoji": "🏆",
+        "description": "Win 5 ECLIPSE tournaments.",
+        "requirement": lambda u: u.get("tournament_wins", 0) >= 5
+    },
     # Streaks
     "Dedicated": {
         "emoji": "🔥",
