@@ -5,6 +5,7 @@ Persistent server guilds, progression, guild events, bosses, raids,
 guild wars, legendary equipment, and server-wide reward events.
 """
 
+import random
 import time
 import uuid
 
@@ -30,6 +31,7 @@ class Guilds(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.db = bot.db
+        self.raid_effects = {}
 
     async def _mine(self, ctx):
         return await self.db.get_user_guild(ctx.guild.id, ctx.author.id)
@@ -381,13 +383,31 @@ class Guilds(commands.Cog):
         phase=int(raid.get("phase",1))
         phase_names={1:"Awakening",2:"Enraged",3:"Cataclysm"}
         phase_mult={1:1.0,2:1.20,3:1.45}
+        effect_key=(int(raid["raid_id"]),int(ctx.author.id))
+        effect=self.raid_effects.get(effect_key)
+        effect_mult=effect["multiplier"] if effect else 1.0
         base=max(50, int(player["strength"])*6 + int(player["level"])*10 + int(gear["power"])*5)
-        damage=max(50,int(base*phase_mult.get(phase,1.0)))
+        damage=max(50,int(base*phase_mult.get(phase,1.0)*effect_mult))
+        if effect:
+            effect["uses"]-=1
+            if effect["uses"]<=0:
+                self.raid_effects.pop(effect_key,None)
+        mechanics={
+            1:("🌌 Astral Pulse",0.90,0.15),
+            2:("🌑 Eclipse Rend",0.78,0.22),
+            3:("☄️ Cataclysm Seal",0.65,0.32),
+        }
+        mechanic,debuff,proc=mechanics[phase]
+        triggered=False
+        if random.random()<proc:
+            self.raid_effects[effect_key]={"multiplier":debuff,"uses":2}
+            triggered=True
         ok, reason, hp = await self.db.damage_guild_raid(mine["guild_id"], ctx.author.id, damage)
         if not ok:
             await ctx.send("❌ No active raid or you are not a member.")
             return
-        await ctx.send(f"⚔️ Raid **{phase_names.get(phase, 'Awakening')}**: **{damage:,}** damage · Boss HP: **{hp:,}**.")
+        note=f" · 💢 **{mechanic}** weakened your next 2 attacks" if triggered else ""
+        await ctx.send(f"⚔️ Raid **{phase_names.get(phase, 'Awakening')}**: **{damage:,}** damage · Boss HP: **{hp:,}**{note}.")
         if reason == "completed":
             await ctx.send("🏆 **RAID CLEARED.** Contributors can claim with `!guild raid claim`.")
 
