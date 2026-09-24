@@ -2533,6 +2533,75 @@ class Database:
         except Exception:
             await self._conn.rollback(); raise
 
+    async def spend_guild_treasury(self, guild_id, amount):
+        guild_id=str(guild_id); amount=int(amount)
+        if amount<=0: return False
+        await self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            cur=await self._conn.execute("UPDATE guilds SET treasury=treasury-?,updated_at=? WHERE guild_id=? AND treasury>=?",(amount,time.time(),guild_id,amount))
+            if cur.rowcount!=1: await self._conn.rollback(); return False
+            await self._conn.commit(); return True
+        except Exception:
+            await self._conn.rollback(); raise
+
+    async def declare_guild_war(self, guild_id, opponent_guild_id, duration=86400):
+        guild_id,opponent_guild_id=str(guild_id),str(opponent_guild_id)
+        if guild_id==opponent_guild_id: return None,"self"
+        a=await self.get_guild(guild_id); b=await self.get_guild(opponent_guild_id)
+        if not a or not b or a["server_id"]!=b["server_id"]: return None,"guild"
+        cur=await self._conn.execute("SELECT 1 FROM guild_wars WHERE status='open' AND ((guild_id=? AND opponent_guild_id=?) OR (guild_id=? AND opponent_guild_id=?))",(guild_id,opponent_guild_id,opponent_guild_id,guild_id))
+        if await cur.fetchone(): return None,"active"
+        cur=await self._conn.execute("INSERT INTO guild_wars(guild_id,opponent_guild_id,created_at,ends_at) VALUES(?,?,?,?,?)".replace("VALUES(?,?,?,?,?)","VALUES(?,?,?,?)"),(guild_id,opponent_guild_id,time.time(),time.time()+int(duration)))
+        await self._conn.commit(); return int(cur.lastrowid),"ok"
+
+    async def get_guild_war(self, war_id):
+        cur=await self._conn.execute("SELECT * FROM guild_wars WHERE war_id=?",(int(war_id),))
+        row=await cur.fetchone(); return dict(row) if row else None
+
+    async def add_guild_war_score(self, war_id, guild_id, points=1):
+        war=await self.get_guild_war(war_id)
+        if not war or war["status"]!="open" or float(war["ends_at"])<=time.time(): return False,"inactive"
+        guild_id=str(guild_id); points=max(1,int(points))
+        if guild_id not in {str(war["guild_id"]),str(war["opponent_guild_id"])}: return False,"guild"
+        column="guild_score" if guild_id==str(war["guild_id"]) else "opponent_score"
+        await self._conn.execute(f"UPDATE guild_wars SET {column}={column}+? WHERE war_id=?",(points,int(war_id)))
+        await self._conn.commit(); return True,"ok"
+
+    async def end_guild_war(self, war_id):
+        war=await self.get_guild_war(war_id)
+        if not war or war["status"]!="open": return None
+        if float(war["ends_at"])>time.time(): return None
+        if int(war["guild_score"])>int(war["opponent_score"]): winner=war["guild_id"]
+        elif int(war["opponent_score"])>int(war["guild_score"]): winner=war["opponent_guild_id"]
+        else: winner=None
+        await self._conn.execute("UPDATE guild_wars SET status='ended',winner_guild_id=? WHERE war_id=?",(winner,int(war_id)))
+        await self._conn.commit(); return await self.get_guild_war(war_id)
+
+    async def set_server_event(self, server_id, event_id, title, multiplier, duration):
+        now=time.time()
+        await self._conn.execute(
+            "INSERT OR REPLACE INTO guild_server_events(guild_id,event_id,title,multiplier,ends_at,created_at) VALUES(?,?,?,?,?,?)",
+            (str(server_id),str(event_id),str(title),float(multiplier),now+int(duration),now),
+        )
+        await self._conn.commit()
+
+    async def get_server_event(self, server_id):
+        cur=await self._conn.execute("SELECT * FROM guild_server_events WHERE guild_id=? AND ends_at>?",(str(server_id),time.time()))
+        row=await cur.fetchone(); return dict(row) if row else None
+
+    async def claim_guild_relic(self, guild_id, equipment_id, owner_id, cost=50000, min_level=10):
+        g=await self.get_guild(guild_id)
+        if not g or int(g["level"])<int(min_level): return False,"level"
+        cur=await self._conn.execute("SELECT 1 FROM guild_legendary_equipment WHERE guild_id=? AND equipment_id=?",(str(guild_id),str(equipment_id)))
+        if await cur.fetchone(): return False,"owned"
+        if not await self.spend_guild_treasury(guild_id,cost): return False,"treasury"
+        await self._conn.execute("INSERT INTO guild_legendary_equipment(guild_id,equipment_id,owner_id,rarity,acquired_at) VALUES(?,?,?,?,?)",(str(guild_id),str(equipment_id),str(owner_id),"legendary",time.time()))
+        await self._conn.commit(); return True,"ok"
+
+    async def get_guild_relics(self,guild_id):
+        cur=await self._conn.execute("SELECT * FROM guild_legendary_equipment WHERE guild_id=? ORDER BY acquired_at",(str(guild_id),))
+        return [dict(r) for r in await cur.fetchall()]
+
     async def get_rpg_world(self, guild_id):
         guild_id = str(guild_id)
         cur = await self._conn.execute(
