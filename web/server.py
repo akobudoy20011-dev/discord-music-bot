@@ -49,6 +49,27 @@ async def health(request):
             "last_voice_failure": watchdog_cog.last_voice_failure,
         }
 
+    music = None
+    music_cog = bot.get_cog("Music") if bot is not None else None
+    if music_cog is not None:
+        guilds = []
+        for guild_id, state in list(music_cog.states.items()):
+            guilds.append({
+                "guild_id": guild_id,
+                "state": getattr(state, "player_state", "IDLE"),
+                "generation": getattr(state, "playback_generation", 0),
+                "current": (
+                    getattr(state, "current", {}).get("title")
+                    if getattr(state, "current", None)
+                    else None
+                ),
+                "queue_size": len(getattr(state, "queue", ()) or ()),
+                "voice_connected": getattr(state, "last_voice_connected", None),
+                "voice_playing": getattr(state, "last_voice_playing", None),
+                "last_voice_failure": getattr(state, "last_voice_failure", None),
+            })
+        music = {"guilds": guilds}
+
     payload = {
         "status": "ok" if overall_ready else "degraded",
         "service": "ECLIPSE",
@@ -64,6 +85,7 @@ async def health(request):
             "latency_ms": db_latency_ms,
         },
         "watchdog": watchdog,
+        "music": music,
         "uptime_seconds": uptime_seconds,
         "uptime": _format_uptime(uptime_seconds),
         "timestamp": datetime.now(timezone.utc).isoformat(),
