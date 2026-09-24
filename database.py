@@ -500,6 +500,10 @@ class Database:
         if "event_until" not in world_columns:
             await self._conn.execute("ALTER TABLE rpg_worlds ADD COLUMN event_until REAL")
 
+        auction_cur = await self._conn.execute("PRAGMA table_info(economy_auctions)")
+        auction_columns = {row["name"] for row in await auction_cur.fetchall()}
+        if "asset_type" not in auction_columns:
+            await self._conn.execute("ALTER TABLE economy_auctions ADD COLUMN asset_type TEXT NOT NULL DEFAULT 'item'")
         await self._conn.commit()
 
     async def close(self):
