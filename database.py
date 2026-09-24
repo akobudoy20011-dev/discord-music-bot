@@ -71,6 +71,42 @@ CREATE TABLE IF NOT EXISTS game_stats (
     PRIMARY KEY (guild_id, user_id, game_id)
 );
 
+CREATE TABLE IF NOT EXISTS arcade_tournaments (
+    guild_id TEXT NOT NULL,
+    tournament_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open',
+    entry_fee INTEGER NOT NULL DEFAULT 0,
+    prize_pool INTEGER NOT NULL DEFAULT 0,
+    max_players INTEGER NOT NULL DEFAULT 16,
+    winner_id TEXT,
+    created_at REAL NOT NULL,
+    started_at REAL,
+    finished_at REAL
+);
+
+CREATE TABLE IF NOT EXISTS arcade_tournament_players (
+    tournament_id INTEGER NOT NULL,
+    user_id TEXT NOT NULL,
+    seed INTEGER NOT NULL,
+    eliminated INTEGER NOT NULL DEFAULT 0,
+    wins INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (tournament_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS arcade_tournament_matches (
+    match_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tournament_id INTEGER NOT NULL,
+    round INTEGER NOT NULL,
+    slot INTEGER NOT NULL,
+    player_a TEXT,
+    player_b TEXT,
+    winner_id TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at REAL NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS arcade_daily (
     guild_id TEXT NOT NULL,
     user_id TEXT NOT NULL,
@@ -556,6 +592,69 @@ class Database:
         await self.add_balance(guild_id, user_id, 500)
         await self.add_xp(guild_id, user_id, 150)
         return True, "claimed", data
+
+    async def create_arcade_tournament(self, guild_id, game_id, name, entry_fee=0, max_players=16):
+        cur = await self._conn.execute(
+            "INSERT INTO arcade_tournaments(guild_id,game_id,name,entry_fee,max_players,created_at) VALUES(?,?,?,?,?,?)",
+            (str(guild_id), str(game_id), str(name), int(entry_fee), int(max_players), time.time())
+        )
+        await self._conn.commit()
+        return await self.get_arcade_tournament(guild_id, cur.lastrowid)
+
+    async def get_arcade_tournament(self, guild_id, tournament_id=None):
+        if tournament_id is None:
+            cur = await self._conn.execute("SELECT * FROM arcade_tournaments WHERE guild_id=? AND status IN ('open','active') ORDER BY tournament_id DESC LIMIT 1", (str(guild_id),))
+        else:
+            cur = await self._conn.execute("SELECT * FROM arcade_tournaments WHERE guild_id=? AND tournament_id=?", (str(guild_id), int(tournament_id)))
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def join_arcade_tournament(self, guild_id, tournament_id, user_id):
+        tournament = await self.get_arcade_tournament(guild_id, tournament_id)
+        if not tournament or tournament["status"] != "open": return False, "closed"
+        cur = await self._conn.execute("SELECT COUNT(*) AS n FROM arcade_tournament_players WHERE tournament_id=?", (int(tournament_id),))
+        count = (await cur.fetchone())["n"]
+        if count >= int(tournament["max_players"]): return False, "full"
+        cur = await self._conn.execute("SELECT 1 FROM arcade_tournament_players WHERE tournament_id=? AND user_id=?", (int(tournament_id), str(user_id)))
+        if await cur.fetchone(): return False, "joined"
+        fee=int(tournament["entry_fee"]); user=await self.get_user(guild_id,user_id)
+        if int(user["balance"]) < fee: return False, "balance"
+        if fee: await self.add_balance(guild_id,user_id,-fee)
+        await self._conn.execute("INSERT INTO arcade_tournament_players(tournament_id,user_id,seed) VALUES(?,?,?)",(int(tournament_id),str(user_id),count+1))
+        await self._conn.execute("UPDATE arcade_tournaments SET prize_pool=prize_pool+? WHERE tournament_id=?",(fee,int(tournament_id)))
+        await self._conn.commit(); return True, "joined"
+
+    async def get_arcade_tournament_players(self, tournament_id):
+        cur=await self._conn.execute("SELECT * FROM arcade_tournament_players WHERE tournament_id=? ORDER BY seed",(int(tournament_id),)); return [dict(r) for r in await cur.fetchall()]
+
+    async def start_arcade_tournament(self, guild_id, tournament_id):
+        t=await self.get_arcade_tournament(guild_id,tournament_id); players=await self.get_arcade_tournament_players(tournament_id) if t else []
+        if not t or t["status"]!="open": return False,"closed",[]
+        if len(players)<2: return False,"players",[]
+        import math
+        size=1
+        while size<len(players): size*=2
+        while len(players)<size: players.append({"user_id":None,"seed":len(players)+1})
+        await self._conn.execute("UPDATE arcade_tournaments SET status='active',started_at=? WHERE tournament_id=?",(time.time(),int(tournament_id)))
+        for i in range(0,size,2):
+            a=players[i]["user_id"]; b=players[i+1]["user_id"]
+            status="ready" if a and b else ("ready" if a else "bye")
+            await self._conn.execute("INSERT INTO arcade_tournament_matches(tournament_id,round,slot,player_a,player_b,status,created_at) VALUES(?,?,?,?,?,?,?)",(int(tournament_id),1,i//2,a,b,status,time.time()))
+        await self._conn.commit(); return True,"started",players[:size]
+
+    async def get_arcade_matches(self,tournament_id,round_no=None):
+        q="SELECT * FROM arcade_tournament_matches WHERE tournament_id=?"; args=[int(tournament_id)]
+        if round_no is not None: q+=" AND round=?"; args.append(int(round_no))
+        q+=" ORDER BY round,slot"; cur=await self._conn.execute(q,args); return [dict(r) for r in await cur.fetchall()]
+
+    async def resolve_arcade_match(self, match_id, winner_id):
+        cur=await self._conn.execute("SELECT * FROM arcade_tournament_matches WHERE match_id=?",(int(match_id),)); m=await cur.fetchone()
+        if not m or m["status"]!="ready" or str(winner_id) not in {str(m["player_a"]),str(m["player_b"])}: return False,None
+        await self._conn.execute("UPDATE arcade_tournament_matches SET winner_id=?,status='complete' WHERE match_id=?",(str(winner_id),int(match_id)))
+        loser=m["player_b"] if str(winner_id)==str(m["player_a"]) else m["player_a"]
+        await self._conn.execute("UPDATE arcade_tournament_players SET wins=wins+1 WHERE tournament_id=? AND user_id=?",(m["tournament_id"],str(winner_id)))
+        if loser: await self._conn.execute("UPDATE arcade_tournament_players SET eliminated=1 WHERE tournament_id=? AND user_id=?",(m["tournament_id"],str(loser)))
+        await self._conn.commit(); return True,dict(m)
 
     # ECLIPSE PROFILE / BANK / MUSIC / WORLD
     # ------------------------------------------------------------
