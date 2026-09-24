@@ -173,65 +173,73 @@ async def resolve_query(loop, query):
 
 async def fetch_song_mp3(query):
     """
-    Downloads `query` to an mp3 on disk for !download / the AI chat
-    tool. Returns (title, mp3_path); caller must delete the file.
+    Download a query to mp3 for !download. Retries maintained YouTube
+    clients because extraction rules can differ between playback/download.
     """
-
     q = query if query.startswith("http") else f"ytsearch1:{query}"
-
     os.makedirs("downloads", exist_ok=True)
-
-    dl_opts = {
-        "format": "bestaudio/best",
-        "outtmpl": "downloads/%(id)s.%(ext)s",
-        "postprocessors": [{
-            "key": "FFmpegExtractAudio",
-            "preferredcodec": "mp3",
-            "preferredquality": "192",
-        }],
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": True,
-        "retries": 3,
-        "extractor_retries": 3,
-        "fragment_retries": 3,
-        "socket_timeout": 20,
-    
-    }
-
-    if YTDLP_COOKIES_FILE and os.path.isfile(YTDLP_COOKIES_FILE):
-        dl_opts["cookiefile"] = YTDLP_COOKIES_FILE
-
     loop = asyncio.get_event_loop()
+    clients = [None, "web", "mweb"]
+    last_error = None
 
-    try:
-        with yt_dlp.YoutubeDL(dl_opts) as ydl:
-            info = await loop.run_in_executor(
-                None, lambda: ydl.extract_info(q, download=True)
-            )
+    for client in clients:
+        dl_opts = {
+            "format": "bestaudio/best",
+            "outtmpl": "downloads/%(id)s.%(ext)s",
+            "postprocessors": [{
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": "192",
+            }],
+            "quiet": True,
+            "no_warnings": True,
+            "noplaylist": True,
+            "retries": 3,
+            "extractor_retries": 3,
+            "fragment_retries": 3,
+            "socket_timeout": 20,
+        }
+
+        if client:
+            dl_opts["extractor_args"] = {"youtube": {"player_client": [client]}}
+
+        if YTDLP_COOKIES_FILE and os.path.isfile(YTDLP_COOKIES_FILE):
+            dl_opts["cookiefile"] = YTDLP_COOKIES_FILE
+
+        try:
+            def download():
+                with yt_dlp.YoutubeDL(dl_opts) as extractor:
+                    return extractor.extract_info(q, download=True)
+
+            info = await loop.run_in_executor(None, download)
+
+            if not info:
+                raise SongDownloadError("YouTube returned no downloadable result.")
 
             if "entries" in info:
-                info = info["entries"][0]
+                entries = [entry for entry in info["entries"] if entry]
+                if not entries:
+                    raise SongDownloadError("YouTube returned no downloadable search result.")
+                info = entries[0]
 
-            base, _ = os.path.splitext(ydl.prepare_filename(info))
+            with yt_dlp.YoutubeDL(dl_opts) as extractor:
+                base = os.path.splitext(extractor.prepare_filename(info))[0]
+
             mp3_path = base + ".mp3"
 
-    except Exception as e:
-        logger.exception("Download failed")
+            if not os.path.exists(mp3_path):
+                raise SongDownloadError("MP3 conversion failed.")
 
-        if "Sign in to confirm" in str(e):
-            raise SongDownloadError(
-                "YouTube rejected this download (403/PO-token challenge). "
-                "Update yt-dlp first; if the host still gets challenged, "
-                "configure a valid YTDLP_COOKIES_FILE or PO-token provider."
-            ) from e
+            return info.get("title", "audio"), mp3_path
 
-        raise SongDownloadError(str(e)) from e
+        except SongDownloadError as error:
+            last_error = error
+            logger.warning("YouTube download failed using client=%s: %s", client or "default", error)
+        except Exception as error:
+            last_error = error
+            logger.warning("YouTube download failed using client=%s: %s", client or "default", error)
 
-    if not os.path.exists(mp3_path):
-        raise SongDownloadError("MP3 conversion failed.")
-
-    return info.get("title", "audio"), mp3_path
+    raise SongDownloadError(_youtube_error_message(last_error or "unknown error", "download"))
 
 
 async def send_song_as_file(channel, query, guild=None):
