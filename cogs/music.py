@@ -202,7 +202,7 @@ async def fetch_song_mp3(query):
     Download a query to mp3 for !download. Retries maintained YouTube
     clients because extraction rules can differ between playback/download.
     """
-    q = query if query.startswith("http") else f"ytsearch1:{query}"
+    q = query if query.startswith("http") else f"ytsearch5:{query}"
     os.makedirs("downloads", exist_ok=True)
     loop = asyncio.get_event_loop()
     clients = [None, "web", "mweb"]
