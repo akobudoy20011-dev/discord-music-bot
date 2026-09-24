@@ -27,36 +27,56 @@ logger = logging.getLogger("music_bot")
 
 YTDLP_COOKIES_FILE = os.getenv("YTDLP_COOKIES_FILE") or ""
 
-# yt-dlp rewrites the cookie file after every request (YouTube rotates
-# session cookies), so it needs a writable path. Render (and similar
-# hosts) mount "Secret Files" read-only at /etc/secrets/..., which
-# breaks that write with "[Errno 30] Read-only file system". Use a
-# local writable path instead — if the env var points to a read-only
-# location, we'll fall back to "cookies.txt" in the working directory.
-if YTDLP_COOKIES_FILE and YTDLP_COOKIES_FILE.startswith("/etc/secrets/"):
-    logger.info(
-        f"YTDLP_COOKIES_FILE points to read-only path ({YTDLP_COOKIES_FILE}). "
-        f"Using local writable path 'cookies.txt' instead."
-    )
-    YTDLP_COOKIES_FILE = "cookies.txt"
-elif YTDLP_COOKIES_FILE and os.path.exists(YTDLP_COOKIES_FILE):
-    if not os.access(YTDLP_COOKIES_FILE, os.W_OK):
+# yt-dlp may update the cookie jar while YouTube rotates session
+# cookies, so the runtime copy needs to be writable. Render Secret Files
+# are mounted read-only at /etc/secrets/..., so copy the secret into the
+# container's writable temp directory instead of merely changing the
+# path (the previous behavior silently lost the actual cookie file).
+if YTDLP_COOKIES_FILE:
+    configured_cookie_path = YTDLP_COOKIES_FILE
+
+    if configured_cookie_path.startswith("/etc/secrets/"):
+        writable_copy = os.path.join(
+            os.getenv("TMPDIR", "/tmp"),
+            "eclipse-youtube-cookies.txt",
+        )
         try:
-            writable_copy = os.path.join(
-                os.getenv("TMPDIR", "."), "yt_cookies.txt"
-            )
-            shutil.copyfile(YTDLP_COOKIES_FILE, writable_copy)
-            logger.info(
-                f"YTDLP_COOKIES_FILE ({YTDLP_COOKIES_FILE}) is read-only — "
-                f"using a writable copy at {writable_copy} instead."
-            )
+            if not os.path.isfile(configured_cookie_path):
+                raise FileNotFoundError(configured_cookie_path)
+            shutil.copyfile(configured_cookie_path, writable_copy)
             YTDLP_COOKIES_FILE = writable_copy
-        except OSError:
-            logger.exception(
-                "Could not copy YTDLP_COOKIES_FILE to a writable location — "
-                "falling back to 'cookies.txt'."
+            logger.info(
+                "YouTube cookies loaded from Render Secret File into a "
+                "writable runtime copy."
             )
-            YTDLP_COOKIES_FILE = "cookies.txt"
+        except OSError:
+            logger.warning(
+                "YTDLP_COOKIES_FILE is configured at %s, but the cookie "
+                "file could not be copied into the writable runtime path. "
+                "YouTube authentication cookies will be unavailable.",
+                configured_cookie_path,
+            )
+            YTDLP_COOKIES_FILE = ""
+    elif os.path.isfile(configured_cookie_path) and not os.access(
+        configured_cookie_path, os.W_OK
+    ):
+        writable_copy = os.path.join(
+            os.getenv("TMPDIR", "/tmp"),
+            "eclipse-youtube-cookies.txt",
+        )
+        try:
+            shutil.copyfile(configured_cookie_path, writable_copy)
+            YTDLP_COOKIES_FILE = writable_copy
+            logger.info(
+                "YouTube cookies loaded from a read-only file into a "
+                "writable runtime copy."
+            )
+        except OSError:
+            logger.warning(
+                "Could not copy YTDLP_COOKIES_FILE to a writable runtime "
+                "path; YouTube authentication cookies will be unavailable."
+            )
+            YTDLP_COOKIES_FILE = ""
 
 YTDL_OPTIONS = {
     "format": "bestaudio/best",
