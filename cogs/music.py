@@ -1065,7 +1065,8 @@ class Music(commands.Cog):
             f"⏭️ Jumping to **{target['query']}** at queue position **{position}**."
         )
 
-    @commands.command(name="queueclear", aliases=["qclear"])\n    async def clear_queue(self, ctx):
+    @commands.command(name="queueclear", aliases=["qclear"])
+    async def clear_queue(self, ctx):
         if not await self.require_control(ctx):
             return
         state = self.state_for(ctx.guild.id)
