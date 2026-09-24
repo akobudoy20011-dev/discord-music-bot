@@ -126,6 +126,9 @@ ITEMS = {
         "agility": 10, "max_hp": 60, "max_mp": 40,
         "description": "A relic carrying the authority of a fallen sovereign.", "source": "guild_relic",
     },
+    "worldboss_void_core":{"name":"Void Core","slot":"relic","rarity":"relic","icon":"🌑","power":28,"strength":8,"defense":8,"magic":8,"agility":6,"max_hp":80,"description":"A condensed fragment of the Void Colossus.","source":"world_boss"},
+    "worldboss_leviathan_heart":{"name":"Leviathan Heart","slot":"relic","rarity":"relic","icon":"💠","power":32,"magic":16,"agility":10,"max_mp":55,"max_hp":45,"description":"The still-pulsing heart of an Astral Leviathan.","source":"world_boss"},
+    "worldboss_sovereign_heart":{"name":"Sovereign Heart","slot":"relic","rarity":"relic","icon":"👑","power":40,"strength":14,"defense":14,"magic":14,"agility":14,"max_hp":100,"max_mp":70,"description":"The final core of an Eclipse Sovereign.","source":"world_boss"},
 }
 
 def get_item(item_id):
