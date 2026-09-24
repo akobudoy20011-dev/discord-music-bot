@@ -1593,6 +1593,37 @@ class Games(commands.Cog):
             (f"\nWager: **{bet:,} each**" if bet else "")
         ), view=C4View())
 
+    @commands.command(name="dailies", aliases=["dailygame", "arcadedaily"])
+    async def dailies(self, ctx):
+        day_key = time.strftime("%Y-%m-%d", time.gmtime())
+        data = await self.db.get_arcade_daily(ctx.guild.id, ctx.author.id, day_key)
+        status = "CLAIMED" if data["claimed"] else ("READY" if data["progress"] >= data["target"] else "IN PROGRESS")
+        text = (
+            f"**{data['description']}**\n"
+            f"Progress: **{data['progress']}/{data['target']}**\n"
+            f"Status: **{status}**\n\n"
+            "Reward: **500 coins + 150 XP**\n"
+            "Use \`!claimdaily\` once complete."
+        )
+        await ctx.send(embed=self._game_embed("📜 ECLIPSE · DAILY ARCADE", text, COLOR_GOLD))
+
+    @commands.command(name="claimdaily")
+    async def claimdaily(self, ctx):
+        day_key = time.strftime("%Y-%m-%d", time.gmtime())
+        ok, reason, data = await self.db.claim_arcade_daily(ctx.guild.id, ctx.author.id, day_key)
+        if ok:
+            await ctx.send(embed=self._game_embed(
+                "🎁 DAILY ARCADE CLAIMED",
+                "You received **500 coins + 150 XP**.\n\n୨୧ Return tomorrow for a new challenge. ୨୧",
+                discord.Color.green(),
+            ))
+            return
+        if reason == "claimed":
+            text = "You've already claimed today's arcade reward."
+        else:
+            text = f"Not complete yet: **{data['progress']}/{data['target']}**."
+        await ctx.send(embed=self._game_embed("📜 DAILY ARCADE", text, COLOR_GOLD))
+
     @commands.command(name="arcade")
     async def arcade(self, ctx):
         await ctx.send(embed=self._game_embed(
