@@ -33,11 +33,8 @@ class Arcade(commands.Cog):
             return False
         if amount == 0:
             return True
-        user = await self.db.get_user(guild_id, user_id)
-        if int(user["balance"]) < amount:
-            return False
-        await self.db.add_balance(guild_id, user_id, -amount)
-        return True
+        ok, _, _ = await self.db.withdraw_balance(guild_id, user_id, amount)
+        return ok
 
     async def finish(self, guild_id, user_id, game_id, result, wager=0, net=0, ctx=None):
         await self.db.record_game(guild_id, user_id, game_id, result, wager, net)
