@@ -501,6 +501,17 @@ CREATE TABLE IF NOT EXISTS guild_raid_contributors (
     PRIMARY KEY (raid_id, user_id)
 );
 
+CREATE TABLE IF NOT EXISTS guild_raid_effects (
+    raid_id INTEGER NOT NULL,
+    guild_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    effect_id TEXT NOT NULL,
+    multiplier REAL NOT NULL,
+    uses INTEGER NOT NULL DEFAULT 1,
+    expires_at REAL NOT NULL,
+    PRIMARY KEY (raid_id,user_id,effect_id)
+);
+
 CREATE TABLE IF NOT EXISTS guild_legendary_equipment (
     guild_id TEXT NOT NULL,
     equipment_id TEXT NOT NULL,
@@ -2593,6 +2604,38 @@ class Database:
             return True,"completed" if hp<=0 else "ok",hp
         except Exception:
             await self._conn.rollback(); raise
+
+    async def add_guild_raid_effect(self, raid_id, guild_id, user_id, effect_id, multiplier, uses=2, duration=120):
+        now=time.time()
+        await self._conn.execute(
+            """INSERT INTO guild_raid_effects
+            (raid_id,guild_id,user_id,effect_id,multiplier,uses,expires_at)
+            VALUES(?,?,?,?,?,?,?)
+            ON CONFLICT(raid_id,user_id,effect_id) DO UPDATE SET
+            multiplier=MIN(guild_raid_effects.multiplier,excluded.multiplier),
+            uses=MAX(guild_raid_effects.uses,excluded.uses),
+            expires_at=MAX(guild_raid_effects.expires_at,excluded.expires_at)""",
+            (int(raid_id),str(guild_id),str(user_id),str(effect_id),float(multiplier),int(uses),now+duration)
+        )
+        await self._conn.commit()
+
+    async def consume_guild_raid_effects(self, raid_id, guild_id, user_id):
+        now=time.time()
+        cur=await self._conn.execute(
+            "SELECT effect_id,multiplier,uses FROM guild_raid_effects WHERE raid_id=? AND guild_id=? AND user_id=? AND expires_at>?",
+            (int(raid_id),str(guild_id),str(user_id),now)
+        )
+        rows=await cur.fetchall()
+        mult=1.0
+        for row in rows:
+            mult*=float(row["multiplier"])
+            if int(row["uses"])<=1:
+                await self._conn.execute("DELETE FROM guild_raid_effects WHERE raid_id=? AND guild_id=? AND user_id=? AND effect_id=?",(int(raid_id),str(guild_id),str(user_id),row["effect_id"]))
+            else:
+                await self._conn.execute("UPDATE guild_raid_effects SET uses=uses-1 WHERE raid_id=? AND guild_id=? AND user_id=? AND effect_id=?",(int(raid_id),str(guild_id),str(user_id),row["effect_id"]))
+        await self._conn.execute("DELETE FROM guild_raid_effects WHERE expires_at<=?",(now,))
+        await self._conn.commit()
+        return mult
 
     async def spend_guild_treasury(self, guild_id, amount):
         guild_id=str(guild_id); amount=int(amount)
