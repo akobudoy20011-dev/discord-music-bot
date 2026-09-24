@@ -4,7 +4,7 @@ from discord.ext import commands
 from constants import COLOR_GOLD, COLOR_PRIMARY
 from rpg.classes import CLASSES, get_class
 from rpg.manager import ADVENTURE_COOLDOWN, adventure, choose_class, get_player, rest
-from rpg.equipment import grant_starter_gear, inventory
+from rpg.equipment import grant_starter_gear, inventory, get_equipment, equip, unequip, upgrade, equipment_stats
 from rpg.skills import get_skills
 from rpg.skills_service import ensure_class_skills, unlock_skill
 from rpg.combat import start as start_battle, attack as combat_attack, flee as flee_battle
@@ -28,11 +28,11 @@ class RPG(commands.Cog):
 
     @rpg.command(name="profile",aliases=["p","status"])
     async def profile(self,ctx):
-        player=await get_player(self.db,ctx.guild.id,ctx.author.id); cls=get_class(player["class_key"]); need=max(1,player['level']*100)
+        player=await get_player(self.db,ctx.guild.id,ctx.author.id); cls=get_class(player["class_key"]); need=max(1,player['level']*100); gear=await equipment_stats(self.db,ctx.guild.id,ctx.author.id)
         embed=discord.Embed(title=f"♡ ECLIPSE · {cls['icon']} {cls['name']} ♡",description=f"**{ctx.author.display_name}**\nLevel **{player['level']}** · {cls['description']}\n\n{xp_bar(player['xp'],need)} **{player['xp']}/{need} XP**",color=COLOR_PRIMARY)
         embed.add_field(name="♡ REALM",value=f"{get_region(player.get('region'))['icon']} {get_region(player.get('region'))['name']}" if get_region(player.get("region")) else "Unknown",inline=False)
-        embed.add_field(name="♡ VITALS",value=f"❤️ {player['hp']}/{player['max_hp']} HP\n💠 {player['mp']}/{player['max_mp']} MP\n💰 {player['gold']:,} RPG gold",inline=True)
-        embed.add_field(name="♡ STATS",value=f"⚔️ {player['strength']} STR\n🛡️ {player['defense']} DEF\n🔮 {player['magic']} MAG\n🪽 {player['agility']} AGI",inline=True)
+        embed.add_field(name="♡ VITALS",value=f"❤️ {player['hp']}/{player['max_hp'] + gear['max_hp']} HP\n💠 {player['mp']}/{player['max_mp'] + gear['max_mp']} MP\n💰 {player['gold']:,} RPG gold",inline=True)
+        embed.add_field(name="♡ STATS",value=f"⚔️ {player['strength'] + gear['strength']} STR\n🛡️ {player['defense'] + gear['defense']} DEF\n🔮 {player['magic'] + gear['magic']} MAG\n🪽 {player['agility'] + gear['agility']} AGI\n⚔️ +{gear['power']} weapon power",inline=True)
         embed.set_thumbnail(url=ctx.author.display_avatar.url); embed.set_footer(text="୨୧ !rpg class · !rpg adventure · !rpg rest"); await ctx.send(embed=embed)
 
     @rpg.command(name="class",aliases=["choose"])
@@ -271,6 +271,65 @@ class RPG(commands.Cog):
             description="\n".join(lines),
             color=COLOR_PRIMARY
         ))
+
+    @rpg.command(name="equipment", aliases=["equipments", "loadout"])
+    async def equipment_command(self, ctx):
+        rows = await get_equipment(self.db, ctx.guild.id, ctx.author.id)
+        stats = await equipment_stats(self.db, ctx.guild.id, ctx.author.id)
+        lines = []
+        for slot in ("weapon", "armor", "accessory", "relic"):
+            row = next((x for x in rows if x["slot"] == slot), None)
+            if not row:
+                lines.append(f"**{slot.title()}** · ○ empty")
+                continue
+            item = get_item(row["item_id"])
+            rarity = item.get("rarity", "common").upper() if item else "UNKNOWN"
+            lines.append(f"**{slot.title()}** · {item['icon']} **{item['name']}** · {rarity} · +{row['level']}")
+        lines.append("")
+        lines.append(
+            f"**Gear bonuses:** ⚔️ +{stats['power']} power · 🛡️ +{stats['defense']} DEF · "
+            f"🔮 +{stats['magic']} MAG · 🪽 +{stats['agility']} AGI · "
+            f"❤️ +{stats['max_hp']} HP · 💠 +{stats['max_mp']} MP"
+        )
+        embed = discord.Embed(title="♡ ECLIPSE · EQUIPMENT ♡", description="\n".join(lines), color=COLOR_PRIMARY)
+        embed.set_footer(text="୨୧ !rpg equip <item> · !rpg unequip <slot> · !rpg upgrade <item>")
+        await ctx.send(embed=embed)
+
+    @rpg.command(name="equip")
+    async def equip_command(self, ctx, item_id: str = None):
+        if not item_id:
+            await ctx.send("Use `!rpg inventory` or `!rpg equipment` to choose an item.")
+            return
+        result = await equip(self.db, ctx.guild.id, ctx.author.id, item_id)
+        if not result["ok"]:
+            await ctx.send(f"❌ {result['message']}")
+            return
+        item = result["item"]
+        await ctx.send(f"୨୧ **EQUIPPED** · {item['icon']} **{item['name']}** ({item.get('rarity','common').title()}) in the **{result['slot']}** slot.")
+
+    @rpg.command(name="unequip")
+    async def unequip_command(self, ctx, slot: str = None):
+        if not slot:
+            await ctx.send("Choose a slot: `weapon`, `armor`, `accessory`, or `relic`.")
+            return
+        result = await unequip(self.db, ctx.guild.id, ctx.author.id, slot)
+        if not result["ok"]:
+            await ctx.send(f"❌ {result['message']}")
+            return
+        item = get_item(result["item_id"])
+        await ctx.send(f"○ **UNEQUIPPED** · {item['icon']} **{item['name']}** from the **{result['slot']}** slot.")
+
+    @rpg.command(name="upgrade")
+    async def upgrade_command(self, ctx, item_id: str = None):
+        if not item_id:
+            await ctx.send("Use `!rpg equipment` to see your equipped gear.")
+            return
+        result = await upgrade(self.db, ctx.guild.id, ctx.author.id, item_id)
+        if not result["ok"]:
+            await ctx.send(f"❌ {result['message']}")
+            return
+        item = result["item"]
+        await ctx.send(f"✦ **UPGRADED** · {item['icon']} **{item['name']}** **+{result['old_level']} → +{result['new_level']}** · Paid **{result['cost']:,} RPG gold**.")
 
     @rpg.command(name="skills")
     async def skills_command(self, ctx):
