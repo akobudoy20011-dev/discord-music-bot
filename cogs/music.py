@@ -716,13 +716,49 @@ class Music(commands.Cog):
         source = discord.PCMVolumeTransformer(source, volume=state.volume)
 
         def after_playing(error):
+            """
+            discord.py invokes this callback from the voice player's worker
+            thread. Schedule the coroutine back onto the bot loop explicitly
+            and keep a reference to the task long enough to surface failures.
+            """
+            def schedule():
+                try:
+                    task = asyncio.create_task(
+                        self._handle_player_end(
+                            guild,
+                            query,
+                            requester_name,
+                            generation,
+                            error,
+                        ),
+                        name=f"music-end-{guild.id}-{generation}",
+                    )
+
+                    def report_failure(done):
+                        try:
+                            done.result()
+                        except asyncio.CancelledError:
+                            pass
+                        except Exception:
+                            logger.exception(
+                                "Player-end handler crashed for guild %s",
+                                guild.id,
+                            )
+
+                    task.add_done_callback(report_failure)
+                except Exception:
+                    logger.exception(
+                        "Could not schedule player-end callback for guild %s",
+                        guild.id,
+                    )
+
             try:
-                asyncio.run_coroutine_threadsafe(
-                    self._handle_player_end(guild, query, requester_name, generation, error),
-                    self.bot.loop,
-                )
+                self.bot.loop.call_soon_threadsafe(schedule)
             except Exception:
-                logger.exception("Could not schedule player-end callback for guild %s", guild.id)
+                logger.exception(
+                    "Could not hand player-end callback to bot loop for guild %s",
+                    guild.id,
+                )
 
         try:
             vc = guild.voice_client
@@ -771,7 +807,33 @@ class Music(commands.Cog):
             state.history.append(finished)
             state.last_track = finished
             state.current = None
-        await self._play_next(guild)
+
+        # Give discord.py one event-loop turn to finish detaching the old
+        # FFmpeg source before starting the next source. Without this, a
+        # completed stream can occasionally leave VoiceClient in a transient
+        # state where the next vc.play() is rejected and the queue silently
+        # stalls.
+        await asyncio.sleep(0.1)
+
+        try:
+            await self._play_next(guild)
+        except Exception:
+            logger.exception(
+                "Failed to advance music queue after '%s' in guild %s",
+                query,
+                guild.id,
+            )
+            # Do not leave the queue permanently stuck after a transient
+            # VoiceClient/FFmpeg handoff failure. Retry once on the loop.
+            await asyncio.sleep(0.5)
+            try:
+                if guild.voice_client is not None:
+                    await self._play_next(guild)
+            except Exception:
+                logger.exception(
+                    "Second queue-advance attempt failed for guild %s",
+                    guild.id,
+                )
 
     async def _play_next(self, guild):
         state = self.states.get(guild.id)
