@@ -2602,6 +2602,39 @@ class Database:
         cur=await self._conn.execute("SELECT * FROM guild_legendary_equipment WHERE guild_id=? ORDER BY acquired_at",(str(guild_id),))
         return [dict(r) for r in await cur.fetchall()]
 
+    async def claim_guild_event_reward(self,guild_id,user_id):
+        event=await self.get_guild_event(guild_id)
+        if not event or not event["completed"]: return None,"inactive"
+        cur=await self._conn.execute("SELECT contribution,rewarded FROM guild_event_contributors WHERE guild_id=? AND event_id=? AND user_id=?",(str(guild_id),event["event_id"],str(user_id)))
+        row=await cur.fetchone()
+        if not row or int(row["contribution"])<=0: return None,"none"
+        if int(row["rewarded"]): return None,"claimed"
+        await self._conn.execute("UPDATE guild_event_contributors SET rewarded=1 WHERE guild_id=? AND event_id=? AND user_id=?",(str(guild_id),event["event_id"],str(user_id)))
+        await self._conn.commit()
+        return (int(event["reward_coins"]),int(event["reward_xp"])), "ok"
+
+    async def claim_guild_boss_reward(self,guild_id,user_id):
+        boss=await self.get_guild_boss(guild_id)
+        if not boss or not boss["defeated"]: return None,"inactive"
+        cur=await self._conn.execute("SELECT damage,rewarded FROM guild_boss_contributors WHERE guild_id=? AND boss_id=? AND user_id=?",(str(guild_id),boss["boss_id"],str(user_id)))
+        row=await cur.fetchone()
+        if not row or int(row["damage"])<=0: return None,"none"
+        if int(row["rewarded"]): return None,"claimed"
+        await self._conn.execute("UPDATE guild_boss_contributors SET rewarded=1 WHERE guild_id=? AND boss_id=? AND user_id=?",(str(guild_id),boss["boss_id"],str(user_id)))
+        await self._conn.commit()
+        return (int(boss["reward_coins"]),int(boss["reward_xp"])), "ok"
+
+    async def claim_guild_raid_reward(self,guild_id,user_id,raid_id=None):
+        raid=await self.get_guild_raid(guild_id,raid_id)
+        if not raid or raid["status"]!="completed": return None,"inactive"
+        cur=await self._conn.execute("SELECT damage,rewarded FROM guild_raid_contributors WHERE raid_id=? AND user_id=?",(int(raid["raid_id"]),str(user_id)))
+        row=await cur.fetchone()
+        if not row or int(row["damage"])<=0: return None,"none"
+        if int(row["rewarded"]): return None,"claimed"
+        await self._conn.execute("UPDATE guild_raid_contributors SET rewarded=1 WHERE raid_id=? AND user_id=?",(int(raid["raid_id"]),str(user_id)))
+        await self._conn.commit()
+        return (int(raid["reward_coins"]),int(raid["reward_xp"])), "ok"
+
     async def get_rpg_world(self, guild_id):
         guild_id = str(guild_id)
         cur = await self._conn.execute(
