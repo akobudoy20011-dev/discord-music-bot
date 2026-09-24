@@ -18,15 +18,7 @@ async def handle(request):
 
 
 async def health(request):
-    """
-    Lightweight Render health endpoint.
-
-    This endpoint intentionally does not depend on the database being healthy:
-    Render needs an HTTP response even while Discord or the DB is reconnecting.
-    A 200 means the web process is alive; the JSON body exposes Discord/DB
-    readiness separately so monitors and humans can distinguish a live process
-    from a fully ready bot.
-    """
+    """Lightweight health endpoint for Render/external monitoring."""
     bot = request.app["bot"]
     started_at = request.app["started_at"]
 
@@ -54,6 +46,7 @@ async def health(request):
             "last_error": watchdog_cog.last_error,
             "recovery_count": watchdog_cog.recovery_count,
             "last_recovery": watchdog_cog.last_recovery,
+            "last_voice_failure": watchdog_cog.last_voice_failure,
         }
 
     payload = {
@@ -63,11 +56,7 @@ async def health(request):
         "ready": overall_ready,
         "discord": {
             "ready": discord_ready,
-            "latency_ms": (
-                round(bot.latency * 1000, 1)
-                if discord_ready
-                else None
-            ),
+            "latency_ms": round(bot.latency * 1000, 1) if discord_ready else None,
             "guilds": len(bot.guilds) if bot is not None else 0,
         },
         "database": {
@@ -80,9 +69,8 @@ async def health(request):
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
-    # Always return 200 while the Python process is alive. Render and the
-    # external monitor can therefore wake a sleeping Free service, while the
-    # JSON "ready" field still exposes whether Discord/DB are fully healthy.
+    # Keep this 200 while the process is alive. A monitor can distinguish
+    # process liveness from Discord/DB readiness using the JSON fields.
     return web.json_response(payload)
 
 
