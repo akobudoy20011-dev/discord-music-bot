@@ -14,6 +14,7 @@ import logging
 import os
 import random
 import shutil
+import time
 from collections import deque
 
 import discord
@@ -1086,18 +1087,60 @@ class Music(commands.Cog):
         state.queue = deque(items)
         await ctx.send("🔀 Queue shuffled.")
 
+    @staticmethod
+    def _format_duration(seconds):
+        if seconds is None:
+            return "LIVE"
+        try:
+            total = max(0, int(seconds))
+        except (TypeError, ValueError):
+            return "?:??"
+        minutes, secs = divmod(total, 60)
+        hours, minutes = divmod(minutes, 60)
+        return f"{hours}:{minutes:02}:{secs:02}" if hours else f"{minutes}:{secs:02}"
+
+    def _current_position(self, state):
+        track = state.current
+        if not track:
+            return 0.0
+        elapsed = time.monotonic() - track.get("started_at", time.monotonic())
+        elapsed -= track.get("paused_total", 0.0)
+        if track.get("paused_at") is not None:
+            elapsed -= time.monotonic() - track["paused_at"]
+        return max(0.0, elapsed)
+
+    def _progress_bar(self, position, duration, width=18):
+        if not duration or duration <= 0:
+            return "🔴 LIVE"
+        ratio = min(1.0, max(0.0, position / duration))
+        filled = int(ratio * width)
+        return "▬" * filled + "🔘" + "▬" * (width - filled)
+
     @commands.command(name="nowplaying", aliases=["np", "music"])
     async def nowplaying(self, ctx):
         state = await self.ensure_settings(ctx.guild.id)
         if not state.current:
             await ctx.send("Nothing is playing.")
             return
+        track = state.current
+        duration = track.get("duration")
+        position = self._current_position(state)
         embed = discord.Embed(
             title="🎵 ECLIPSE NOW PLAYING",
-            description=f"**{state.current['title']}**\n{state.current.get('webpage_url') or ''}",
+            description=(
+                f"**{track['title']}**\n"
+                f"{self._progress_bar(position, duration)}\n"
+                f"`{self._format_duration(position)} / {self._format_duration(duration)}`"
+            ),
             color=COLOR_MUSIC,
         )
-        embed.set_footer(text=f"Requested by {state.current['requester_name']} · Loop {state.loop_mode}")
+        embed.add_field(name="Requester", value=track["requester_name"], inline=True)
+        embed.add_field(name="Queue", value=str(len(state.queue)), inline=True)
+        embed.add_field(name="Loop", value=state.loop_mode, inline=True)
+        embed.add_field(name="Volume", value=f"{round(state.volume * 100)}%", inline=True)
+        embed.add_field(name="Autoplay", value="on" if state.autoplay else "off", inline=True)
+        embed.add_field(name="24/7", value="on" if state.twentyfour_seven else "off", inline=True)
+        embed.set_footer(text="Progress shown at the moment this panel was opened.")
         await ctx.send(embed=embed, view=MusicControlView(self, ctx.guild.id))
 
     @commands.command(name="volume", aliases=["vol"])
