@@ -182,7 +182,7 @@ class Eclipse(commands.Cog):
         await self.db.set_equipped_title(ctx.guild.id, ctx.author.id, match)
         await ctx.send(f"👑 Equipped **{match}**.")
 
-    @commands.command(name="bank")
+    @commands.command(name="eclipsebank")
     async def bank(self, ctx):
         interest, user = await self.db.apply_bank_interest(ctx.guild.id, ctx.author.id)
         embed = discord.Embed(
@@ -199,7 +199,7 @@ class Eclipse(commands.Cog):
         embed.set_footer(text="!deposit <amount> · !withdraw <amount> · !interest")
         await ctx.send(embed=footer(embed, ctx))
 
-    @commands.command(name="deposit")
+    @commands.command(name="eclipsedeposit")
     async def deposit(self, ctx, amount: int):
         ok, result = await self.db.deposit_bank(ctx.guild.id, ctx.author.id, amount)
         if not ok:
@@ -207,7 +207,7 @@ class Eclipse(commands.Cog):
             return
         await ctx.send(f"🏦 Deposited **{amount:,} coins**. Vault: **{result['bank_balance']:,}**.")
 
-    @commands.command(name="withdraw")
+    @commands.command(name="eclipsewithdraw")
     async def withdraw(self, ctx, amount: int):
         interest, _ = await self.db.apply_bank_interest(ctx.guild.id, ctx.author.id)
         ok, result = await self.db.withdraw_bank(ctx.guild.id, ctx.author.id, amount)
@@ -216,7 +216,7 @@ class Eclipse(commands.Cog):
             return
         await ctx.send(f"💸 Withdrew **{amount:,} coins**. Liquid: **{result['balance']:,}**.")
 
-    @commands.command(name="interest")
+    @commands.command(name="eclipseinterest")
     async def interest(self, ctx):
         amount, user = await self.db.apply_bank_interest(ctx.guild.id, ctx.author.id)
         await ctx.send(f"✦ Interest applied: **+{amount:,} coins** · Vault: **{user['bank_balance']:,}**.")
