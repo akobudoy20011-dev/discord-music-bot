@@ -2576,6 +2576,21 @@ class Database:
         cur=await self._conn.execute("INSERT INTO guild_raids(guild_id,raid_id_key,status,boss_hp,max_hp,reward_coins,reward_xp,ends_at,created_at,phase,enrage_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",(str(guild_id),str(raid_id_key),"active",int(max_hp),int(max_hp),int(reward_coins),int(reward_xp),now+int(duration),now,now+int(duration*0.75)))
         await self._conn.commit(); return int(cur.lastrowid),"ok"
 
+    async def expire_guild_raid(self,guild_id,raid_id=None):
+        now=time.time()
+        raid=await self.get_guild_raid(guild_id,raid_id)
+        if not raid or raid["status"]!="active":
+            return raid, False
+        if float(raid["ends_at"])>now:
+            return raid, False
+        await self._conn.execute(
+            "UPDATE guild_raids SET status='failed' WHERE raid_id=? AND status='active'",
+            (int(raid["raid_id"]),)
+        )
+        await self._conn.commit()
+        raid["status"]="failed"
+        return raid, True
+
     async def get_guild_raid(self,guild_id,raid_id=None):
         q="SELECT * FROM guild_raids WHERE guild_id=?"; p=[str(guild_id)]
         if raid_id is not None: q+=" AND raid_id=?"; p.append(int(raid_id))
