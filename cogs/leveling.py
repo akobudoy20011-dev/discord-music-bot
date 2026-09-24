@@ -85,6 +85,14 @@ class Leveling(commands.Cog):
             amount
         )
 
+        if new_level > old_level:
+            for reached_level in range(old_level + 1, new_level + 1):
+                await self.db.grant_level_milestone(
+                    message.guild.id,
+                    message.author.id,
+                    reached_level
+                )
+
         if new_level > old_level and config["level_announce"]:
             channel = message.channel
 
@@ -197,6 +205,18 @@ class Leveling(commands.Cog):
             inline=False
         )
 
+        progression = await self.db.get_level_progression(ctx.guild.id, member.id)
+        embed.add_field(
+            name="♛ Prestige",
+            value=f"{int(progression['prestige'])} • {float(progression['xp_boost']):.0%} XP",
+            inline=True
+        )
+        embed.add_field(
+            name="📈 Lifetime XP",
+            value=f"{int(progression['total_xp']):,}",
+            inline=True
+        )
+
         await ctx.send(
             embed=footer(embed, ctx)
         )
@@ -271,6 +291,19 @@ class Leveling(commands.Cog):
             inline=True
         )
 
+        progression = await self.db.get_level_progression(ctx.guild.id, member.id)
+
+        embed.add_field(
+            name="♛ Prestige",
+            value=f"{int(progression['prestige'])} • {float(progression['xp_boost']):.0%} XP",
+            inline=True
+        )
+        embed.add_field(
+            name="📈 Lifetime XP",
+            value=f"{int(progression['total_xp']):,}",
+            inline=True
+        )
+
         embed.add_field(
             name="💬 Messages",
             value=f"{user['messages']:,}",
@@ -303,6 +336,80 @@ class Leveling(commands.Cog):
         await ctx.send(
             embed=footer(embed, ctx)
         )
+
+    # ------------------------------------------------------------
+    # ADVANCED PROGRESSION
+    # ------------------------------------------------------------
+
+    @commands.command(name="progression", aliases=["progress", "progressioninfo"])
+    async def progression(self, ctx, member: discord.Member = None):
+        member = member or ctx.author
+        user = await self.db.get_user(ctx.guild.id, member.id)
+        state = await self.db.get_level_progression(ctx.guild.id, member.id)
+        level = int(user["level"])
+        current_xp = int(user["xp"])
+        needed = level * 100
+        prestige = int(state["prestige"])
+        boost = float(state["xp_boost"])
+        lifetime = int(state["total_xp"])
+        claimed = int(state["milestone_claimed"])
+        next_milestone = ((max(level, 9) // 10) + 1) * 10
+        if level >= 100:
+            next_milestone = 100
+
+        embed = discord.Embed(
+            title=f"📈 {member.display_name}'s Progression",
+            description=(
+                f"Level {level} • {rank_title(level)}\n"
+                f"XP {current_xp:,}/{needed:,}"
+            ),
+            color=COLOR_PRIMARY
+        )
+        embed.set_thumbnail(url=member.display_avatar.url)
+        embed.add_field(name="♛ Prestige", value=f"{prestige}", inline=True)
+        embed.add_field(name="✨ XP Multiplier", value=f"{boost:.0%}", inline=True)
+        embed.add_field(name="📚 Lifetime XP", value=f"{lifetime:,}", inline=True)
+        embed.add_field(name="🎁 Milestones", value=f"Claimed through Level {claimed}", inline=True)
+        embed.add_field(
+            name="🏁 Next Milestone",
+            value="Prestige available" if level >= 100 else f"Level {next_milestone} • {next_milestone * 100:,} coins",
+            inline=True
+        )
+        embed.add_field(
+            name="♛ Prestige Requirement",
+            value="Ready — Level 100 reached. Use !prestige." if level >= 100 else f"Reach Level 100 ({100 - level} levels remaining).",
+            inline=True
+        )
+        await ctx.send(embed=footer(embed, ctx))
+
+    @commands.command(name="prestige", aliases=["prestigeup", "rebirth"])
+    async def prestige(self, ctx):
+        user = await self.db.get_user(ctx.guild.id, ctx.author.id)
+        if int(user["level"]) < 100:
+            await ctx.send(
+                f"You need Level 100 to prestige. You are currently Level {int(user['level'])}."
+            )
+            return
+        new_prestige = await self.db.prestige_user(ctx.guild.id, ctx.author.id)
+        if new_prestige is None:
+            await ctx.send("Prestige could not be completed.")
+            return
+        reward = 10_000
+        await self.db.add_balance(ctx.guild.id, ctx.author.id, reward)
+        state = await self.db.get_level_progression(ctx.guild.id, ctx.author.id)
+        embed = discord.Embed(
+            title="♛ PRESTIGE ASCENDED",
+            description=(
+                f"{ctx.author.mention} has entered Prestige {new_prestige}.\n\n"
+                "Your level has returned to 1, while lifetime XP is preserved.\n"
+                f"Your XP gain is now {float(state['xp_boost']):.0%}."
+            ),
+            color=COLOR_GOLD
+        )
+        embed.add_field(name="💰 Ascension Reward", value=f"+{reward:,} coins", inline=True)
+        embed.add_field(name="📈 Lifetime XP", value=f"{int(state['total_xp']):,}", inline=True)
+        embed.add_field(name="🎁 Next Milestone", value="Level 10", inline=True)
+        await ctx.send(embed=footer(embed, ctx))
 
     # ------------------------------------------------------------
     # OWNER-ONLY SET LEVEL
