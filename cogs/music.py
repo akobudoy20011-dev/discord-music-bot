@@ -304,6 +304,7 @@ class GuildMusicState:
         self.current = None
         self.last_track = None
         self.recent = deque(maxlen=12)
+        self.history = deque(maxlen=25)
         self.volume = 0.5
         self.loop_mode = "off"
         self.autoplay = False
@@ -687,7 +688,9 @@ class Music(commands.Cog):
                 except Exception as refresh_error:
                     logger.warning("Playback recovery failed for '%s': %s", query, refresh_error)
         if state.current and state.current.get("generation") == generation:
-            state.last_track = dict(state.current)
+            finished = dict(state.current)
+            state.history.append(finished)
+            state.last_track = finished
             state.current = None
         await self._play_next(guild)
 
@@ -843,6 +846,65 @@ class Music(commands.Cog):
             return
         vc.resume()
         await ctx.send("▶️ Resumed.")
+
+    @commands.command(name="previous", aliases=["prev", "back"])
+    async def previous(self, ctx):
+        if not await self.require_control(ctx):
+            return
+        state = await self.ensure_settings(ctx.guild.id)
+        if not state.history:
+            await ctx.send("⏮️ There is no previous track in the playback history.")
+            return
+        previous_track = state.history.pop()
+        current = dict(state.current) if state.current else None
+        if current:
+            state.queue.appendleft({
+                "query": current["query"],
+                "requester_name": current["requester_name"],
+            })
+        state.queue.appendleft({
+            "query": previous_track["query"],
+            "requester_name": previous_track["requester_name"],
+        })
+        vc = ctx.voice_client
+        if vc and (vc.is_playing() or vc.is_paused()):
+            generation = state.current.get("generation") if state.current else None
+            state.intentional_stop_generation = generation
+            vc.stop()
+        else:
+            await self._play_next(ctx.guild)
+        await ctx.send(f"⏮️ Returning to **{previous_track['title']}**.")
+
+    @commands.command(name="replay", aliases=["again"])
+    async def replay(self, ctx):
+        if not await self.require_control(ctx):
+            return
+        state = await self.ensure_settings(ctx.guild.id)
+        if not state.current:
+            if state.last_track:
+                state.queue.appendleft({
+                    "query": state.last_track["query"],
+                    "requester_name": state.last_track["requester_name"],
+                })
+                await self._play_next(ctx.guild)
+                return
+            await ctx.send("Nothing is available to replay.")
+            return
+
+        track = dict(state.current)
+        state.queue.appendleft({
+            "query": track["query"],
+            "requester_name": track["requester_name"],
+        })
+        vc = ctx.voice_client
+        if vc and (vc.is_playing() or vc.is_paused()):
+            generation = state.current.get("generation")
+            state.intentional_stop_generation = generation
+            vc.stop()
+        else:
+            state.current = None
+            await self._play_next(ctx.guild)
+        await ctx.send(f"🔂 Replaying **{track['title']}**.")
 
     @commands.command(name="skip")
     async def skip(self, ctx):
