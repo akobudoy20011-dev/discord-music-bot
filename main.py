@@ -246,3 +246,6 @@ async def on_resumed():
 async def on_error(event, *args, **kwargs):
     logger.exception("Unhandled Discord event error: %s", event)
 
+
+if __name__ == "__main__":
+    bot.run(DISCORD_TOKEN)
