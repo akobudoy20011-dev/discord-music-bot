@@ -21,6 +21,7 @@ swapping the backend later means editing this one file, not every cog.
 """
 
 import json
+import time
 import os
 import time
 import random
@@ -447,6 +448,14 @@ class Database:
             values
         )
         await self._conn.commit()
+
+    async def health_check(self):
+        """Return a lightweight database health snapshot."""
+        started = time.perf_counter()
+        await self._conn.execute("SELECT 1")
+        await self._conn.commit()
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        return {"ok": True, "latency_ms": round(elapsed_ms, 2)}
 
     async def add_balance(self, guild_id, user_id, amount):
         guild_id, user_id = str(guild_id), str(user_id)
