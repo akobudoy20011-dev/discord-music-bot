@@ -11,6 +11,8 @@ from rpg.combat import start as start_battle, attack as combat_attack, flee as f
 from rpg.quests import ensure_quests, list_quests, claim as claim_quest
 from rpg.world import list_regions, get_region, list_events, get_event
 from rpg.exploration import world_status, travel, explore
+from rpg.towns import town_status, inn, shrine, alchemist, buy
+from rpg.items import get_item
 
 
 def xp_bar(current, maximum, length=14):
@@ -134,6 +136,52 @@ class RPG(commands.Cog):
             color=COLOR_PRIMARY
         ))
 
+    @rpg.command(name="town", aliases=["towns", "settlement"])
+    async def town_command(self, ctx, action: str = None, item_id: str = None):
+        if not action:
+            s = await town_status(self.db, ctx.guild.id, ctx.author.id)
+            if not s["ok"]:
+                await ctx.send(f"❌ {s['message']}")
+                return
+            t = s["town"]
+            services = "\n".join(f"• `{x}`" for x in t["services"])
+            await ctx.send(embed=discord.Embed(title=f"{t['icon']} ECLIPSE · {t['name']}", description=f"{t['description']}\n\n**Services**\n{services}\n\n`!rpg town shop` to browse the local merchant.", color=COLOR_PRIMARY))
+            return
+        action = action.lower()
+        if action in {"shop", "merchant", "buy"} and not item_id:
+            s = await town_status(self.db, ctx.guild.id, ctx.author.id)
+            if not s["ok"]:
+                await ctx.send(f"❌ {s['message']}")
+                return
+            lines = []
+            for iid, offer in s["town"]["merchant"].items():
+                item = get_item(iid)
+                lines.append(f"`{iid}` — **{item['name']}** · 💰 {offer['price']:,}")
+            await ctx.send(f"🛒 **{s['town']['name']} MERCHANT**\n\n" + "\n".join(lines) + "\n\nBuy with `!rpg town buy <item>`.")
+            return
+        if action in {"shop", "merchant", "buy"}:
+            result = await buy(self.db, ctx.guild.id, ctx.author.id, item_id)
+            if not result["ok"]:
+                await ctx.send(f"❌ {result['message']}")
+                return
+            await ctx.send(f"🛒 **PURCHASED** · {result['item']['icon']} **{result['item']['name']}**\nPaid **{result['price']:,} RPG gold**.")
+            return
+        handlers = {"inn": inn, "shrine": shrine, "alchemist": alchemist}
+        handler = handlers.get(action)
+        if handler is None:
+            await ctx.send("Use `!rpg town`, `!rpg town shop`, `!rpg town buy <item>`, `!rpg town inn`, `!rpg town shrine`, or `!rpg town alchemist`.")
+            return
+        result = await handler(self.db, ctx.guild.id, ctx.author.id)
+        if not result["ok"]:
+            await ctx.send(f"❌ {result['message']}")
+            return
+        if action == "inn":
+            await ctx.send(f"🛏️ **{result['town']['name']} INN**\nYou wake restored to full HP and MP. · **-{result['cost']} gold**")
+        elif action == "shrine":
+            level = "\n✦ **LEVEL UP**" if result["new_level"] > result["old_level"] else ""
+            await ctx.send(f"🕯️ **{result['town']['name']} SHRINE**\nA blessing settles over you. · **+{result['xp']} XP** · **-{result['cost']} gold**{level}")
+        else:
+            await ctx.send(f"⚗️ **{result['town']['name']} ALCHEMIST**\nYour MP has been restored. · **-{result['cost']} gold**")
     @rpg.command(name="rest",aliases=["heal"])
     async def rest_command(self,ctx):
         player=await rest(self.db,ctx.guild.id,ctx.author.id); await ctx.send(f"🪽 **{ctx.author.display_name}** rests beneath the ECLIPSE.\n❤️ HP restored to **{player['hp']}/{player['max_hp']}** · 💠 MP restored to **{player['mp']}/{player['max_mp']}**")
