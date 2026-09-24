@@ -627,6 +627,15 @@ class Database:
         if "special_cooldowns" not in battle_columns:
             await self._conn.execute("ALTER TABLE rpg_battles ADD COLUMN special_cooldowns TEXT NOT NULL DEFAULT '{}'")
 
+        raid_cur = await self._conn.execute("PRAGMA table_info(guild_raids)")
+        raid_columns = {row["name"] for row in await raid_cur.fetchall()}
+        for name, definition in {
+            "phase": "INTEGER NOT NULL DEFAULT 1",
+            "enrage_at": "REAL NOT NULL DEFAULT 0",
+        }.items():
+            if name not in raid_columns:
+                await self._conn.execute(f"ALTER TABLE guild_raids ADD COLUMN {name} {definition}")
+
         tournament_cur = await self._conn.execute("PRAGMA table_info(arcade_tournaments)")
         tournament_columns = {row["name"] for row in await tournament_cur.fetchall()}
         if "prize_awarded" not in tournament_columns:
@@ -2553,7 +2562,7 @@ class Database:
         now=time.time()
         cur=await self._conn.execute("SELECT 1 FROM guild_raids WHERE guild_id=? AND status='active'",(str(guild_id),))
         if await cur.fetchone(): return None,"active"
-        cur=await self._conn.execute("INSERT INTO guild_raids(guild_id,raid_id_key,status,boss_hp,max_hp,reward_coins,reward_xp,ends_at,created_at) VALUES(?,?,?,?,?,?,?,?,?)",(str(guild_id),str(raid_id_key),"active",int(max_hp),int(max_hp),int(reward_coins),int(reward_xp),now+int(duration),now))
+        cur=await self._conn.execute("INSERT INTO guild_raids(guild_id,raid_id_key,status,boss_hp,max_hp,reward_coins,reward_xp,ends_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,1,?)",(str(guild_id),str(raid_id_key),"active",int(max_hp),int(max_hp),int(reward_coins),int(reward_xp),now+int(duration),now,now+int(duration*0.75)))
         await self._conn.commit(); return int(cur.lastrowid),"ok"
 
     async def get_guild_raid(self,guild_id,raid_id=None):
@@ -2573,7 +2582,12 @@ class Database:
             cur=await self._conn.execute("UPDATE guild_raids SET boss_hp=MAX(0,boss_hp-?) WHERE raid_id=? AND status='active'",(damage,int(raid["raid_id"])))
             if cur.rowcount!=1: await self._conn.rollback(); return False,"inactive",0
             await self._conn.execute("INSERT INTO guild_raid_contributors(raid_id,user_id,damage) VALUES(?,?,?) ON CONFLICT(raid_id,user_id) DO UPDATE SET damage=damage+excluded.damage",(int(raid["raid_id"]),str(user_id),damage))
-            cur=await self._conn.execute("SELECT boss_hp FROM guild_raids WHERE raid_id=?",(int(raid["raid_id"]),)); hp=int((await cur.fetchone())["boss_hp"])
+            cur=await self._conn.execute("SELECT boss_hp,phase FROM guild_raids WHERE raid_id=?",(int(raid["raid_id"]),)); row=await cur.fetchone(); hp=int(row["boss_hp"]); phase=int(row["phase"])
+            ratio=hp/max(1,int(raid["max_hp"]))
+            new_phase=3 if ratio<=0.30 else 2 if ratio<=0.60 else 1
+            if new_phase!=phase:
+                await self._conn.execute("UPDATE guild_raids SET phase=? WHERE raid_id=?",(new_phase,int(raid["raid_id"])))
+                phase=new_phase
             if hp<=0: await self._conn.execute("UPDATE guild_raids SET status='completed',completed=1 WHERE raid_id=?",(int(raid["raid_id"]),))
             await self._conn.commit()
             return True,"completed" if hp<=0 else "ok",hp
