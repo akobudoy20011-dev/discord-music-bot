@@ -336,6 +336,11 @@ class BlackjackView(discord.ui.View):
 class Games(commands.Cog):
     """Interactive mini-games and gambling hub."""
 
+    @commands.command(name="games")
+    async def games(self, ctx):
+        """Open the interactive ECLIPSE game center."""
+        await ctx.send(embed=build_games_home_embed(), view=GamesHubView(author_id=ctx.author.id))
+
     def __init__(self, bot):
         self.bot = bot
         self.db = bot.db
@@ -472,11 +477,6 @@ def build_games_home_embed():
     embed.set_footer(text="ECLIPSE · GAME CENTER")
     return embed
 
-
-    @commands.command(name="games")
-    async def games(self, ctx):
-        """Open the interactive ECLIPSE game center."""
-        await ctx.send(embed=build_games_home_embed(), view=GamesHubView(author_id=ctx.author.id))
 
     @commands.command(name="trivia")
     @commands.cooldown(1, 10, commands.BucketType.user)
