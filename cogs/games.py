@@ -354,24 +354,13 @@ class Games(commands.Cog):
             description=(
                 "Test your luck and skills to earn coins!\n\n"
                 "🧠 `!trivia` — Answer questions for bonus coins.\n"
-                "🪨 `!rps [choice] [bet]` — Rock, Paper, Scissors.\n"
-                "🎲 `!roll <bet>` — Dice.\n"
-                "🔢 `!guess <1-10> <bet>` — Guess the secret number.\n"
-                "🪙 `!coinflip <heads/tails> <bet>` — Coinflip.\n"
-                "🎰 `!slots <bet>` — Slot machine.\n"
-                "🃏 `!blackjack <bet>` — Blackjack.\n"
-                "🔴 `!roulette <red/black/green> <bet>` — Roulette.\n"
-                "💣 `!mines <bet>` — Risk/reward minefield.\n"
-                "🃏 `!war <bet>` — Card war.\n"
-                "🎴 `!baccarat <bet>` — Player/Banker/Tie.\n"
-                "🔮 `!higherlower <bet>` — Build a multiplier chain.\n"
-                "☯ `!oddeven <odd/even> <bet>` — Odd or even.\n"
-                "🎯 `!target [bet]` — Hit the hidden number.\n"
-                "⚡ `!reaction [bet]` — Reflex challenge.\n"
-                "🔤 `!scramble [bet]` — Word scramble.\n"
-                "🕯️ `!hangman [bet]` — Hangman.\n"
-                "🧩 `!mastermind [bet]` — Code breaker.\n"
-                "🎱 `!8ball <question>` — Magic 8-ball."
+                "🪨 `!rps [choice] [bet]` — Play Rock, Paper, Scissors.\n"
+                "🎲 `!roll <bet>` — Roll a die (55+ wins 2x).\n"
+                "🔢 `!guess <1-10> <bet>` — Guess secret number (5x payout!).\n"
+                "🪙 `!coinflip <heads/tails> <bet>` — Flip a coin (2x payout).\n"
+                "🎰 `!slots <bet>` — Spin the slot machine reels.\n"
+                "🃏 `!blackjack <bet>` — Interactive card table.\n"
+                "🎱 `!8ball <question>` — Ask the mysterious magic 8-ball."
             ),
             color=COLOR_PRIMARY
         )
@@ -1213,3 +1202,411 @@ class Games(commands.Cog):
             await ctx.send(f"🕯️ HANGMAN: {masked}\nMisses: {misses}/6\nType one letter.")
             def check(message):
                 return message.author.id == ctx.author.id and message.channel.id == ctx.channel.id and len(message.content.strip()) == 1 and message.content.isalpha()
+            try:
+                answer = await self.bot.wait_for("message", timeout=20, check=check)
+            except asyncio.TimeoutError:
+                await ctx.send(f"⏰ Time. Word was {word}.")
+                return
+            letter = answer.content.lower()
+            if letter in guessed:
+                continue
+            guessed.add(letter)
+            if letter not in word:
+                misses += 1
+        balance = (await self.db.get_user(ctx.guild.id, ctx.author.id))["balance"]
+        await ctx.send(f"🕯️ HANGMAN LOST — word was {word}.\nBalance: {balance:,}")
+
+    @commands.command(name="mastermind", aliases=["codebreaker"])
+    async def mastermind(self, ctx, bet: int = 0):
+        if bet:
+            ok, result = await self._take_bet(ctx, bet)
+            if not ok:
+                await ctx.send(f"❌ {result}")
+                return
+        else:
+            result = 0
+        code = "".join(random.sample("0123456789", 4))
+        await ctx.send(embed=self._game_embed("🧩 MASTERMIND", "Break the 4-digit code. No repeated digits. You have 8 guesses.\nReply with four unique digits."))
+        def check(message):
+            return message.author.id == ctx.author.id and message.channel.id == ctx.channel.id and message.content.isdigit() and len(message.content) == 4 and len(set(message.content)) == 4
+        for attempt in range(1, 9):
+            try:
+                answer = await self.bot.wait_for("message", timeout=25, check=check)
+            except asyncio.TimeoutError:
+                await ctx.send(f"⏰ Time. Code was {code}.")
+                return
+            guess = answer.content
+            exact = sum(a == b for a, b in zip(code, guess))
+            misplaced = sum(min(code.count(d), guess.count(d)) for d in set(guess)) - exact
+            if exact == 4:
+                if result:
+                    payout, balance = await self._payout(ctx, result, 6)
+                    await ctx.send(f"🧩 CODE BROKEN in {attempt} guesses.\n🎉 Payout: {payout:,} · Balance: {balance:,}")
+                else:
+                    await ctx.send(f"🧩 CODE BROKEN: {code}")
+                return
+            await ctx.send(f"Attempt {attempt}/8 · Exact: {exact} · Misplaced: {misplaced}")
+        balance = (await self.db.get_user(ctx.guild.id, ctx.author.id))["balance"]
+        await ctx.send(f"🧩 LOCKED — code was {code}.\nBalance: {balance:,}")
+
+    @commands.command(name="mines")
+    async def mines(self, ctx, bet: int):
+        ok, result = await self._take_bet(ctx, bet)
+        if not ok:
+            await ctx.send(f"❌ {result}")
+            return
+        mine_positions = set(random.sample(range(25), 4))
+        revealed = set()
+        multiplier = 1.0
+        cog = self
+
+        class MinesView(discord.ui.View):
+            def __init__(view):
+                super().__init__(timeout=120)
+                view.done = False
+                for index in range(25):
+                    button = discord.ui.Button(label="·", style=discord.ButtonStyle.secondary, row=index // 5)
+                    async def reveal(interaction, idx=index, btn=button):
+                        nonlocal multiplier
+                        if interaction.user.id != ctx.author.id:
+                            await interaction.response.send_message("❌ This minefield is not yours.", ephemeral=True)
+                            return
+                        if view.done or idx in revealed:
+                            return
+                        revealed.add(idx)
+                        if idx in mine_positions:
+                            view.done = True
+                            view.stop()
+                            for child in view.children:
+                                child.disabled = True
+                            for pos, child in enumerate(view.children[:25]):
+                                child.label = "💣" if pos in mine_positions else ("💎" if pos in revealed else "·")
+                            balance = await cog._balance(ctx)
+                            await interaction.response.edit_message(
+                                embed=cog._game_embed("💣 MINES · DETONATED", f"Safe tiles: {len(revealed)-1}\n\n❌ Mine hit.\nBalance: {balance:,}", discord.Color.red()),
+                                view=view,
+                            )
+                            return
+                        btn.label = "💎"
+                        btn.style = discord.ButtonStyle.success
+                        multiplier = min(8.0, multiplier + 0.35)
+                        if len(revealed) == 21:
+                            view.done = True
+                            view.stop()
+                            for child in view.children:
+                                child.disabled = True
+                            payout, balance = await cog._payout(ctx, result, multiplier)
+                            text = f"All safe tiles cleared.\n\n🎉 {multiplier:.2f}x payout: {payout:,}\nBalance: {balance:,}"
+                            color = discord.Color.gold()
+                        else:
+                            text = f"Safe tiles: {len(revealed)}/21\nMultiplier: {multiplier:.2f}x\n\nCash out before a mine."
+                            color = COLOR_PRIMARY
+                        await interaction.response.edit_message(embed=cog._game_embed("💣 MINES", text, color), view=view)
+
+                    button.callback = reveal
+                    view.add_item(button)
+
+                cash = discord.ui.Button(label="Cash Out 💰", style=discord.ButtonStyle.primary, row=4)
+                async def cashout(interaction):
+                    if interaction.user.id != ctx.author.id:
+                        await interaction.response.send_message("❌ This minefield is not yours.", ephemeral=True)
+                        return
+                    if view.done:
+                        return
+                    view.done = True
+                    view.stop()
+                    for child in view.children:
+                        child.disabled = True
+                    if not revealed:
+                        balance = await cog._refund(ctx, result)
+                        text = f"No tiles opened. Bet returned.\nBalance: {balance:,}"
+                        color = COLOR_GOLD
+                    else:
+                        payout, balance = await cog._payout(ctx, result, multiplier)
+                        text = f"Safe tiles: {len(revealed)}\n\n💰 {multiplier:.2f}x payout: {payout:,}\nBalance: {balance:,}"
+                        color = discord.Color.green()
+                    await interaction.response.edit_message(embed=cog._game_embed("💣 MINES · CASHED OUT", text, color), view=view)
+                cash.callback = cashout
+                view.add_item(cash)
+
+        await ctx.send(embed=self._game_embed("💣 MINES", f"5×5 field · 4 mines · Bet: {result:,}\nReveal safe tiles to raise the multiplier."), view=MinesView())
+
+    @commands.command(name="gamehall", aliases=["newgames", "games2"])
+    async def gamehall(self, ctx):
+        embed = self._game_embed(
+            "୨୧ ECLIPSE · EXPANDED ARCADE ୨୧",
+            "🎰 **Casino** — roulette · mines · war · baccarat · higher/lower\n"
+            "🧠 **Mind** — trivia · guess · mastermind · scramble · hangman · 8ball\n"
+            "⚡ **Reflex** — reaction · target\n"
+            "🎮 **Classics** — rps · roll · coinflip · slots · blackjack\n\n"
+            "All betting games cap individual wagers at 1,000,000 coins."
+        )
+        await ctx.send(embed=footer(embed, ctx))
+
+
+    # ============================================================
+    # ECLIPSE ARCADE — PERSISTENT STATS + MULTIPLAYER
+    # ============================================================
+
+    async def _record(self, ctx, game_id, result, wager=0, net=0):
+        await self.db.record_game(ctx.guild.id, ctx.author.id, game_id, result, wager, net)
+
+    @commands.command(name="gamestats", aliases=["gstats"])
+    async def gamestats(self, ctx, member: discord.Member = None):
+        member = member or ctx.author
+        rows = await self.db.get_game_stats(ctx.guild.id, member.id)
+        if not rows:
+            await ctx.send(f"🎮 **{member.display_name}** has no recorded arcade games yet.")
+            return
+        total_plays = sum(int(r["plays"]) for r in rows)
+        total_wins = sum(int(r["wins"]) for r in rows)
+        total_wagered = sum(int(r["wagered"]) for r in rows)
+        best = max((int(r["best_streak"]) for r in rows), default=0)
+        lines = [
+            f"**{r['game_id']}** · {r['wins']}W / {r['losses']}L / {r['ties']}T · {r['plays']} plays · best streak {r['best_streak']}"
+            for r in rows[:12]
+        ]
+        await ctx.send(embed=self._game_embed(
+            f"📊 {member.display_name} · ARCADE RECORD",
+            f"Games: **{total_plays}** · Wins: **{total_wins}** · Wagered: **{total_wagered:,}**\n"
+            f"Best win streak: **{best}**\n\n" + "\n".join(lines)
+        ))
+
+    @commands.command(name="gameleaderboard", aliases=["gameboard", "glb"])
+    async def gameleaderboard(self, ctx, game_id: str = None):
+        game_id = (game_id or "all").lower()
+        if game_id == "all":
+            rows = await self.db.leaderboard(ctx.guild.id, order_by="wins", limit=10)
+            lines = [f"**{i}.** <@{r['user_id']}> · {r['wins']:,} wins · Lv.{r['level']}" for i,r in enumerate(rows,1)]
+            title = "🏆 ECLIPSE · OVERALL GAME LEADERBOARD"
+        else:
+            rows = await self.db.game_leaderboard(ctx.guild.id, game_id, 10)
+            lines = [f"**{i}.** <@{r['user_id']}> · {r['wins']}W · {r['best_streak']} streak" for i,r in enumerate(rows,1)]
+            title = f"🏆 {game_id.upper()} LEADERBOARD"
+        await ctx.send(embed=self._game_embed(title, "\n".join(lines) if lines else "No records yet."))
+
+    @commands.command(name="ttt", aliases=["tictactoe", "xo"])
+    @commands.cooldown(1, 5, commands.BucketType.channel)
+    async def ttt(self, ctx, opponent: discord.Member, bet: int = 0):
+        if opponent.bot or opponent.id == ctx.author.id:
+            await ctx.send("❌ Choose another human player.")
+            return
+        if bet < 0 or bet > self.MAX_BET:
+            await ctx.send(f"❌ Bet must be between 0 and {self.MAX_BET:,}.")
+            return
+        a = await self.db.get_user(ctx.guild.id, ctx.author.id)
+        b = await self.db.get_user(ctx.guild.id, opponent.id)
+        if bet and (int(a["balance"]) < bet or int(b["balance"]) < bet):
+            await ctx.send("❌ Both players need enough coins for the wager.")
+            return
+        if bet:
+            await self.db.add_balance(ctx.guild.id, ctx.author.id, -bet)
+            await self.db.add_balance(ctx.guild.id, opponent.id, -bet)
+        cog, board, players, turn = self, [""] * 9, [ctx.author, opponent], 0
+
+        class TTTView(discord.ui.View):
+            def __init__(view):
+                super().__init__(timeout=180)
+                view.done = False
+                for i in range(9):
+                    button = discord.ui.Button(label="·", style=discord.ButtonStyle.secondary, row=i // 3)
+                    async def press(interaction, idx=i, btn=button):
+                        nonlocal turn
+                        if interaction.user.id != players[turn].id:
+                            await interaction.response.send_message("❌ It is not your turn.", ephemeral=True)
+                            return
+                        if view.done or board[idx]:
+                            return
+                        board[idx] = "X" if turn == 0 else "O"
+                        btn.label = board[idx]
+                        btn.style = discord.ButtonStyle.primary if turn == 0 else discord.ButtonStyle.success
+                        lines = [(0,1,2),(3,4,5),(6,7,8),(0,3,6),(1,4,7),(2,5,8),(0,4,8),(2,4,6)]
+                        winner = turn if any(board[a] and board[a] == board[b] == board[c] for a,b,c in lines) else None
+                        draw = winner is None and all(board)
+                        if winner is not None or draw:
+                            view.done = True
+                            view.stop()
+                            for child in view.children:
+                                child.disabled = True
+                            if draw:
+                                if bet:
+                                    await cog.db.add_balance(ctx.guild.id, players[0].id, bet)
+                                    await cog.db.add_balance(ctx.guild.id, players[1].id, bet)
+                                for p in players:
+                                    await cog.db.record_game(ctx.guild.id, p.id, "ttt", "tie", bet, 0)
+                                text = "👔 **DRAW.** Bets returned." if bet else "👔 **DRAW.**"
+                                color = COLOR_GOLD
+                            else:
+                                winner_user, loser_user = players[winner], players[1-winner]
+                                if bet:
+                                    await cog.db.add_balance(ctx.guild.id, winner_user.id, bet * 2)
+                                await cog.db.record_game(ctx.guild.id, winner_user.id, "ttt", "win", bet, bet)
+                                await cog.db.record_game(ctx.guild.id, loser_user.id, "ttt", "loss", bet, -bet)
+                                text = f"🏆 **{winner_user.display_name} wins!**" + (f"\nPrize: **{bet*2:,} coins**" if bet else "")
+                                color = discord.Color.green()
+                            await interaction.response.edit_message(embed=cog._game_embed("⭕ TIC-TAC-TOE", text, color), view=view)
+                            return
+                        turn = 1 - turn
+                        await interaction.response.edit_message(
+                            embed=cog._game_embed("⭕ TIC-TAC-TOE", f"**{players[turn].display_name}**'s turn.\nX · {players[0].display_name}\nO · {players[1].display_name}"),
+                            view=view
+                        )
+                    button.callback = press
+                    view.add_item(button)
+
+        await ctx.send(embed=self._game_embed(
+            "⭕ TIC-TAC-TOE",
+            f"**{ctx.author.display_name}** (X) vs **{opponent.display_name}** (O)\n" +
+            (f"Wager: **{bet:,} each**" if bet else "Friendly match")
+        ), view=TTTView())
+
+    @commands.command(name="dicebattle", aliases=["dicewar", "dbattle"])
+    @commands.cooldown(1, 5, commands.BucketType.channel)
+    async def dicebattle(self, ctx, opponent: discord.Member, bet: int = 0):
+        if opponent.bot or opponent.id == ctx.author.id:
+            await ctx.send("❌ Choose another human player.")
+            return
+        if bet < 0 or bet > self.MAX_BET:
+            await ctx.send(f"❌ Bet must be between 0 and {self.MAX_BET:,}.")
+            return
+        a = await self.db.get_user(ctx.guild.id, ctx.author.id)
+        b = await self.db.get_user(ctx.guild.id, opponent.id)
+        if bet and (int(a["balance"]) < bet or int(b["balance"]) < bet):
+            await ctx.send("❌ Both players need enough coins for the wager.")
+            return
+        if bet:
+            await self.db.add_balance(ctx.guild.id, ctx.author.id, -bet)
+            await self.db.add_balance(ctx.guild.id, opponent.id, -bet)
+        ra, rb = random.randint(1,6), random.randint(1,6)
+        if ra == rb:
+            if bet:
+                await self.db.add_balance(ctx.guild.id, ctx.author.id, bet)
+                await self.db.add_balance(ctx.guild.id, opponent.id, bet)
+            for p in (ctx.author, opponent):
+                await self.db.record_game(ctx.guild.id, p.id, "dicebattle", "tie", bet, 0)
+            text = f"🎲 **{ctx.author.display_name}:** {ra}\n🎲 **{opponent.display_name}:** {rb}\n\n👔 **DRAW.**"
+            color = COLOR_GOLD
+        else:
+            winner = ctx.author if ra > rb else opponent
+            loser = opponent if winner.id == ctx.author.id else ctx.author
+            if bet:
+                await self.db.add_balance(ctx.guild.id, winner.id, bet * 2)
+            await self.db.record_game(ctx.guild.id, winner.id, "dicebattle", "win", bet, bet)
+            await self.db.record_game(ctx.guild.id, loser.id, "dicebattle", "loss", bet, -bet)
+            text = f"🎲 **{ctx.author.display_name}:** {ra}\n🎲 **{opponent.display_name}:** {rb}\n\n🏆 **{winner.display_name} wins!**"
+            color = discord.Color.green()
+        await ctx.send(embed=self._game_embed("🎲 DICE BATTLE", text, color))
+
+    @commands.command(name="connect4", aliases=["connectfour", "c4"])
+    @commands.cooldown(1, 5, commands.BucketType.channel)
+    async def connect4(self, ctx, opponent: discord.Member, bet: int = 0):
+        if opponent.bot or opponent.id == ctx.author.id:
+            await ctx.send("❌ Choose another human player.")
+            return
+        if bet < 0 or bet > self.MAX_BET:
+            await ctx.send(f"❌ Bet must be between 0 and {self.MAX_BET:,}.")
+            return
+        a = await self.db.get_user(ctx.guild.id, ctx.author.id)
+        b = await self.db.get_user(ctx.guild.id, opponent.id)
+        if bet and (int(a["balance"]) < bet or int(b["balance"]) < bet):
+            await ctx.send("❌ Both players need enough coins for the wager.")
+            return
+        if bet:
+            await self.db.add_balance(ctx.guild.id, ctx.author.id, -bet)
+            await self.db.add_balance(ctx.guild.id, opponent.id, -bet)
+        cog = self
+        board = [[None] * 7 for _ in range(6)]
+        players = [ctx.author, opponent]
+        turn = 0
+        marks = ["🔴", "🟡"]
+
+        class C4View(discord.ui.View):
+            def __init__(view):
+                super().__init__(timeout=300)
+                view.done = False
+                select = discord.ui.Select(
+                    placeholder="Choose a column",
+                    options=[discord.SelectOption(label=f"Column {i+1}", value=str(i)) for i in range(7)]
+                )
+                async def choose(interaction):
+                    nonlocal turn
+                    if interaction.user.id != players[turn].id:
+                        await interaction.response.send_message("❌ It is not your turn.", ephemeral=True)
+                        return
+                    if view.done:
+                        return
+                    col = int(select.values[0])
+                    row = next((r for r in range(5,-1,-1) if board[r][col] is None), None)
+                    if row is None:
+                        await interaction.response.send_message("❌ That column is full.", ephemeral=True)
+                        return
+                    board[row][col] = turn
+                    winner = None
+                    for rr in range(6):
+                        for cc in range(7):
+                            if board[rr][cc] is None:
+                                continue
+                            p = board[rr][cc]
+                            for dr, dc in ((1,0),(0,1),(1,1),(1,-1)):
+                                if all(0 <= rr+dr*n < 6 and 0 <= cc+dc*n < 7 and board[rr+dr*n][cc+dc*n] == p for n in range(4)):
+                                    winner = p
+                                    break
+                            if winner is not None:
+                                break
+                        if winner is not None:
+                            break
+                    full = all(v is not None for rowv in board for v in rowv)
+                    if winner is not None or full:
+                        view.done = True
+                        view.stop()
+                        if winner is None:
+                            if bet:
+                                for p in players:
+                                    await cog.db.add_balance(ctx.guild.id, p.id, bet)
+                            for p in players:
+                                await cog.db.record_game(ctx.guild.id, p.id, "connect4", "tie", bet, 0)
+                            text = "👔 **DRAW.** Bets returned." if bet else "👔 **DRAW.**"
+                            color = COLOR_GOLD
+                        else:
+                            winner_user, loser_user = players[winner], players[1-winner]
+                            if bet:
+                                await cog.db.add_balance(ctx.guild.id, winner_user.id, bet * 2)
+                            await cog.db.record_game(ctx.guild.id, winner_user.id, "connect4", "win", bet, bet)
+                            await cog.db.record_game(ctx.guild.id, loser_user.id, "connect4", "loss", bet, -bet)
+                            text = f"🏆 **{winner_user.display_name} wins!**" + (f"\nPrize: **{bet*2:,} coins**" if bet else "")
+                            color = discord.Color.green()
+                        for child in view.children:
+                            child.disabled = True
+                        board_text = "\n".join("".join(marks[v] if v is not None else "⚪" for v in rowv) for rowv in board)
+                        await interaction.response.edit_message(embed=cog._game_embed("🔴 CONNECT FOUR", f"{board_text}\n\n{text}", color), view=view)
+                        return
+                    turn = 1 - turn
+                    board_text = "\n".join("".join(marks[v] if v is not None else "⚪" for v in rowv) for rowv in board)
+                    await interaction.response.edit_message(embed=cog._game_embed("🔴 CONNECT FOUR", f"{board_text}\n\n**{players[turn].display_name}**'s turn."),view=view)
+                select.callback = choose
+                view.add_item(select)
+
+        await ctx.send(embed=self._game_embed(
+            "🔴 CONNECT FOUR",
+            "\n".join("".join("⚪" for _ in range(7)) for _ in range(6)) +
+            f"\n\n**{ctx.author.display_name}** starts." +
+            (f"\nWager: **{bet:,} each**" if bet else "")
+        ), view=C4View())
+
+    @commands.command(name="arcade")
+    async def arcade(self, ctx):
+        await ctx.send(embed=self._game_embed(
+            "୨୧ ECLIPSE · ARCADE ୨୧",
+            "🎰 **Casino** — roulette · mines · war · baccarat · higher/lower · oddeven\n"
+            "🧠 **Mind** — trivia · mastermind · scramble · hangman · 8ball\n"
+            "⚡ **Reflex** — reaction · target\n"
+            "🎮 **Classics** — rps · roll · guess · coinflip · slots · blackjack\n"
+            "⚔️ **PvP** — ttt · connect4 · dicebattle\n\n"
+            "📊 gamestats · 🏆 gameleaderboard [game]\n"
+            "All betting games cap individual wagers at 1,000,000 coins."
+        )
+    ))
+
+
+async def setup(bot):
+    await bot.add_cog(Games(bot))
