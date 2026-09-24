@@ -26,24 +26,48 @@ WORK_MAX = 150
 WORK_COOLDOWN = 3600
 
 SHOP_ITEMS = {
-    "cookie": {"name": "🍪 Cookie", "price": 100, "min_tier": 1, "description": "A cheap everyday collectible."},
-    "crown": {"name": "👑 Crown", "price": 1000, "min_tier": 1, "description": "A symbol of status."},
-    "diamond": {"name": "💎 Diamond", "price": 2500, "min_tier": 2, "description": "A premium economy collectible."},
-    "mystery_box": {"name": "🎁 Mystery Box", "price": 2500, "min_tier": 2, "description": "A sealed high-value collectible."},
-    "trophy": {"name": "🏆 Trophy", "price": 5000, "min_tier": 3, "description": "A veteran economy trophy."},
-    "emerald": {"name": "🟢 Emerald", "price": 10000, "min_tier": 4, "description": "Reserved for established earners."},
-    "sapphire": {"name": "🔷 Sapphire", "price": 20000, "min_tier": 5, "description": "A high-tier collector's gem."},
-    "royal_seal": {"name": "🔱 Royal Seal", "price": 35000, "min_tier": 6, "description": "Proof of serious economic progression."},
-    "void_relic": {"name": "🌑 Void Relic", "price": 60000, "min_tier": 7, "description": "An endgame economy collectible."},
-    "eclipse_core": {"name": "🌌 Eclipse Core", "price": 100000, "min_tier": 8, "description": "An elite-tier economy relic."},
-    "sovereign_crown": {"name": "👑 Sovereign Crown", "price": 175000, "min_tier": 9, "description": "A near-legendary status item."},
-    "eternal_treasure": {"name": "✨ Eternal Treasure", "price": 300000, "min_tier": 10, "description": "The final economy progression collectible."},
+    "cookie": {"name": "🍪 Cookie", "price": 100, "min_tier": 1, "description": "Use for an instant 150-coin treat."},
+    "crown": {"name": "👑 Crown", "price": 1000, "min_tier": 1, "description": "Use for an instant 1,250-coin royal payout."},
+    "diamond": {"name": "💎 Diamond", "price": 2500, "min_tier": 2, "description": "Use for an instant 3,500-coin gem payout."},
+    "mystery_box": {"name": "🎁 Mystery Box", "price": 2500, "min_tier": 2, "description": "Use for a random 1,000-12,000 coin reward."},
+    "trophy": {"name": "🏆 Trophy", "price": 5000, "min_tier": 3, "description": "Use for 2× your next work payout."},
+    "emerald": {"name": "🟢 Emerald", "price": 10000, "min_tier": 4, "description": "Use for 1.5× your next daily payout."},
+    "sapphire": {"name": "🔷 Sapphire", "price": 20000, "min_tier": 5, "description": "Use for 1.75× your next work payout."},
+    "royal_seal": {"name": "🔱 Royal Seal", "price": 35000, "min_tier": 6, "description": "Use for +15% earnings for 24 hours."},
+    "void_relic": {"name": "🌑 Void Relic", "price": 60000, "min_tier": 7, "description": "Use for +25% earnings for 24 hours."},
+    "eclipse_core": {"name": "🌌 Eclipse Core", "price": 100000, "min_tier": 8, "description": "Use for +50% earnings for 12 hours."},
+    "sovereign_crown": {"name": "👑 Sovereign Crown", "price": 175000, "min_tier": 9, "description": "Use for 2× your next daily and next work payout."},
+    "eternal_treasure": {"name": "✨ Eternal Treasure", "price": 300000, "min_tier": 10, "description": "Use for a massive 25,000-100,000 coin payout."},
 }
 
 ECONOMY_TIER_BONUS = 0.02
 
 def economy_multiplier(tier):
     return 1.0 + max(0, min(9, int(tier) - 1)) * ECONOMY_TIER_BONUS
+
+
+def effect_multiplier(effects, scope):
+    multiplier = 1.0
+    for effect in effects:
+        if effect["effect_id"] in (scope, "earning_boost"):
+            multiplier *= max(1.0, float(effect["multiplier"]))
+    return multiplier
+
+
+def effect_summary(effects):
+    if not effects:
+        return "None"
+    labels = []
+    for effect in effects:
+        multiplier = float(effect["multiplier"])
+        uses = int(effect["uses"])
+        expires_at = effect["expires_at"]
+        if uses > 0:
+            labels.append(f"{effect['effect_id']} ×{uses} ({multiplier:.2f}×)")
+        elif expires_at:
+            remaining = max(0, int(float(expires_at) - time.time()))
+            labels.append(f"{effect['effect_id']} {fmt_time(remaining)} ({multiplier:.2f}×)")
+    return ", ".join(labels) if labels else "None"
 
 
 def fmt_time(seconds):
@@ -83,7 +107,10 @@ class Economy(commands.Cog):
     async def daily(self, ctx):
         progression = await self.db.get_economy_progression(ctx.guild.id, ctx.author.id)
         tier = int(progression["tier"])
-        multiplier = economy_multiplier(tier)
+        tier_multiplier = economy_multiplier(tier)
+        effects = await self.db.get_economy_effects(ctx.guild.id, ctx.author.id)
+        boost = effect_multiplier(effects, "daily_boost")
+        multiplier = tier_multiplier * boost
         result = await self.db.claim_daily(
             ctx.guild.id, ctx.author.id, time.time(),
             round(DAILY_AMOUNT * multiplier),
@@ -96,6 +123,9 @@ class Economy(commands.Cog):
             return
         reward, streak, new_balance = result["reward"], result["streak"], result["balance"]
         await self.db.record_economy_activity(ctx.guild.id, ctx.author.id, earned=reward)
+        for effect in effects:
+            if effect["effect_id"] in ("daily_boost", "earning_boost") and int(effect["uses"]) > 0:
+                await self.db.consume_economy_effect(ctx.guild.id, ctx.author.id, effect["effect_id"])
 
         embed = discord.Embed(
             title="🎁 Daily Reward",
@@ -103,7 +133,7 @@ class Economy(commands.Cog):
                 f"You claimed **{reward:,} coins**!\n"
                 f"🔥 Streak: **{streak} day{'s' if streak != 1 else ''}**\n"
                 f"💰 Balance: **{new_balance:,}**\n"
-                f"💎 Economy Tier: **{tier}** ({multiplier:.0%} earning rate)"
+                f"💎 Economy Tier: **{tier}** ({tier_multiplier:.0%} base rate)\n"\n                f"⚡ Active item boost: **{boost:.2f}×**"
             ),
             color=COLOR_GOLD
         )
@@ -118,7 +148,10 @@ class Economy(commands.Cog):
     async def work(self, ctx):
         progression = await self.db.get_economy_progression(ctx.guild.id, ctx.author.id)
         tier = int(progression["tier"])
-        multiplier = economy_multiplier(tier)
+        tier_multiplier = economy_multiplier(tier)
+        effects = await self.db.get_economy_effects(ctx.guild.id, ctx.author.id)
+        boost = effect_multiplier(effects, "work_boost")
+        multiplier = tier_multiplier * boost
         result = await self.db.claim_work(
             ctx.guild.id, ctx.author.id, time.time(),
             round(WORK_MIN * multiplier),
@@ -130,6 +163,9 @@ class Economy(commands.Cog):
             return
         earned, new_balance = result["earned"], result["balance"]
         await self.db.record_economy_activity(ctx.guild.id, ctx.author.id, earned=earned)
+        for effect in effects:
+            if effect["effect_id"] in ("work_boost", "earning_boost") and int(effect["uses"]) > 0:
+                await self.db.consume_economy_effect(ctx.guild.id, ctx.author.id, effect["effect_id"])
 
         embed = discord.Embed(
             title="🛠️ Work Complete",
@@ -299,6 +335,85 @@ class Economy(commands.Cog):
         await ctx.send(embed=footer(embed, ctx))
 
     # ------------------------------------------------------------
+    @commands.command(name="use", aliases=["consume", "useitem"])
+    @commands.cooldown(1, 2, commands.BucketType.user)
+    async def use_item(self, ctx, item_id: str):
+        item_id = item_id.lower()
+        item = SHOP_ITEMS.get(item_id)
+        if item is None:
+            await ctx.send("❌ That item doesn't exist. Use !shop.")
+            return
+
+        progression = await self.db.get_economy_progression(ctx.guild.id, ctx.author.id)
+        tier = int(progression["tier"])
+        minimum_tier = int(item.get("min_tier", 1))
+        if tier < minimum_tier:
+            await ctx.send(f"🔒 **{item['name']}** requires **Economy Tier {minimum_tier}**. You are currently Tier **{tier}**.")
+            return
+
+        remaining = await self.db.consume_item(ctx.guild.id, ctx.author.id, item_id, 1)
+        if remaining is None:
+            await ctx.send(f"❌ You don't have a **{item['name']}**. Check !inventory.")
+            return
+
+        now = time.time()
+        reward = 0
+        if item_id == "cookie":
+            reward, message = 150, "🍪 Sweet. You received **150 coins**."
+        elif item_id == "crown":
+            reward, message = 1250, "👑 Royal payout: **+1,250 coins**."
+        elif item_id == "diamond":
+            reward, message = 3500, "💎 The diamond converts into **+3,500 coins**."
+        elif item_id == "mystery_box":
+            reward = random.randint(1000, 12000)
+            if random.random() < 0.08:
+                reward = random.randint(15000, 30000)
+                message = f"🎁 **JACKPOT!** The mystery box contained **{reward:,} coins**."
+            else:
+                message = f"🎁 The mystery box contained **{reward:,} coins**."
+        elif item_id == "trophy":
+            await self.db.add_economy_effect(ctx.guild.id, ctx.author.id, "work_boost", multiplier=2.0, uses=1)
+            message = "🏆 Your next !work payout is now **2×**."
+        elif item_id == "emerald":
+            await self.db.add_economy_effect(ctx.guild.id, ctx.author.id, "daily_boost", multiplier=1.5, uses=1)
+            message = "🟢 Your next !daily payout is now **1.5×**."
+        elif item_id == "sapphire":
+            await self.db.add_economy_effect(ctx.guild.id, ctx.author.id, "work_boost", multiplier=1.75, uses=1)
+            message = "🔷 Your next !work payout is now **1.75×**."
+        elif item_id == "royal_seal":
+            await self.db.add_economy_effect(ctx.guild.id, ctx.author.id, "earning_boost", multiplier=1.15, expires_at=now + 24 * 3600)
+            message = "🔱 **Royal Seal activated:** +15% to daily/work earnings for **24 hours**."
+        elif item_id == "void_relic":
+            await self.db.add_economy_effect(ctx.guild.id, ctx.author.id, "earning_boost", multiplier=1.25, expires_at=now + 24 * 3600)
+            message = "🌑 **Void Relic activated:** +25% to daily/work earnings for **24 hours**."
+        elif item_id == "eclipse_core":
+            await self.db.add_economy_effect(ctx.guild.id, ctx.author.id, "earning_boost", multiplier=1.50, expires_at=now + 12 * 3600)
+            message = "🌌 **Eclipse Core activated:** +50% to daily/work earnings for **12 hours**."
+        elif item_id == "sovereign_crown":
+            await self.db.add_economy_effect(ctx.guild.id, ctx.author.id, "daily_boost", multiplier=2.0, uses=1)
+            await self.db.add_economy_effect(ctx.guild.id, ctx.author.id, "work_boost", multiplier=2.0, uses=1)
+            message = "👑 **Sovereign Crown activated:** your next !daily and next !work are both **2×**."
+        else:
+            reward = random.randint(25000, 100000)
+            message = f"✨ Eternal Treasure opened for **+{reward:,} coins**."
+
+        if reward:
+            balance = await self.db.add_balance(ctx.guild.id, ctx.author.id, reward)
+            await self.db.record_economy_activity(ctx.guild.id, ctx.author.id, earned=reward)
+        else:
+            balance = int((await self.db.get_user(ctx.guild.id, ctx.author.id))["balance"])
+
+        embed = discord.Embed(title="✨ Item Used", description=f"{message}\n💰 Balance: **{balance:,}**\n🎒 Remaining: **{remaining}**", color=COLOR_GOLD)
+        await ctx.send(embed=footer(embed, ctx))
+
+    @commands.command(name="effects", aliases=["boosts"])
+    async def effects(self, ctx, member: discord.Member = None):
+        member = member or ctx.author
+        effects = await self.db.get_economy_effects(ctx.guild.id, member.id)
+        embed = discord.Embed(title=f"⚡ {member.display_name}'s Economy Effects", description=effect_summary(effects), color=COLOR_PRIMARY)
+        await ctx.send(embed=footer(embed, ctx))
+
+    # ------------------------------------------------------------
     @commands.command(name="economyprogress", aliases=["econprogress", "wealth"])
     async def economyprogress(self, ctx, member: discord.Member = None):
         member = member or ctx.author
@@ -309,7 +424,7 @@ class Economy(commands.Cog):
         earned = int(state["lifetime_earned"])
         spent = int(state["lifetime_spent"])
         activity_score = earned // 10000 + spent // 25000
-        next_earned = max(0, (tier * 10000) - (earned % 10000))
+        next_activity = max(0, tier - activity_score)
 
         embed = discord.Embed(
             title=f"💎 {member.display_name}'s Economy Progression",
@@ -330,8 +445,7 @@ class Economy(commands.Cog):
             value=(
                 "**Max tier reached**"
                 if tier >= 10
-                else f"**{next_earned:,} earned** toward the next tier"
-                     f"\nSpending also contributes to progression."
+                else f"**{next_activity} activity point(s)** to the next tier"\n                     f"Every 10,000 earned or 25,000 spent grants 1 activity point."
             ),
             inline=False
         )
