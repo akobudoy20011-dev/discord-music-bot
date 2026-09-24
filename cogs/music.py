@@ -183,16 +183,16 @@ async def resolve_query(loop, query):
     """Resolve a YouTube URL/search query with maintained-client fallbacks."""
     is_url = query.startswith("http")
     q = query if is_url else f"ytsearch5:{query}"
-    # YouTube's player clients change frequently. Keep the normal/default
-    # extractor first, then try clients that currently work without a
-    # PO-token provider.  Do not force web/mweb only: those clients are
-    # currently affected by SABR/PO-token rollouts on some videos.
-    # Keep the default extractor first, then use clients that are currently
-    # useful when YouTube exposes a different set of formats. In particular,
-    # web_embedded is a documented fallback for videos where the default
-    # client has no downloadable audio formats. tv/tv_downgraded is avoided
-    # here because it has recently produced UNPLAYABLE/no-format responses.
-    clients = [None, "web_embedded", "android_vr"]
+    # Let the maintained yt-dlp fork use its normal/default YouTube
+    # client policy first. If a video still needs a different client,
+    # web_embedded is a useful no-auth fallback. web_safari is only tried
+    # when the bot has cookies, since the current YouTube extractor may
+    # require an authenticated/trusted session for HLS on that client.
+    # Do not force android_vr: the fork's current extractor marks that
+    # client as unreliable for YouTube formats.
+    clients = [None, "web_embedded"]
+    if YTDLP_COOKIES_FILE:
+        clients.append("web_safari")
     last_error = None
 
     for client in clients:
@@ -239,9 +239,12 @@ async def fetch_song_mp3(query):
     q = query if query.startswith("http") else f"ytsearch5:{query}"
     os.makedirs("downloads", exist_ok=True)
     loop = asyncio.get_event_loop()
-    # Mirror the playback fallback order for downloads.  YouTube can fail
-    # one player client while another still exposes a usable audio stream.
-    clients = [None, "web_embedded", "android_vr"]
+    # Mirror the playback fallback order for downloads.  Keep the
+    # maintained fork's default extractor first and only use web_safari
+    # when authentication cookies are actually configured.
+    clients = [None, "web_embedded"]
+    if YTDLP_COOKIES_FILE:
+        clients.append("web_safari")
     last_error = None
 
     for client in clients:
