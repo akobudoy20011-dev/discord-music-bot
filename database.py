@@ -2595,7 +2595,6 @@ class Database:
         if not g or int(g["level"])<int(min_level): return False,"level"
         cur=await self._conn.execute("SELECT 1 FROM guild_legendary_equipment WHERE guild_id=? AND equipment_id=?",(str(guild_id),str(equipment_id)))
         if await cur.fetchone(): return False,"owned"
-        if not await self.spend_guild_treasury(guild_id,cost): return False,"treasury"
         await self._conn.execute("BEGIN IMMEDIATE")
         try:
             cur=await self._conn.execute("SELECT 1 FROM guild_legendary_equipment WHERE guild_id=? AND equipment_id=?",(str(guild_id),str(equipment_id)))
