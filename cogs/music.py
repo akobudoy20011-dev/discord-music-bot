@@ -449,7 +449,7 @@ class Music(commands.Cog):
         state.autoplay = config["autoplay"]
         state.twentyfour_seven = config["twentyfour_seven"]
         state.auto_disconnect = config["auto_disconnect"]
-        state.queue_limit = config["queue_limit"]
+        state.queue_limit = min(config["queue_limit"], 500 if await self.bot.db.get_music_premium(guild_id) else 50)
         state.search_behavior = config["search_behavior"]
         state.dj_role_id = config["dj_role_id"]
         state.voice_channel_id = config["voice_channel_id"]
@@ -1204,6 +1204,9 @@ class Music(commands.Cog):
         if mode not in {"on", "off", "true", "false"}:
             await ctx.send("♾️ Use on or off.")
             return
+        if mode in {"on", "true"} and not await self.bot.db.get_music_premium(ctx.guild.id):
+            await ctx.send("💎 24/7 music requires Premium.")
+            return
         state.twentyfour_seven = mode in {"on", "true"}
         if state.twentyfour_seven:
             state.auto_disconnect = False
@@ -1268,8 +1271,9 @@ class Music(commands.Cog):
             try: limit = int(value)
             except ValueError:
                 await ctx.send("Queue limit must be 1-250."); return
-            if not 1 <= limit <= 250:
-                await ctx.send("Queue limit must be 1-250."); return
+            max_limit = 500 if await self.bot.db.get_music_premium(ctx.guild.id) else 50
+            if not 1 <= limit <= max_limit:
+                await ctx.send(f"Queue limit must be 1-{max_limit}."); return
             state.queue_limit = limit
         elif key in {"search", "search_behavior"}:
             if value.lower() not in {"youtube", "yt"}:
