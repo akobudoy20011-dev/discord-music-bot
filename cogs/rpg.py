@@ -58,7 +58,7 @@ class RPGHelpView(discord.ui.View):
             view=self,
         )
 
-    @discord.ui.button(label="Home", emoji="⌂", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="Home", emoji="🏠", style=discord.ButtonStyle.primary)
     async def home(self, interaction, button):
         if not await self._guard(interaction):
             return
