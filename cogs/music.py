@@ -1262,7 +1262,10 @@ class Music(commands.Cog):
         elif key in {"autoplay", "auto_play"}:
             state.autoplay = value.lower() in {"on", "true", "1", "yes"}
         elif key in {"247", "24_7", "twentyfour_seven"}:
-            state.twentyfour_seven = value.lower() in {"on", "true", "1", "yes"}
+            enabled = value.lower() in {"on", "true", "1", "yes"}
+            if enabled and not await self.bot.db.get_music_premium(ctx.guild.id):
+                await ctx.send("💎 24/7 music requires Premium."); return
+            state.twentyfour_seven = enabled
             if state.twentyfour_seven:
                 state.auto_disconnect = False
         elif key in {"auto_disconnect", "autodisconnect"}:
