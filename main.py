@@ -9,6 +9,7 @@ import asyncio
 import logging
 import os
 import traceback
+import time
 
 import discord
 from discord.ext import commands
@@ -47,6 +48,8 @@ intents.message_content = True
 intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
+BOT_STARTED_AT = time.monotonic()
+WEB_SERVER_TASK = None
 
 COGS = [
     "cogs.leveling",
@@ -78,7 +81,8 @@ async def setup_hook():
             logger.error(f"❌ Failed to load {cog}: {e}")
             logger.error(traceback.format_exc())
 
-    asyncio.create_task(start_web_server())
+    global WEB_SERVER_TASK
+    WEB_SERVER_TASK = asyncio.create_task(start_web_server(), name="eclipse-web-server")
 
 
 @bot.event
@@ -160,4 +164,65 @@ async def on_command_error(ctx, error):
         await ctx.send("❌ That command only works in a server.")
         return
 
-    logger.error(f"Unhandled command error in !{ctx.command}: {error}")
+    logger.error(f"Unhandled command error in !{ctx.command}: {error}", exc_info=error)
+
+
+@bot.command(name="status", aliases=["health", "diagnostics"])
+@commands.guild_only()
+async def status(ctx):
+    """Show a compact live health snapshot for the bot."""
+    uptime = int(time.monotonic() - BOT_STARTED_AT)
+    days, remainder = divmod(uptime, 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, seconds = divmod(remainder, 60)
+
+    db_detail = "not connected"
+    try:
+        await bot.db._conn.execute("SELECT 1")
+        db_detail = "ok"
+    except Exception as error:
+        db_detail = type(error).__name__
+
+    music_players = 0
+    music_cog = bot.get_cog("Music")
+    if music_cog is not None:
+        music_players = sum(
+            1 for guild in bot.guilds
+            if guild.voice_client and (
+                guild.voice_client.is_playing() or guild.voice_client.is_paused()
+            )
+        )
+
+    embed = discord.Embed(title="ECLIPSE STATUS", color=discord.Color.blurple())
+    embed.add_field(name="Discord", value=f"Latency: {bot.latency * 1000:.0f} ms", inline=True)
+    embed.add_field(name="Servers", value=f"{len(bot.guilds)}", inline=True)
+    embed.add_field(name="Music", value=f"{music_players} active", inline=True)
+    embed.add_field(name="Database", value=f"{db_detail}", inline=True)
+    embed.add_field(
+        name="Uptime",
+        value=f"{days}d {hours:02}h {minutes:02}m {seconds:02}s",
+        inline=True,
+    )
+    embed.add_field(name="Loaded cogs", value=f"{len(bot.cogs)}/{len(COGS)}", inline=True)
+    embed.set_footer(text="ECLIPSE diagnostics")
+
+    if db_detail != "ok":
+        embed.description = "⚠️ Database health check failed."
+
+    await ctx.send(embed=embed)
+
+
+@bot.event
+async def on_disconnect():
+    logger.warning("Discord gateway disconnected; discord.py will attempt to reconnect.")
+
+
+@bot.event
+async def on_resumed():
+    logger.info("Discord gateway session resumed.")
+
+
+@bot.event
+async def on_error(event, *args, **kwargs):
+    logger.exception("Unhandled Discord event error: %s", event)
+
