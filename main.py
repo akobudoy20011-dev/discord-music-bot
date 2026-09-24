@@ -1,6 +1,7 @@
 """
 main.py
 =======
+
 Entrypoint: sets up the bot, connects the database, loads every cog,
 and starts the Render health-check server alongside the Discord client.
 """
@@ -80,7 +81,7 @@ async def setup_hook():
     # depend on Discord cog loading completing successfully.
     try:
         WEB_SERVER_TASK = asyncio.create_task(
-            start_web_server(),
+            start_web_server(bot, BOT_STARTED_AT),
             name="eclipse-web-server",
         )
         await asyncio.sleep(0)
