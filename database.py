@@ -203,7 +203,8 @@ CREATE TABLE IF NOT EXISTS eclipse_world_contributors (
 CREATE TABLE IF NOT EXISTS warnings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     guild_id TEXT NOT NULL,
-    user_id TEXT NOT NULL,    moderator_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    moderator_id TEXT NOT NULL,
     reason TEXT NOT NULL,
     created_at REAL NOT NULL
 );
@@ -211,7 +212,8 @@ CREATE TABLE IF NOT EXISTS warnings (
 
 DEFAULT_USER = {
     "balance": STARTING_BALANCE,
-    "last_daily": None,    "last_work": None,
+    "last_daily": None,
+    "last_work": None,
     "daily_streak": 0,
     "messages": 0,
     "wins": 0,
@@ -244,12 +246,11 @@ class Database:
 
         user_cur = await self._conn.execute("PRAGMA table_info(users)")
         user_columns = {row["name"] for row in await user_cur.fetchall()}
-        user_columns_to_add = {
+        for name, definition in {
             "bank_balance": "INTEGER NOT NULL DEFAULT 0",
             "last_bank_interest": "REAL",
             "equipped_title": "TEXT",
-        }
-        for name, definition in user_columns_to_add.items():
+        }.items():
             if name not in user_columns:
                 await self._conn.execute(
                     f"ALTER TABLE users ADD COLUMN {name} {definition}"
@@ -257,7 +258,7 @@ class Database:
 
         guild_cur = await self._conn.execute("PRAGMA table_info(guild_config)")
         guild_columns = {row["name"] for row in await guild_cur.fetchall()}
-        music_columns = {
+        for name, definition in {
             "music_volume": "REAL NOT NULL DEFAULT 0.5",
             "music_loop_mode": "TEXT NOT NULL DEFAULT 'off'",
             "music_autoplay": "INTEGER NOT NULL DEFAULT 0",
@@ -267,8 +268,7 @@ class Database:
             "music_search_behavior": "TEXT NOT NULL DEFAULT 'youtube'",
             "music_dj_role_id": "TEXT",
             "music_voice_channel_id": "TEXT",
-        }
-        for name, definition in music_columns.items():
+        }.items():
             if name not in guild_columns:
                 await self._conn.execute(
                     f"ALTER TABLE guild_config ADD COLUMN {name} {definition}"
@@ -368,6 +368,7 @@ class Database:
             return False
 
         user["achievements"].append(name)
+
         await self.update_user(
             guild_id, user_id, achievements=user["achievements"]
         )
@@ -394,6 +395,7 @@ class Database:
         rows = await cur.fetchall()
 
         return [dict(r) for r in rows]
+
     async def rank_position(self, guild_id, user_id, order_by="level"):
         rows = await self.leaderboard(guild_id, order_by=order_by, limit=10_000)
 
@@ -404,7 +406,7 @@ class Database:
         return len(rows) + 1
 
     # ------------------------------------------------------------
-    # ECLIPSE PROFILE / BANK / WORLD
+    # ECLIPSE PROFILE / BANK / MUSIC / WORLD
     # ------------------------------------------------------------
 
     async def set_equipped_title(self, guild_id, user_id, title):
@@ -450,23 +452,51 @@ class Database:
         last = user["last_bank_interest"]
         if last is None:
             last = now
-        elapsed_periods = int(max(0, now - float(last)) // period)
-        if elapsed_periods <= 0:
+        periods = int(max(0, now - float(last)) // period)
+        if periods <= 0:
             return 0, user
         balance = int(user["bank_balance"])
         if balance <= 0:
             await self.update_user(guild_id, user_id, last_bank_interest=now)
             return 0, await self.get_user(guild_id, user_id)
-        interest = int(balance * rate * elapsed_periods)
-        if interest <= 0:
-            await self.update_user(guild_id, user_id, last_bank_interest=now)
-            return 0, await self.get_user(guild_id, user_id)
+        interest = int(balance * rate * periods)
         await self._conn.execute(
             "UPDATE users SET bank_balance=bank_balance+?, last_bank_interest=? WHERE guild_id=? AND user_id=?",
             (interest, now, str(guild_id), str(user_id))
         )
         await self._conn.commit()
         return interest, await self.get_user(guild_id, user_id)
+
+    async def get_music_config(self, guild_id):
+        config = await self.get_guild_config(guild_id)
+        return {
+            "volume": float(config.get("music_volume", 0.5)),
+            "loop_mode": str(config.get("music_loop_mode", "off") or "off"),
+            "autoplay": bool(config.get("music_autoplay", 0)),
+            "twentyfour_seven": bool(config.get("music_24_7", 0)),
+            "auto_disconnect": bool(config.get("music_auto_disconnect", 1)),
+            "queue_limit": max(1, min(250, int(config.get("music_queue_limit", 50)))),
+            "search_behavior": str(config.get("music_search_behavior", "youtube") or "youtube"),
+            "dj_role_id": str(config["music_dj_role_id"]) if config.get("music_dj_role_id") else None,
+            "voice_channel_id": str(config["music_voice_channel_id"]) if config.get("music_voice_channel_id") else None,
+        }
+
+    async def set_music_config(self, guild_id, **fields):
+        mapping = {
+            "volume": "music_volume",
+            "loop_mode": "music_loop_mode",
+            "autoplay": "music_autoplay",
+            "twentyfour_seven": "music_24_7",
+            "auto_disconnect": "music_auto_disconnect",
+            "queue_limit": "music_queue_limit",
+            "search_behavior": "music_search_behavior",
+            "dj_role_id": "music_dj_role_id",
+            "voice_channel_id": "music_voice_channel_id",
+        }
+        clean = {mapping[k]: v for k, v in fields.items() if k in mapping}
+        if clean:
+            await self.set_guild_config(guild_id, **clean)
+        return await self.get_music_config(guild_id)
 
     async def get_world_event(self, guild_id):
         cur = await self._conn.execute(
@@ -621,40 +651,6 @@ class Database:
         )
         await self._conn.commit()
 
-    async def get_music_config(self, guild_id):
-        config = await self.get_guild_config(guild_id)
-        return {
-            "volume": float(config.get("music_volume", 0.5)),
-            "loop_mode": str(config.get("music_loop_mode", "off") or "off"),
-            "autoplay": bool(config.get("music_autoplay", 0)),
-            "twentyfour_seven": bool(config.get("music_24_7", 0)),
-            "auto_disconnect": bool(config.get("music_auto_disconnect", 1)),
-            "queue_limit": max(1, min(250, int(config.get("music_queue_limit", 50)))),
-            "search_behavior": str(config.get("music_search_behavior", "youtube") or "youtube"),
-            "dj_role_id": str(config["music_dj_role_id"]) if config.get("music_dj_role_id") else None,
-            "voice_channel_id": str(config["music_voice_channel_id"]) if config.get("music_voice_channel_id") else None,
-        }
-
-    async def set_music_config(self, guild_id, **fields):
-        mapping = {
-            "volume": "music_volume",
-            "loop_mode": "music_loop_mode",
-            "autoplay": "music_autoplay",
-            "twentyfour_seven": "music_24_7",
-            "auto_disconnect": "music_auto_disconnect",
-            "queue_limit": "music_queue_limit",
-            "search_behavior": "music_search_behavior",
-            "dj_role_id": "music_dj_role_id",
-            "voice_channel_id": "music_voice_channel_id",
-        }
-        clean = {}
-        for key, value in fields.items():
-            if key in mapping:
-                clean[mapping[key]] = value
-        if clean:
-            await self.set_guild_config(guild_id, **clean)
-        return await self.get_music_config(guild_id)
-
     # ------------------------------------------------------------
     # WARNINGS
     # ------------------------------------------------------------
@@ -672,7 +668,8 @@ class Database:
         cur = await self._conn.execute(
             "SELECT * FROM warnings WHERE guild_id = ? AND user_id = ? "
             "ORDER BY created_at DESC",
-            (str(guild_id), str(user_id))        )
+            (str(guild_id), str(user_id))
+        )
         rows = await cur.fetchall()
 
         return [dict(r) for r in rows]
@@ -740,7 +737,8 @@ class Database:
         if int(player["gold"]) < amount:
             return False, int(player["gold"])
         player = await self.update_rpg_player(
-            guild_id, user_id, gold=int(player["gold"]) - amount        )
+            guild_id, user_id, gold=int(player["gold"]) - amount
+        )
         return True, int(player["gold"])
 
     async def add_rpg_xp(self, guild_id, user_id, amount):
@@ -930,5 +928,114 @@ class Database:
             "ON CONFLICT(guild_id, user_id, item_id) "
             "DO UPDATE SET amount = amount + excluded.amount",
             (str(guild_id), str(user_id), str(item_id), int(amount))
+        )
+        await self._conn.commit()
+
+    async def set_rpg_item_equipped(self, guild_id, user_id, item_id, equipped=True):
+        await self._conn.execute(
+            "UPDATE rpg_items SET equipped = ? "
+            "WHERE guild_id = ? AND user_id = ? AND item_id = ?",
+            (1 if equipped else 0, str(guild_id), str(user_id), str(item_id))
+        )
+        await self._conn.commit()
+
+    async def get_rpg_skills(self, guild_id, user_id):
+        cur = await self._conn.execute(
+            "SELECT skill_id FROM rpg_skills "
+            "WHERE guild_id = ? AND user_id = ? AND unlocked = 1 "
+            "ORDER BY skill_id",
+            (str(guild_id), str(user_id))
+        )
+        return [r["skill_id"] for r in await cur.fetchall()]
+
+    async def unlock_rpg_skill(self, guild_id, user_id, skill_id):
+        await self._conn.execute(
+            "INSERT INTO rpg_skills "
+            "(guild_id, user_id, skill_id, unlocked) VALUES (?, ?, ?, 1) "
+            "ON CONFLICT(guild_id, user_id, skill_id) "
+            "DO UPDATE SET unlocked = 1",
+            (str(guild_id), str(user_id), str(skill_id))
+        )
+        await self._conn.commit()
+
+    async def remove_rpg_item(self, guild_id, user_id, item_id, amount=1):
+        amount = int(amount)
+        if amount <= 0:
+            return True
+        cur = await self._conn.execute(
+            "SELECT amount FROM rpg_items WHERE guild_id=? AND user_id=? AND item_id=?",
+            (str(guild_id), str(user_id), str(item_id))
+        )
+        row = await cur.fetchone()
+        if not row or int(row["amount"]) < amount:
+            return False
+        remaining = int(row["amount"]) - amount
+        await self._conn.execute(
+            "UPDATE rpg_items SET amount=?, equipped=CASE WHEN ?=0 THEN 0 ELSE equipped END "
+            "WHERE guild_id=? AND user_id=? AND item_id=?",
+            (remaining, remaining, str(guild_id), str(user_id), str(item_id))
+        )
+        if remaining <= 0:
+            await self._conn.execute(
+                "DELETE FROM rpg_items WHERE guild_id=? AND user_id=? AND item_id=?",
+                (str(guild_id), str(user_id), str(item_id))
+            )
+        await self._conn.commit()
+        return True
+
+    async def get_rpg_materials(self, guild_id, user_id):
+        cur = await self._conn.execute(
+            "SELECT material_id, amount FROM rpg_materials "
+            "WHERE guild_id=? AND user_id=? AND amount > 0 ORDER BY material_id",
+            (str(guild_id), str(user_id))
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def add_rpg_material(self, guild_id, user_id, material_id, amount=1):
+        amount = int(amount)
+        if amount <= 0:
+            return
+        await self._conn.execute(
+            "INSERT INTO rpg_materials (guild_id,user_id,material_id,amount) VALUES (?,?,?,?) "
+            "ON CONFLICT(guild_id,user_id,material_id) "
+            "DO UPDATE SET amount=amount+excluded.amount",
+            (str(guild_id), str(user_id), str(material_id), amount)
+        )
+        await self._conn.commit()
+
+    async def remove_rpg_material(self, guild_id, user_id, material_id, amount=1):
+        amount = int(amount)
+        if amount <= 0:
+            return True
+        cur = await self._conn.execute(
+            "SELECT amount FROM rpg_materials WHERE guild_id=? AND user_id=? AND material_id=?",
+            (str(guild_id), str(user_id), str(material_id))
+        )
+        row = await cur.fetchone()
+        if not row or int(row["amount"]) < amount:
+            return False
+        remaining = int(row["amount"]) - amount
+        if remaining:
+            await self._conn.execute(
+                "UPDATE rpg_materials SET amount=? WHERE guild_id=? AND user_id=? AND material_id=?",
+                (remaining, str(guild_id), str(user_id), str(material_id))
+            )
+        else:
+            await self._conn.execute(
+                "DELETE FROM rpg_materials WHERE guild_id=? AND user_id=? AND material_id=?",
+                (str(guild_id), str(user_id), str(material_id))
+            )
+        await self._conn.commit()
+        return True
+
+    async def has_rpg_materials(self, guild_id, user_id, costs):
+        rows = await self.get_rpg_materials(guild_id, user_id)
+        have = {r["material_id"]: int(r["amount"]) for r in rows}
+        return all(have.get(mid, 0) >= int(amount) for mid, amount in costs.items())
+
+    async def clear_warnings(self, guild_id, user_id):
+        await self._conn.execute(
+            "DELETE FROM warnings WHERE guild_id = ? AND user_id = ?",
+            (str(guild_id), str(user_id))
         )
         await self._conn.commit()
