@@ -66,6 +66,7 @@ COGS = [
     "cogs.eclipse",
     "cogs.science_game",
     "cogs.rpg",
+    "cogs.guilds",
 ]
 
 
@@ -75,6 +76,17 @@ async def setup_hook():
     bind_database(Database)
     await bot.db.connect()
 
+    critical_cogs = {
+        "cogs.leveling",
+        "cogs.economy",
+        "cogs.games",
+        "cogs.music",
+        "cogs.admin",
+        "cogs.help",
+        "cogs.rpg",
+        "cogs.guilds",
+    }
+
     for cog in COGS:
         try:
             await bot.load_extension(cog)
@@ -82,6 +94,8 @@ async def setup_hook():
         except Exception as e:
             logger.error(f"❌ Failed to load {cog}: {e}")
             logger.error(traceback.format_exc())
+            if cog in critical_cogs:
+                raise RuntimeError(f"Critical cog failed to load: {cog}") from e
 
     global WEB_SERVER_TASK
     WEB_SERVER_TASK = asyncio.create_task(start_web_server(), name="eclipse-web-server")
