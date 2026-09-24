@@ -3068,7 +3068,7 @@ class Database:
         now = time.time()
         await self._conn.execute("DELETE FROM world_boss_contributors WHERE guild_id=?", (str(guild_id),))
         await self._conn.execute(
-            "INSERT OR REPLACE INTO world_bosses(guild_id,boss_id,name,max_hp,hp,attack,reward_coins,reward_xp,ends_at,status,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?,'active',?,?,?)",
+            "INSERT OR REPLACE INTO world_bosses(guild_id,boss_id,name,max_hp,hp,attack,reward_coins,reward_xp,ends_at,status,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?,'active',?,?)",
             (str(guild_id),str(boss_id),str(name),int(max_hp),int(max_hp),int(attack),int(reward_coins),int(reward_xp),now+int(duration),str(created_by) if created_by else None,now)
         )
         await self._conn.commit()
