@@ -15,7 +15,7 @@ class WorldBoss(commands.Cog):
     def __init__(self,bot): self.bot=bot; self.db=bot.db
     def _embed(self,b):
         m=BOSSES.get(b["boss_id"],{})
-        return discord.Embed(title=f"{m.get("icon","🌌")} {b["name"]}",description=f"HP **{int(b["hp"]):,}/{int(b["max_hp"]):,}**\nTime: <t:{int(b["ends_at"])}:R>\nReward pool: **{int(b["reward_coins"]):,} coins + {int(b["reward_xp"]):,} XP**\n\nAttack with !worldboss attack · Claim with !worldboss claim",color=discord.Color.dark_purple())
+        return discord.Embed(title=f"{m['icon']} {b['name']}",description=f"HP **{int(b['hp']):,}/{int(b['max_hp']):,}**\nTime: <t:{int(b['ends_at'])}:R>\nReward pool: **{int(b['reward_coins']):,} coins + {int(b['reward_xp']):,} XP**\n\nAttack with !worldboss attack · Claim with !worldboss claim",color=discord.Color.dark_purple())
 
     @commands.group(name="worldboss",aliases=["wb"],invoke_without_command=True)
     async def worldboss(self,ctx):
