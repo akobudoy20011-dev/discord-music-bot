@@ -69,34 +69,12 @@ class Economy(commands.Cog):
     @commands.command(name="daily")
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def daily(self, ctx):
-        user = await self.db.get_user(ctx.guild.id, ctx.author.id)
-        now = time.time()
-        last = user["last_daily"]
-
-        if last is not None and now - last < DAILY_COOLDOWN:
-            remaining = DAILY_COOLDOWN - (now - last)
-
-            embed = discord.Embed(
-                title="⏳ Already Claimed",
-                description=f"Come back in **{fmt_time(remaining)}**.",
-                color=COLOR_PRIMARY
-            )
+        result = await self.db.claim_daily(ctx.guild.id, ctx.author.id, time.time(), DAILY_AMOUNT, DAILY_STREAK_BONUS, DAILY_STREAK_CAP, DAILY_COOLDOWN, DAILY_GRACE)
+        if not result["ok"]:
+            embed = discord.Embed(title="⏳ Already Claimed", description=f"Come back in **{fmt_time(result['remaining'])}**.", color=COLOR_PRIMARY)
             await ctx.send(embed=embed)
             return
-
-        if last is not None and now - last <= DAILY_GRACE:
-            streak = min(user["daily_streak"] + 1, 9999)
-        else:
-            streak = 1
-
-        bonus = min(streak, DAILY_STREAK_CAP) * DAILY_STREAK_BONUS
-        reward = DAILY_AMOUNT + bonus
-
-        new_balance = await self.db.add_balance(ctx.guild.id, ctx.author.id, reward)
-        await self.db.update_user(
-            ctx.guild.id, ctx.author.id,
-            last_daily=now, daily_streak=streak
-        )
+        reward, streak, new_balance = result["reward"], result["streak"], result["balance"]
 
         embed = discord.Embed(
             title="🎁 Daily Reward",
@@ -116,24 +94,12 @@ class Economy(commands.Cog):
     @commands.command(name="work")
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def work(self, ctx):
-        user = await self.db.get_user(ctx.guild.id, ctx.author.id)
-        now = time.time()
-        last = user["last_work"]
-
-        if last is not None and now - last < WORK_COOLDOWN:
-            remaining = WORK_COOLDOWN - (now - last)
-
-            embed = discord.Embed(
-                title="😴 You're Tired",
-                description=f"Try again in **{fmt_time(remaining)}**.",
-                color=COLOR_PRIMARY
-            )
+        result = await self.db.claim_work(ctx.guild.id, ctx.author.id, time.time(), WORK_MIN, WORK_MAX, WORK_COOLDOWN)
+        if not result["ok"]:
+            embed = discord.Embed(title="😴 You're Tired", description=f"Try again in **{fmt_time(result['remaining'])}**.", color=COLOR_PRIMARY)
             await ctx.send(embed=embed)
             return
-
-        earned = random.randint(WORK_MIN, WORK_MAX)
-        new_balance = await self.db.add_balance(ctx.guild.id, ctx.author.id, earned)
-        await self.db.update_user(ctx.guild.id, ctx.author.id, last_work=now)
+        earned, new_balance = result["earned"], result["balance"]
 
         embed = discord.Embed(
             title="🛠️ Work Complete",
@@ -164,16 +130,13 @@ class Economy(commands.Cog):
             await ctx.send("❌ Amount must be positive.")
             return
 
-        sender = await self.db.get_user(ctx.guild.id, ctx.author.id)
-
-        if sender["balance"] < amount:
-            await ctx.send(
-                f"💸 You only have **{sender['balance']:,} coins**."
-            )
+        ok, reason, balance = await self.db.transfer_balance(ctx.guild.id, ctx.author.id, member.id, amount)
+        if not ok:
+            if reason == "balance":
+                await ctx.send(f"💸 You only have **{balance:,} coins**.")
+            else:
+                await ctx.send("❌ Payment could not be completed.")
             return
-
-        await self.db.add_balance(ctx.guild.id, ctx.author.id, -amount)
-        await self.db.add_balance(ctx.guild.id, member.id, amount)
 
         embed = discord.Embed(
             title="💸 Payment Sent",
@@ -235,16 +198,13 @@ class Economy(commands.Cog):
             await ctx.send("❌ That item doesn't exist. Use `!shop`.")
             return
 
-        user = await self.db.get_user(ctx.guild.id, ctx.author.id)
-
-        if user["balance"] < item["price"]:
-            await ctx.send(f"💸 You need **{item['price']:,} coins**.")
+        ok, reason, new_balance = await self.db.purchase_item(ctx.guild.id, ctx.author.id, item_id, item["price"], 1)
+        if not ok:
+            if reason == "balance":
+                await ctx.send(f"💸 You need **{item['price']:,} coins**.")
+            else:
+                await ctx.send("❌ Purchase could not be completed.")
             return
-
-        await self.db.add_balance(ctx.guild.id, ctx.author.id, -item["price"])
-        await self.db.add_item(ctx.guild.id, ctx.author.id, item_id, 1)
-
-        new_balance = (await self.db.get_user(ctx.guild.id, ctx.author.id))["balance"]
 
         embed = discord.Embed(
             title="🛒 Purchase Complete",
