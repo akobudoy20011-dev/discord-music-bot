@@ -79,7 +79,11 @@ if YTDLP_COOKIES_FILE:
             YTDLP_COOKIES_FILE = ""
 
 YTDL_OPTIONS = {
-    "format": "bestaudio/best",
+    # Prefer any format that contains audio, then audio-only, then the
+    # best combined stream. YouTube has recently removed/hidden audio-only
+    # formats for some player clients, so "bestaudio" alone can fail with
+    # "Requested format is not available".
+    "format": "bestaudio*/bestaudio/best",
     "noplaylist": True,
     "nocheckcertificate": True,
     "ignoreerrors": False,
@@ -183,7 +187,12 @@ async def resolve_query(loop, query):
     # extractor first, then try clients that currently work without a
     # PO-token provider.  Do not force web/mweb only: those clients are
     # currently affected by SABR/PO-token rollouts on some videos.
-    clients = [None, "android_vr", "web_embedded", "tv"]
+    # Keep the default extractor first, then use clients that are currently
+    # useful when YouTube exposes a different set of formats. In particular,
+    # web_embedded is a documented fallback for videos where the default
+    # client has no downloadable audio formats. tv/tv_downgraded is avoided
+    # here because it has recently produced UNPLAYABLE/no-format responses.
+    clients = [None, "web_embedded", "android_vr"]
     last_error = None
 
     for client in clients:
@@ -232,12 +241,12 @@ async def fetch_song_mp3(query):
     loop = asyncio.get_event_loop()
     # Mirror the playback fallback order for downloads.  YouTube can fail
     # one player client while another still exposes a usable audio stream.
-    clients = [None, "android_vr", "web_embedded", "tv"]
+    clients = [None, "web_embedded", "android_vr"]
     last_error = None
 
     for client in clients:
         dl_opts = {
-            "format": "bestaudio/best",
+            "format": "bestaudio*/bestaudio/best",
             "outtmpl": "downloads/%(id)s.%(ext)s",
             "postprocessors": [{
                 "key": "FFmpegExtractAudio",
