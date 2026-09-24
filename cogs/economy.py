@@ -133,7 +133,8 @@ class Economy(commands.Cog):
                 f"You claimed **{reward:,} coins**!\n"
                 f"🔥 Streak: **{streak} day{'s' if streak != 1 else ''}**\n"
                 f"💰 Balance: **{new_balance:,}**\n"
-                f"💎 Economy Tier: **{tier}** ({tier_multiplier:.0%} base rate)\n"\n                f"⚡ Active item boost: **{boost:.2f}×**"
+                f"💎 Economy Tier: **{tier}** ({tier_multiplier:.0%} base rate)\n"
+                f"⚡ Active item boost: **{boost:.2f}×**"
             ),
             color=COLOR_GOLD
         )
@@ -172,7 +173,8 @@ class Economy(commands.Cog):
             description=(
                 f"You earned **{earned} coins**!\n"
                 f"💰 Balance: **{new_balance:,}**\n"
-                f"💎 Economy Tier: **{tier}** ({multiplier:.0%} earning rate)"
+                f"💎 Economy Tier: **{tier}** ({tier_multiplier:.0%} base rate)\n"
+                f"⚡ Active item boost: **{boost:.2f}×**"
             ),
             color=COLOR_GOLD
         )
@@ -445,7 +447,10 @@ class Economy(commands.Cog):
             value=(
                 "**Max tier reached**"
                 if tier >= 10
-                else f"**{next_activity} activity point(s)** to the next tier"\n                     f"Every 10,000 earned or 25,000 spent grants 1 activity point."
+                else (
+                    f"**{next_activity} activity point(s)** to the next tier"
+                    f"\nEvery 10,000 earned or 25,000 spent grants 1 activity point."
+                )
             ),
             inline=False
         )
