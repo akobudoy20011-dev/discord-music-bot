@@ -1395,13 +1395,15 @@ class Database:
             "DELETE FROM warnings WHERE guild_id = ? AND user_id = ?",
             (str(guild_id), str(user_id))
         )
-        await self._conn.commit()    async def claim_arcade_match(self, match_id, user_id):
+        await self._conn.commit()    async def claim_arcade_match(self, guild_id, match_id, user_id):
         cur = await self._conn.execute(
-            "SELECT * FROM arcade_tournament_matches WHERE match_id=?",
+            "SELECT m.*, t.guild_id FROM arcade_tournament_matches m "
+            "JOIN arcade_tournaments t ON t.tournament_id=m.tournament_id "
+            "WHERE m.match_id=?",
             (int(match_id),)
         )
         m = await cur.fetchone()
-        if not m or m["status"] != "ready":
+        if not m or str(m["guild_id"]) != str(guild_id) or m["status"] != "ready":
             return False, None
         if str(user_id) not in {str(m["player_a"]), str(m["player_b"])}:
             return False, None
@@ -1412,7 +1414,10 @@ class Database:
         )
         await self._conn.commit()
         cur = await self._conn.execute(
-            "SELECT * FROM arcade_tournament_matches WHERE match_id=?",
+            "SELECT m.*, t.guild_id, t.game_id, t.name AS tournament_name "
+            "FROM arcade_tournament_matches m "
+            "JOIN arcade_tournaments t ON t.tournament_id=m.tournament_id "
+            "WHERE m.match_id=?",
             (int(match_id),)
         )
         current = await cur.fetchone()
