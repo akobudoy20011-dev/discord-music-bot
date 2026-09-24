@@ -1,5 +1,5 @@
 discord.py[voice]>=2.4.0
-yt-dlp
+yt-dlp[default]>=2026.08.19
 aiohttp>=3.9.0
 python-dotenv>=1.0.0
 aiosqlite>=0.20.0
