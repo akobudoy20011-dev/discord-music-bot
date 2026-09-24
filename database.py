@@ -2562,7 +2562,7 @@ class Database:
         now=time.time()
         cur=await self._conn.execute("SELECT 1 FROM guild_raids WHERE guild_id=? AND status='active'",(str(guild_id),))
         if await cur.fetchone(): return None,"active"
-        cur=await self._conn.execute("INSERT INTO guild_raids(guild_id,raid_id_key,status,boss_hp,max_hp,reward_coins,reward_xp,ends_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,1,?)",(str(guild_id),str(raid_id_key),"active",int(max_hp),int(max_hp),int(reward_coins),int(reward_xp),now+int(duration),now,now+int(duration*0.75)))
+        cur=await self._conn.execute("INSERT INTO guild_raids(guild_id,raid_id_key,status,boss_hp,max_hp,reward_coins,reward_xp,ends_at,created_at,phase,enrage_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",(str(guild_id),str(raid_id_key),"active",int(max_hp),int(max_hp),int(reward_coins),int(reward_xp),now+int(duration),now,now+int(duration*0.75)))
         await self._conn.commit(); return int(cur.lastrowid),"ok"
 
     async def get_guild_raid(self,guild_id,raid_id=None):
