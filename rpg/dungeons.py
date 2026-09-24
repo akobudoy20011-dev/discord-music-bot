@@ -78,6 +78,11 @@ async def start(db, guild_id, user_id, dungeon_id):
     player = await db.get_rpg_player(guild_id, user_id)
     if int(player["level"]) < dungeon["min_level"]:
         return {"ok": False, "message": f"You need RPG Level {dungeon['min_level']}."}
+    cur = await db._conn.execute("SELECT last_completed FROM rpg_dungeon_daily WHERE guild_id=? AND user_id=?", (str(guild_id), str(user_id)))
+    daily = await cur.fetchone()
+    if daily and float(daily["last_completed"] or 0) + DAILY_COOLDOWN > time.time():
+        remaining = float(daily["last_completed"]) + DAILY_COOLDOWN - time.time()
+        return {"ok": False, "message": f"Your daily dungeon is still on cooldown for {remaining / 3600:.1f}h."}
     existing = await _get_run(db, guild_id, user_id)
     if existing and existing["status"] == "active":
         return {"ok": False, "message": f"You already have an active delve in {dungeon['name']}."}
