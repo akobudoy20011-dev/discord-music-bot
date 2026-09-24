@@ -686,7 +686,7 @@ class RPG(commands.Cog):
     @dungeon_command.command(name="start")
     async def dungeon_start_command(self, ctx, dungeon_id: str = None):
         if not dungeon_id:
-            await self.dungeon_command(ctx)
+            await ctx.send("Use !rpg dungeon list or !rpg dungeon start <id>.")
             return
         result = await start_dungeon(self.db, ctx.guild.id, ctx.author.id, dungeon_id)
         if not result["ok"]:
