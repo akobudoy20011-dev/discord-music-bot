@@ -275,6 +275,11 @@ class Database:
             "bank_balance": "INTEGER NOT NULL DEFAULT 0",
             "last_bank_interest": "REAL",
             "equipped_title": "TEXT",
+            "arcade_plays": "INTEGER NOT NULL DEFAULT 0",
+            "arcade_wins": "INTEGER NOT NULL DEFAULT 0",
+            "arcade_wagered": "INTEGER NOT NULL DEFAULT 0",
+            "arcade_net": "INTEGER NOT NULL DEFAULT 0",
+            "arcade_best_streak": "INTEGER NOT NULL DEFAULT 0",
         }.items():
             if name not in user_columns:
                 await self._conn.execute(
@@ -452,6 +457,12 @@ class Database:
         best = int(row["best_streak"]) if row else 0
         streak = streak + 1 if win else 0
         best = max(best, streak)
+        await self._conn.execute(
+            "UPDATE users SET games=games+1, wins=wins+?, arcade_plays=arcade_plays+1, "
+            "arcade_wins=arcade_wins+?, arcade_wagered=arcade_wagered+?, arcade_net=arcade_net+?, "
+            "arcade_best_streak=MAX(arcade_best_streak, ?) WHERE guild_id=? AND user_id=?",
+            (win, win, wager, net, best, guild_id, user_id)
+        )
         await self._conn.execute(
             "INSERT INTO game_stats "
             "(guild_id,user_id,game_id,plays,wins,losses,ties,wagered,net_coins,best_streak,current_streak) "
