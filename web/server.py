@@ -49,6 +49,19 @@ async def health(request):
             "last_voice_failure": watchdog_cog.last_voice_failure,
         }
 
+    cache_cleanup = None
+    cleanup_cog = bot.get_cog("CacheCleanup") if bot is not None else None
+    if cleanup_cog is not None:
+        cache_cleanup = {
+            "running": cleanup_cog._task.is_running(),
+            "last_run": cleanup_cog.last_run,
+            "last_error": cleanup_cog.last_error,
+            "last_removed_files": cleanup_cog.last_removed_files,
+            "last_removed_bytes": cleanup_cog.last_removed_bytes,
+            "total_removed_files": cleanup_cog.total_removed_files,
+            "total_removed_bytes": cleanup_cog.total_removed_bytes,
+        }
+
     music = None
     music_cog = bot.get_cog("Music") if bot is not None else None
     if music_cog is not None:
@@ -86,6 +99,7 @@ async def health(request):
         },
         "watchdog": watchdog,
         "music": music,
+        "cache_cleanup": cache_cleanup,
         "uptime_seconds": uptime_seconds,
         "uptime": _format_uptime(uptime_seconds),
         "timestamp": datetime.now(timezone.utc).isoformat(),
