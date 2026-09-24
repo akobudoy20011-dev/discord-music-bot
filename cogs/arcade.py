@@ -249,12 +249,7 @@ class Arcade(commands.Cog):
                         COLOR_GOLD,
                     )
                 )
-                await self.db._conn.execute(
-                    "UPDATE arcade_tournament_matches SET status='ready' "
-                    "WHERE match_id=? AND status='playing'",
-                    (int(match_id),)
-                )
-                await self.db._conn.commit()
+                await self.db.reset_arcade_match(match_id)
                 return
 
             winner = player_a if a > b else player_b
@@ -354,12 +349,7 @@ class Arcade(commands.Cog):
                                     ),
                                     view=view,
                                 )
-                                await cog.db._conn.execute(
-                                    "UPDATE arcade_tournament_matches SET status='ready' "
-                                    "WHERE match_id=? AND status='playing'",
-                                    (int(match["match_id"]),),
-                                )
-                                await cog.db._conn.commit()
+                                await cog.db.reset_arcade_match(match["match_id"])
                                 return
 
                             winner_user = players[winner]
@@ -488,12 +478,7 @@ class Arcade(commands.Cog):
                                 ),
                                 view=view,
                             )
-                            await cog.db._conn.execute(
-                                "UPDATE arcade_tournament_matches SET status='ready' "
-                                "WHERE match_id=? AND status='playing'",
-                                (int(match["match_id"]),),
-                            )
-                            await cog.db._conn.commit()
+                            await cog.db.reset_arcade_match(match["match_id"])
                             return
 
                         winner_user = players[winner]
