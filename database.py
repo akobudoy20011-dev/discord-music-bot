@@ -391,6 +391,7 @@ CREATE TABLE IF NOT EXISTS eclipse_world_contributors (
 
 CREATE TABLE IF NOT EXISTS guilds (
     guild_id TEXT PRIMARY KEY,
+    server_id TEXT NOT NULL,
     name TEXT NOT NULL,
     owner_id TEXT NOT NULL,
     level INTEGER NOT NULL DEFAULT 1,
@@ -2301,6 +2302,229 @@ class Database:
         return old_level, level, player
 
 
+
+    # ------------------------------------------------------------
+    # GUILDS / WORLD SYSTEM
+    # ------------------------------------------------------------
+
+    async def create_guild(self, server_id, guild_id, name, owner_id):
+        server_id, guild_id, name, owner_id = map(str, (server_id, guild_id, name, owner_id))
+        now=time.time()
+        await self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            cur=await self._conn.execute("SELECT 1 FROM guilds WHERE server_id=? AND lower(name)=lower(?)",(server_id,name))
+            if await cur.fetchone():
+                await self._conn.rollback(); return None,"name"
+            cur=await self._conn.execute(
+                "INSERT INTO guilds(guild_id,server_id,name,owner_id,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+                (guild_id,server_id,name,owner_id,now,now),
+            )
+            await self._conn.execute(
+                "INSERT INTO guild_members(guild_id,user_id,role,joined_at) VALUES(?,?,?,?)",
+                (guild_id,owner_id,"leader",now),
+            )
+            await self._conn.commit()
+            return guild_id,"ok"
+        except Exception:
+            await self._conn.rollback(); raise
+
+    async def get_guild(self, guild_id):
+        cur=await self._conn.execute("SELECT * FROM guilds WHERE guild_id=?",(str(guild_id),))
+        row=await cur.fetchone()
+        return dict(row) if row else None
+
+    async def get_user_guild(self, server_id, user_id):
+        cur=await self._conn.execute(
+            "SELECT g.* , gm.role, gm.contribution FROM guilds g JOIN guild_members gm ON gm.guild_id=g.guild_id "
+            "WHERE g.server_id=? AND gm.user_id=? ORDER BY g.created_at LIMIT 1",
+            (str(server_id),str(user_id)),
+        )
+        row=await cur.fetchone()
+        return dict(row) if row else None
+
+    async def get_server_guilds(self, server_id, limit=25):
+        cur=await self._conn.execute("SELECT * FROM guilds WHERE server_id=? ORDER BY level DESC,created_at LIMIT ?",(str(server_id),int(limit)))
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def get_guild_members(self, guild_id, limit=50):
+        cur=await self._conn.execute("SELECT * FROM guild_members WHERE guild_id=? ORDER BY contribution DESC,joined_at LIMIT ?",(str(guild_id),int(limit)))
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def join_guild(self, guild_id, user_id):
+        guild_id,user_id=str(guild_id),str(user_id)
+        guild=await self.get_guild(guild_id)
+        if not guild: return False,"missing"
+        current=await self.get_user_guild(guild["server_id"],user_id)
+        if current: return False,"member"
+        await self._conn.execute("INSERT OR IGNORE INTO guild_members(guild_id,user_id,role,joined_at) VALUES(?,?,?,?)",(guild_id,user_id,"member",time.time()))
+        await self._conn.commit()
+        return True,"ok"
+
+    async def leave_guild(self, guild_id, user_id):
+        guild_id,user_id=str(guild_id),str(user_id)
+        guild=await self.get_guild(guild_id)
+        if not guild: return False,"missing"
+        if str(guild["owner_id"])==user_id: return False,"owner"
+        await self._conn.execute("DELETE FROM guild_members WHERE guild_id=? AND user_id=?",(guild_id,user_id))
+        await self._conn.commit()
+        return True,"ok"
+
+    async def set_guild_role(self, guild_id, user_id, role):
+        role=str(role)
+        if role not in {"leader","officer","member"}: return False
+        await self._conn.execute("UPDATE guild_members SET role=? WHERE guild_id=? AND user_id=?",(role,str(guild_id),str(user_id)))
+        await self._conn.commit()
+        return True
+
+    async def guild_treasury_deposit(self, guild_id, user_id, amount):
+        guild_id,user_id=str(guild_id),str(user_id); amount=int(amount)
+        if amount<=0: return False,"amount",0
+        await self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            cur=await self._conn.execute("SELECT 1 FROM guild_members WHERE guild_id=? AND user_id=?",(guild_id,user_id))
+            if not await cur.fetchone(): await self._conn.rollback(); return False,"member",0
+            cur=await self._conn.execute("UPDATE users SET balance=balance-? WHERE guild_id=? AND user_id=? AND balance>=?",(amount,guild_id.split(":")[0] if False else "",user_id,amount))
+            # Discord guild/server id is stored separately from RPG/economy guild key; resolve it.
+            g=await self.get_guild(guild_id)
+            if not g:
+                await self._conn.rollback(); return False,"missing",0
+            cur=await self._conn.execute("UPDATE users SET balance=balance-? WHERE guild_id=? AND user_id=? AND balance>=?",(amount,str(g["server_id"]),user_id,amount))
+            if cur.rowcount!=1: await self._conn.rollback(); return False,"balance",0
+            await self._conn.execute("UPDATE guilds SET treasury=treasury+?,xp=xp+?,updated_at=? WHERE guild_id=?",(amount,amount//10,time.time(),guild_id))
+            await self._conn.execute("UPDATE guild_members SET contribution=contribution+? WHERE guild_id=? AND user_id=?",(amount,guild_id,user_id))
+            await self._conn.commit()
+            await self.recalculate_guild_level(guild_id)
+            return True,"ok",amount
+        except Exception:
+            await self._conn.rollback(); raise
+
+    async def guild_treasury_withdraw(self, guild_id, user_id, amount):
+        guild_id,user_id=str(guild_id),str(user_id); amount=int(amount)
+        if amount<=0: return False,"amount",0
+        g=await self.get_guild(guild_id)
+        if not g: return False,"missing",0
+        member=await self._conn.execute("SELECT role FROM guild_members WHERE guild_id=? AND user_id=?",(guild_id,user_id))
+        row=await member.fetchone()
+        if not row or row["role"] not in {"leader","officer"}: return False,"permission",0
+        await self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            cur=await self._conn.execute("UPDATE guilds SET treasury=treasury-? WHERE guild_id=? AND treasury>=?",(amount,guild_id,amount))
+            if cur.rowcount!=1: await self._conn.rollback(); return False,"treasury",0
+            await self._conn.execute("INSERT OR IGNORE INTO users(guild_id,user_id,balance) VALUES(?,?,?)",(str(g["server_id"]),user_id,STARTING_BALANCE))
+            await self._conn.execute("UPDATE users SET balance=balance+? WHERE guild_id=? AND user_id=?",(amount,str(g["server_id"]),user_id))
+            await self._conn.commit()
+            return True,"ok",amount
+        except Exception:
+            await self._conn.rollback(); raise
+
+    async def recalculate_guild_level(self, guild_id):
+        g=await self.get_guild(guild_id)
+        if not g: return None
+        level=min(20,1+int(g["xp"])//1000)
+        if level!=int(g["level"]):
+            await self._conn.execute("UPDATE guilds SET level=?,updated_at=? WHERE guild_id=?",(level,time.time(),guild_id))
+            await self._conn.commit()
+            g=await self.get_guild(guild_id)
+        return g
+
+    async def guild_multiplier(self, server_id, user_id):
+        g=await self.get_user_guild(server_id,user_id)
+        if not g: return 1.0
+        return 1.0 + min(0.20,max(0,int(g["level"])-1)*0.01)
+
+    async def create_guild_event(self, guild_id, event_id, title, description, target, reward_coins, reward_xp, duration):
+        now=time.time()
+        await self._conn.execute(
+            "INSERT OR REPLACE INTO guild_events(guild_id,event_id,title,description,target,progress,reward_coins,reward_xp,ends_at,completed,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (str(guild_id),str(event_id),str(title),str(description),int(target),0,int(reward_coins),int(reward_xp),now+int(duration),0,now),
+        )
+        await self._conn.commit()
+        return await self.get_guild_event(guild_id,event_id)
+
+    async def get_guild_event(self,guild_id,event_id=None):
+        q="SELECT * FROM guild_events WHERE guild_id=?"; p=[str(guild_id)]
+        if event_id: q+=" AND event_id=?"; p.append(str(event_id))
+        q+=" ORDER BY created_at DESC LIMIT 1"
+        cur=await self._conn.execute(q,p); row=await cur.fetchone()
+        return dict(row) if row else None
+
+    async def contribute_guild_event(self,guild_id,user_id,amount):
+        event=await self.get_guild_event(guild_id)
+        if not event or event["completed"] or float(event["ends_at"])<=time.time(): return False,"inactive"
+        amount=max(1,int(amount))
+        g=await self.get_guild(guild_id)
+        member=await self.get_user_guild(g["server_id"],user_id) if g else None
+        if not member: return False,"member"
+        await self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            new=min(int(event["target"]),int(event["progress"])+amount)
+            completed=1 if new>=int(event["target"]) else 0
+            await self._conn.execute("INSERT INTO guild_event_contributors(guild_id,event_id,user_id,contribution) VALUES(?,?,?,?) ON CONFLICT(guild_id,event_id,user_id) DO UPDATE SET contribution=contribution+excluded.contribution",(guild_id,event["event_id"],str(user_id),amount))
+            await self._conn.execute("UPDATE guild_events SET progress=?,completed=? WHERE guild_id=? AND event_id=?",(new,completed,guild_id,event["event_id"]))
+            await self._conn.commit()
+            return True,"completed" if completed else "ok"
+        except Exception:
+            await self._conn.rollback(); raise
+
+    async def create_guild_boss(self,guild_id,boss_id,name,max_hp,attack,reward_coins,reward_xp,duration):
+        now=time.time()
+        await self._conn.execute("INSERT OR REPLACE INTO guild_bosses(guild_id,boss_id,name,max_hp,hp,attack,reward_coins,reward_xp,ends_at,defeated,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",(str(guild_id),str(boss_id),str(name),int(max_hp),int(max_hp),int(attack),int(reward_coins),int(reward_xp),now+int(duration),0,now))
+        await self._conn.commit()
+        return await self.get_guild_boss(guild_id)
+
+    async def get_guild_boss(self,guild_id):
+        cur=await self._conn.execute("SELECT * FROM guild_bosses WHERE guild_id=?",(str(guild_id),))
+        row=await cur.fetchone(); return dict(row) if row else None
+
+    async def damage_guild_boss(self,guild_id,user_id,damage):
+        damage=max(1,int(damage)); boss=await self.get_guild_boss(guild_id)
+        if not boss or boss["defeated"] or float(boss["ends_at"])<=time.time(): return False,"inactive",0
+        g=await self.get_guild(guild_id)
+        if not g: return False,"missing",0
+        member=await self.get_user_guild(g["server_id"],user_id)
+        if not member: return False,"member",0
+        await self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            cur=await self._conn.execute("UPDATE guild_bosses SET hp=MAX(0,hp-?) WHERE guild_id=? AND defeated=0",(damage,guild_id))
+            if cur.rowcount!=1: await self._conn.rollback(); return False,"inactive",0
+            await self._conn.execute("INSERT INTO guild_boss_contributors(guild_id,boss_id,user_id,damage) VALUES(?,?,?,?) ON CONFLICT(guild_id,boss_id,user_id) DO UPDATE SET damage=damage+excluded.damage",(guild_id,boss["boss_id"],str(user_id),damage))
+            cur=await self._conn.execute("SELECT hp FROM guild_bosses WHERE guild_id=?",(guild_id,)); hp=int((await cur.fetchone())["hp"])
+            if hp<=0: await self._conn.execute("UPDATE guild_bosses SET defeated=1 WHERE guild_id=?",(guild_id,))
+            await self._conn.commit()
+            return True,"defeated" if hp<=0 else "ok",hp
+        except Exception:
+            await self._conn.rollback(); raise
+
+    async def start_guild_raid(self,guild_id,raid_id_key,max_hp,reward_coins,reward_xp,duration):
+        now=time.time()
+        cur=await self._conn.execute("SELECT 1 FROM guild_raids WHERE guild_id=? AND status='active'",(str(guild_id),))
+        if await cur.fetchone(): return None,"active"
+        cur=await self._conn.execute("INSERT INTO guild_raids(guild_id,raid_id_key,status,boss_hp,max_hp,reward_coins,reward_xp,ends_at,created_at) VALUES(?,?,?,?,?,?,?,?,?)",(str(guild_id),str(raid_id_key),"active",int(max_hp),int(max_hp),int(reward_coins),int(reward_xp),now+int(duration),now))
+        await self._conn.commit(); return int(cur.lastrowid),"ok"
+
+    async def get_guild_raid(self,guild_id,raid_id=None):
+        q="SELECT * FROM guild_raids WHERE guild_id=?"; p=[str(guild_id)]
+        if raid_id is not None: q+=" AND raid_id=?"; p.append(int(raid_id))
+        q+=" ORDER BY raid_id DESC LIMIT 1"
+        cur=await self._conn.execute(q,p); row=await cur.fetchone(); return dict(row) if row else None
+
+    async def damage_guild_raid(self,guild_id,user_id,damage):
+        damage=max(1,int(damage)); raid=await self.get_guild_raid(guild_id)
+        if not raid or raid["status"]!="active" or float(raid["ends_at"])<=time.time(): return False,"inactive",0
+        g=await self.get_guild(guild_id)
+        member=await self.get_user_guild(g["server_id"],user_id) if g else None
+        if not member: return False,"member",0
+        await self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            cur=await self._conn.execute("UPDATE guild_raids SET boss_hp=MAX(0,boss_hp-?) WHERE raid_id=? AND status='active'",(damage,int(raid["raid_id"])))
+            if cur.rowcount!=1: await self._conn.rollback(); return False,"inactive",0
+            await self._conn.execute("INSERT INTO guild_raid_contributors(raid_id,user_id,damage) VALUES(?,?,?) ON CONFLICT(raid_id,user_id) DO UPDATE SET damage=damage+excluded.damage",(int(raid["raid_id"]),str(user_id),damage))
+            cur=await self._conn.execute("SELECT boss_hp FROM guild_raids WHERE raid_id=?",(int(raid["raid_id"]),)); hp=int((await cur.fetchone())["boss_hp"])
+            if hp<=0: await self._conn.execute("UPDATE guild_raids SET status='completed',completed=1 WHERE raid_id=?",(int(raid["raid_id"]),))
+            await self._conn.commit()
+            return True,"completed" if hp<=0 else "ok",hp
+        except Exception:
+            await self._conn.rollback(); raise
 
     async def get_rpg_world(self, guild_id):
         guild_id = str(guild_id)
