@@ -6,11 +6,11 @@ from .skills import get_skill
 from .loot import roll_loot, describe
 from .quests import progress as quest_progress
 
-async def start(db,guild_id,user_id):
+async def start(db,guild_id,user_id,enemy_override=None):
     existing=await db.get_rpg_battle(guild_id,user_id)
     if existing: return {"ok":False,"battle":existing}
     player=await db.get_rpg_player(guild_id,user_id)
-    enemy=random_enemy()
+    enemy=enemy_override or random_enemy(player.get("region"))
     await db.set_rpg_battle(guild_id,user_id,enemy_id=enemy["id"],enemy_name=enemy["name"],enemy_hp=enemy["hp"],enemy_max_hp=enemy["hp"],enemy_attack=enemy["attack"],turn=1,guarding=0,created_at=time.time())
     return {"ok":True,"battle":await db.get_rpg_battle(guild_id,user_id),"player":player}
 
