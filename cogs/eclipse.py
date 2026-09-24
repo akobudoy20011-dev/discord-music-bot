@@ -182,7 +182,7 @@ class Eclipse(commands.Cog):
         await self.db.set_equipped_title(ctx.guild.id, ctx.author.id, match)
         await ctx.send(f"👑 Equipped **{match}**.")
 
-    @commands.command(name="worldevent", aliases=["world", "event"])
+    @commands.command(name="eclipseevent", aliases=["eclipseworld"])
     async def worldevent(self, ctx, action: str = None, amount: int = None):
         event = await self._ensure_event(ctx.guild.id)
         if action and action.lower() in {"contribute", "offer", "feed"}:
