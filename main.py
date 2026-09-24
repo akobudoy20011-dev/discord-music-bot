@@ -177,9 +177,11 @@ async def status(ctx):
     minutes, seconds = divmod(remainder, 60)
 
     db_detail = "not connected"
+    db_latency = None
     try:
-        await bot.db._conn.execute("SELECT 1")
+        health = await bot.db.health_check()
         db_detail = "ok"
+        db_latency = health["latency_ms"]
     except Exception as error:
         db_detail = type(error).__name__
 
@@ -197,7 +199,7 @@ async def status(ctx):
     embed.add_field(name="Discord", value=f"Latency: {bot.latency * 1000:.0f} ms", inline=True)
     embed.add_field(name="Servers", value=f"{len(bot.guilds)}", inline=True)
     embed.add_field(name="Music", value=f"{music_players} active", inline=True)
-    embed.add_field(name="Database", value=f"{db_detail}", inline=True)
+    embed.add_field(name="Database", value=(f"ok · {db_latency:.1f} ms" if db_latency is not None else f"{db_detail}"), inline=True)
     embed.add_field(
         name="Uptime",
         value=f"{days}d {hours:02}h {minutes:02}m {seconds:02}s",
