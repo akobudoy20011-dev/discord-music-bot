@@ -545,6 +545,8 @@ class Music(commands.Cog):
 
     @commands.command(name="leave", aliases=["disconnect", "dc"])
     async def leave(self, ctx):
+        if not await self.require_control(ctx):
+            return
         if ctx.voice_client is None:
             await ctx.send("I'm not in a voice channel.")
             return
@@ -667,6 +669,8 @@ class Music(commands.Cog):
             state.intentional_stop_generation = None
             if state.current and state.current.get("generation") == generation:
                 state.current = None
+            if state.current is None and not state.queue:
+                return
             await self._play_next(guild)
             return
         if error:
