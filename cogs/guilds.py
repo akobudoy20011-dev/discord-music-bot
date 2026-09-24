@@ -344,9 +344,16 @@ class Guilds(commands.Cog):
         if not raid:
             await ctx.send("⚔️ No raid is active.")
             return
+        phase_name = {
+            1: "Awakening",
+            2: "Enraged",
+            3: "Cataclysm",
+        }.get(int(raid.get("phase", 1)), "Awakening")
+
         await ctx.send(embed=self._embed(
             "⚔️ Guild Raid",
-            f"Boss HP: **{raid['boss_hp']:,}/{raid['max_hp']:,}**\nPhase: **{ {1:"Awakening",2:"Enraged",3:"Cataclysm"}.get(int(raid.get("phase",1)),"Awakening") }**\n"
+            f"Boss HP: **{raid['boss_hp']:,}/{raid['max_hp']:,}**\n"
+            f"Phase: **{phase_name}**\n"
             f"Reward: **{raid['reward_coins']:,} coins + {raid['reward_xp']:,} XP**\n"
             f"Enrage: <t:{int(raid.get('enrage_at', raid['ends_at']))}:R>\nEnds: <t:{int(raid['ends_at'])}:R>"
         ))
