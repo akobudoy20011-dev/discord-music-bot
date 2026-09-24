@@ -44,7 +44,6 @@ class WorldBoss(commands.Cog):
         if not b or b["status"]!="active" or float(b["ends_at"])<=time.time(): await ctx.send("❌ No active world boss."); return
         p=await get_player(self.db,ctx.guild.id,ctx.author.id); gear=await equipment_stats(self.db,ctx.guild.id,ctx.author.id); companion=await self.db.get_active_rpg_companion(ctx.guild.id,ctx.author.id)
         damage=max(100,int(p["strength"])*8+int(p["magic"])*5+int(p["level"])*25+gear["power"]*6)
-        if companion: damage+=int(companion["level"])*20
         damage=min(damage,max(1,int(b["hp"])))
         ok,reason,hp=await self.db.damage_world_boss(ctx.guild.id,ctx.author.id,damage)
         if not ok: await ctx.send("❌ The world boss is no longer active."); return
