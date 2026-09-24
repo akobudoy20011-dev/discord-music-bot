@@ -3,6 +3,7 @@ import random
 import time
 from .classes import get_class
 from .quests import progress as quest_progress
+from .world import START_REGION
 
 ADVENTURE_COOLDOWN = 45
 
@@ -15,7 +16,7 @@ async def choose_class(db, guild_id, user_id, key):
     if chosen is None:
         return None, await get_player(db, guild_id, user_id)
     stats = chosen["stats"]
-    player = await db.update_rpg_player(guild_id,user_id,class_key=key,max_hp=stats["max_hp"],hp=stats["max_hp"],max_mp=stats["max_mp"],mp=stats["max_mp"],strength=stats["strength"],defense=stats["defense"],magic=stats["magic"],agility=stats["agility"])
+    player = await db.update_rpg_player(guild_id,user_id,class_key=key,region=player.get("region") or START_REGION,max_hp=stats["max_hp"],hp=stats["max_hp"],max_mp=stats["max_mp"],mp=stats["max_mp"],strength=stats["strength"],defense=stats["defense"],magic=stats["magic"],agility=stats["agility"])
     return chosen, player
 
 async def adventure(db, guild_id, user_id):
