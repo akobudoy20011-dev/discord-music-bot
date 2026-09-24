@@ -9,6 +9,8 @@ from rpg.skills import get_skills
 from rpg.skills_service import ensure_class_skills, unlock_skill
 from rpg.combat import start as start_battle, attack as combat_attack, flee as flee_battle
 from rpg.quests import ensure_quests, list_quests, claim as claim_quest
+from rpg.world import list_regions, get_region
+from rpg.exploration import world_status, travel, explore
 
 
 def xp_bar(current, maximum, length=14):
@@ -41,7 +43,7 @@ class RPG(commands.Cog):
         await ensure_class_skills(self.db, ctx.guild.id, ctx.author.id, key.lower())
         await ctx.send(f"{chosen['icon']} **{ctx.author.display_name}** is now a **{chosen['name']}**.\n{chosen['description']}\n\n🎒 Starter gear and your first skill have been unlocked.")
 
-    @rpg.command(name="adventure",aliases=["explore","hunt"])
+    @rpg.command(name="adventure",aliases=["hunt"])
     @commands.cooldown(1,ADVENTURE_COOLDOWN,commands.BucketType.user)
     async def adventure_command(self,ctx):
         result=await adventure(self.db,ctx.guild.id,ctx.author.id)
@@ -50,6 +52,50 @@ class RPG(commands.Cog):
         level_text="\n✦ **LEVEL UP**" if result["new_level"]>result["old_level"] else ""
         await ctx.send(embed=discord.Embed(title=f"🌙 {result['event']}",description=f"{result['narrative']}\n\n**Rewards:** {reward} · +{result['xp']} XP{level_text}",color=COLOR_GOLD))
 
+    @rpg.command(name="world", aliases=["map", "realm"])
+    async def world_command(self, ctx):
+        world = await world_status(self.db, ctx.guild.id)
+        player = await get_player(self.db, ctx.guild.id, ctx.author.id)
+        current = get_region(player.get("region"))
+        lines = []
+        for rid, region in list_regions():
+            state = "📍 HERE" if rid == player.get("region") else f"Danger {region['danger']}/4"
+            lines.append(f"{region['icon']} **{region['name']}** · {state}\\n{region['description']}")
+        embed = discord.Embed(title="♡ ECLIPSE · THE VEILED REALMS ♡", description=f"**World Day {world['day']}** · {world['weather'].title()} · Instability {world['instability']}/10\\n\\n" + "\\n\\n".join(lines), color=COLOR_PRIMARY)
+        embed.set_footer(text=f"୨୧ Current realm: {current['name'] if current else 'Unknown'} · !rpg travel <region>")
+        await ctx.send(embed=embed)
+
+    @rpg.command(name="travel", aliases=["go", "journey"])
+    async def travel_command(self, ctx, region_id: str = None):
+        if not region_id:
+            lines = [f"{r['icon']} {rid} — **{r['name']}** · danger {r['danger']}/4" for rid, r in list_regions()]
+            await ctx.send("🗺️ **Choose a realm:**\\n" + "\\n".join(lines))
+            return
+        result = await travel(self.db, ctx.guild.id, ctx.author.id, region_id)
+        if not result["ok"]:
+            await ctx.send(f"❌ {result['message']}")
+            return
+        region = result["region"]
+        await ctx.send(f"🪽 **THE ROAD OPENS**\\n\\n{region['icon']} **{region['name']}**\\n{region['description']}\\n\\nTravel time: **{result['duration']:.0f}s**. Your journey has begun.")
+
+    @rpg.command(name="explore", aliases=["scout", "search"])
+    async def explore_command(self, ctx):
+        result = await explore(self.db, ctx.guild.id, ctx.author.id)
+        if not result["ok"]:
+            await ctx.send(f"❌ {result['message']}")
+            return
+        region = result["region"]
+        if result["kind"] == "enemy":
+            enemy = result["enemy"]
+            battle = await start_battle(self.db, ctx.guild.id, ctx.author.id, enemy_override=enemy)
+            if not battle["ok"]:
+                await ctx.send(f"⚔️ **{enemy['name']}** finds you before you can prepare. Use !rpg attack.")
+                return
+            await ctx.send(f"{region['icon']} **{region['name']}**\\n\\n⚔️ **AN ENCOUNTER**\\n**{enemy['name']}** · ❤️ {enemy['hp']}/{enemy['hp']} HP\\nThe realm has noticed you. Use !rpg attack, !rpg skill <id>, or !rpg flee.")
+            return
+        event = result["event"]
+        level_text = "\\n✦ **LEVEL UP**" if result["new_level"] > result["old_level"] else ""
+        await ctx.send(f"{region['icon']} **{region['name']}**\\n\\n{event['text']}\\n\\n**Found:** +{event['gold']:,} gold · +{event['xp']} XP{level_text}")
     @rpg.command(name="rest",aliases=["heal"])
     async def rest_command(self,ctx):
         player=await rest(self.db,ctx.guild.id,ctx.author.id); await ctx.send(f"🪽 **{ctx.author.display_name}** rests beneath the ECLIPSE.\n❤️ HP restored to **{player['hp']}/{player['max_hp']}** · 💠 MP restored to **{player['mp']}/{player['max_mp']}**")
