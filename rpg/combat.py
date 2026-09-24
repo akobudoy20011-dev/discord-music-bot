@@ -209,13 +209,6 @@ async def _finish_turn(db, guild_id, user_id, battle, player, stats, effects, co
     if effects.get("enemy_weaken_turns", 0) > 0:
         effects["enemy_weaken_turns"] = max(0, int(effects["enemy_weaken_turns"]) - 1)
 
-    # Cooldowns tick down once per completed combat turn.
-    cooldowns = {
-        key: max(0, int(value) - 1)
-        for key, value in cooldowns.items()
-        if int(value) > 1
-    }
-
     new_player = await db.get_rpg_player(guild_id, user_id)
     if effects.get("player_bloom_turns", 0) > 0:
         heal = max(4, int(stats["magic"] * 0.75))
@@ -265,7 +258,11 @@ async def attack(db, guild_id, user_id, skill_id=None):
 
     player, gear, stats = await _effective_stats(db, guild_id, user_id)
     effects = _json_loads(battle.get("effects"), {})
-    cooldowns = _json_loads(battle.get("special_cooldowns"), {})
+    cooldowns = {
+        key: max(0, int(value) - 1)
+        for key, value in _json_loads(battle.get("special_cooldowns"), {}).items()
+        if int(value) > 0
+    }
 
     # Passive damage-over-time is applied before the player's next action.
     opening_damage = 0
@@ -346,7 +343,11 @@ async def special(db, guild_id, user_id, special_id):
         }
 
     effects = _json_loads(battle.get("effects"), {})
-    cooldowns = _json_loads(battle.get("special_cooldowns"), {})
+    cooldowns = {
+        key: max(0, int(value) - 1)
+        for key, value in _json_loads(battle.get("special_cooldowns"), {}).items()
+        if int(value) > 0
+    }
     remaining = int(cooldowns.get(sid, 0))
     if remaining > 0:
         return {
