@@ -2359,10 +2359,11 @@ class Database:
         cur=await self._conn.execute("SELECT * FROM guild_members WHERE guild_id=? ORDER BY contribution DESC,joined_at LIMIT ?",(str(guild_id),int(limit)))
         return [dict(r) for r in await cur.fetchall()]
 
-    async def join_guild(self, guild_id, user_id):
+    async def join_guild(self, guild_id, user_id, server_id=None):
         guild_id,user_id=str(guild_id),str(user_id)
         guild=await self.get_guild(guild_id)
         if not guild: return False,"missing"
+        if server_id is not None and str(guild["server_id"]) != str(server_id): return False,"server"
         current=await self.get_user_guild(guild["server_id"],user_id)
         if current: return False,"member"
         await self._conn.execute("INSERT OR IGNORE INTO guild_members(guild_id,user_id,role,joined_at) VALUES(?,?,?,?)",(guild_id,user_id,"member",time.time()))
@@ -2595,8 +2596,18 @@ class Database:
         cur=await self._conn.execute("SELECT 1 FROM guild_legendary_equipment WHERE guild_id=? AND equipment_id=?",(str(guild_id),str(equipment_id)))
         if await cur.fetchone(): return False,"owned"
         if not await self.spend_guild_treasury(guild_id,cost): return False,"treasury"
-        await self._conn.execute("INSERT INTO guild_legendary_equipment(guild_id,equipment_id,owner_id,rarity,acquired_at) VALUES(?,?,?,?,?)",(str(guild_id),str(equipment_id),str(owner_id),"legendary",time.time()))
-        await self._conn.commit(); return True,"ok"
+        await self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            cur=await self._conn.execute("SELECT 1 FROM guild_legendary_equipment WHERE guild_id=? AND equipment_id=?",(str(guild_id),str(equipment_id)))
+            if await cur.fetchone():
+                await self._conn.rollback(); return False,"owned"
+            cur=await self._conn.execute("UPDATE guilds SET treasury=treasury-? WHERE guild_id=? AND treasury>=?",(int(cost),str(guild_id),int(cost)))
+            if cur.rowcount!=1:
+                await self._conn.rollback(); return False,"treasury"
+            await self._conn.execute("INSERT INTO guild_legendary_equipment(guild_id,equipment_id,owner_id,rarity,acquired_at) VALUES(?,?,?,?,?)",(str(guild_id),str(equipment_id),str(owner_id),"legendary",time.time()))
+            await self._conn.commit(); return True,"ok"
+        except Exception:
+            await self._conn.rollback(); raise
 
     async def get_guild_relics(self,guild_id):
         cur=await self._conn.execute("SELECT * FROM guild_legendary_equipment WHERE guild_id=? ORDER BY acquired_at",(str(guild_id),))
