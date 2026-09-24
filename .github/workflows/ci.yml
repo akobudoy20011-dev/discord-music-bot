@@ -36,6 +36,7 @@ jobs:
           modules = [
               "database",
               "constants",
+              "systems.arcade_tournament_db",
               "cogs.leveling",
               "cogs.economy",
               "cogs.games",
@@ -109,3 +110,6 @@ jobs:
           asyncio.run(smoke())
           print("database smoke test passed")
           PY
+
+      - name: Exercise arcade tournament lifecycle
+        run: python tests/arcade_tournament_smoke.py
