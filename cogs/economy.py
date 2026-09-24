@@ -530,6 +530,7 @@ class Economy(commands.Cog):
 
         now = time.time()
         reward = 0
+        collectible_drop = None
         if item_id == "cookie":
             reward, message = 150, "🍪 Sweet. You received **150 coins**."
         elif item_id == "crown":
@@ -543,6 +544,8 @@ class Economy(commands.Cog):
                 message = f"🎁 **JACKPOT!** The mystery box contained **{reward:,} coins**."
             else:
                 message = f"🎁 The mystery box contained **{reward:,} coins**."
+            if random.random() < 0.05:
+                collectible_drop = random.choices(list(COLLECTIBLES), weights=[60,25,12,3], k=1)[0]
         elif item_id == "trophy":
             await self.db.add_economy_effect(ctx.guild.id, ctx.author.id, "work_boost", multiplier=2.0, uses=1)
             message = "🏆 Your next !work payout is now **2×**."
@@ -568,7 +571,12 @@ class Economy(commands.Cog):
         else:
             reward = random.randint(25000, 100000)
             message = f"✨ Eternal Treasure opened for **+{reward:,} coins**."
+            if random.random() < 0.20:
+                collectible_drop = random.choices(list(COLLECTIBLES), weights=[60,25,12,3], k=1)[0]
 
+        if collectible_drop:
+            await self.db.add_item(ctx.guild.id, ctx.author.id, collectible_drop, 1)
+            message += f"\n✨ **COLLECTIBLE DROP:** {COLLECTIBLES[collectible_drop]['name']} ({COLLECTIBLES[collectible_drop]['rarity']})"
         if reward:
             balance = await self.db.add_balance(ctx.guild.id, ctx.author.id, reward)
             await self.db.record_economy_activity(ctx.guild.id, ctx.author.id, earned=reward)
@@ -576,6 +584,22 @@ class Economy(commands.Cog):
             balance = int((await self.db.get_user(ctx.guild.id, ctx.author.id))["balance"])
 
         embed = discord.Embed(title="✨ Item Used", description=f"{message}\n💰 Balance: **{balance:,}**\n🎒 Remaining: **{remaining}**", color=COLOR_GOLD)
+        await ctx.send(embed=footer(embed, ctx))
+
+    @commands.command(name="collectibles", aliases=["collection", "relics"])
+    async def collectibles(self, ctx, member: discord.Member = None):
+        member = member or ctx.author
+        items = await self.db.get_inventory(ctx.guild.id, member.id)
+        rows = [(item_id, amount) for item_id, amount in items.items() if item_id in COLLECTIBLES]
+        if not rows:
+            await ctx.send(f"✨ {member.display_name}'s collection is empty.")
+            return
+        lines = []
+        for item_id, amount in rows:
+            data = COLLECTIBLES[item_id]
+            lines.append(f"{data['name']} × **{amount}** • {data['rarity']} • 💰 {data['value']:,} each")
+        embed = discord.Embed(title=f"✨ {member.display_name}'s Collection", description="\n".join(lines), color=COLOR_GOLD)
+        embed.set_footer(text="Rare relics can be found in Mystery Boxes and Eternal Treasures.")
         await ctx.send(embed=footer(embed, ctx))
 
     @commands.command(name="effects", aliases=["boosts"])
