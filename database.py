@@ -23,7 +23,6 @@ swapping the backend later means editing this one file, not every cog.
 import json
 import time
 import os
-import time
 import random
 
 import aiosqlite
@@ -456,6 +455,92 @@ class Database:
         await self._conn.commit()
         elapsed_ms = (time.perf_counter() - started) * 1000
         return {"ok": True, "latency_ms": round(elapsed_ms, 2)}
+
+    async def claim_daily(self, guild_id, user_id, now, daily_amount, streak_bonus, streak_cap, cooldown, grace):
+        """Atomically claim the daily reward and advance its streak."""
+        guild_id, user_id = str(guild_id), str(user_id)
+        now = float(now)
+        await self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            await self._conn.execute("INSERT OR IGNORE INTO users (guild_id,user_id,balance) VALUES (?,?,?)", (guild_id,user_id,STARTING_BALANCE))
+            cur = await self._conn.execute("SELECT balance,last_daily,daily_streak FROM users WHERE guild_id=? AND user_id=?", (guild_id,user_id))
+            row = await cur.fetchone()
+            last = row["last_daily"]
+            if last is not None and now - float(last) < float(cooldown):
+                await self._conn.rollback()
+                return {"ok":False,"reason":"cooldown","remaining":float(cooldown)-(now-float(last))}
+            streak = min(int(row["daily_streak"] or 0)+1,9999) if last is not None and now-float(last)<=float(grace) else 1
+            reward = int(daily_amount) + min(streak,int(streak_cap))*int(streak_bonus)
+            await self._conn.execute("UPDATE users SET balance=balance+?,last_daily=?,daily_streak=? WHERE guild_id=? AND user_id=?", (reward,now,streak,guild_id,user_id))
+            cur = await self._conn.execute("SELECT balance FROM users WHERE guild_id=? AND user_id=?", (guild_id,user_id))
+            balance = int((await cur.fetchone())["balance"])
+            await self._conn.commit()
+            return {"ok":True,"reward":reward,"streak":streak,"balance":balance}
+        except Exception:
+            await self._conn.rollback()
+            raise
+
+    async def claim_work(self, guild_id, user_id, now, minimum, maximum, cooldown):
+        """Atomically claim a work reward and advance its cooldown."""
+        guild_id, user_id = str(guild_id), str(user_id)
+        now = float(now)
+        await self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            await self._conn.execute("INSERT OR IGNORE INTO users (guild_id,user_id,balance) VALUES (?,?,?)", (guild_id,user_id,STARTING_BALANCE))
+            cur = await self._conn.execute("SELECT balance,last_work FROM users WHERE guild_id=? AND user_id=?", (guild_id,user_id))
+            row = await cur.fetchone()
+            last = row["last_work"]
+            if last is not None and now-float(last)<float(cooldown):
+                await self._conn.rollback()
+                return {"ok":False,"reason":"cooldown","remaining":float(cooldown)-(now-float(last))}
+            earned=random.randint(int(minimum),int(maximum))
+            await self._conn.execute("UPDATE users SET balance=balance+?,last_work=? WHERE guild_id=? AND user_id=?", (earned,now,guild_id,user_id))
+            cur=await self._conn.execute("SELECT balance FROM users WHERE guild_id=? AND user_id=?", (guild_id,user_id))
+            balance=int((await cur.fetchone())["balance"])
+            await self._conn.commit()
+            return {"ok":True,"earned":earned,"balance":balance}
+        except Exception:
+            await self._conn.rollback()
+            raise
+
+    async def transfer_balance(self, guild_id, sender_id, recipient_id, amount):
+        """Atomically transfer coins without allowing an overdraft."""
+        guild_id=str(guild_id); sender_id=str(sender_id); recipient_id=str(recipient_id); amount=int(amount)
+        if amount<=0: return False,"invalid",None
+        await self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            for uid in (sender_id,recipient_id):
+                await self._conn.execute("INSERT OR IGNORE INTO users (guild_id,user_id,balance) VALUES (?,?,?)", (guild_id,uid,STARTING_BALANCE))
+            cur=await self._conn.execute("UPDATE users SET balance=balance-? WHERE guild_id=? AND user_id=? AND balance>=?", (amount,guild_id,sender_id,amount))
+            if cur.rowcount != 1:
+                cur=await self._conn.execute("SELECT balance FROM users WHERE guild_id=? AND user_id=?", (guild_id,sender_id))
+                balance=int((await cur.fetchone())["balance"])
+                await self._conn.rollback()
+                return False,"balance",balance
+            await self._conn.execute("UPDATE users SET balance=balance+? WHERE guild_id=? AND user_id=?", (amount,guild_id,recipient_id))
+            await self._conn.commit()
+            return True,"ok",None
+        except Exception:
+            await self._conn.rollback(); raise
+
+    async def purchase_item(self, guild_id, user_id, item_id, price, amount=1):
+        """Atomically charge a user and add an inventory item."""
+        guild_id=str(guild_id); user_id=str(user_id); item_id=str(item_id); price=int(price); amount=int(amount)
+        if price<0 or amount<=0: return False,"invalid",None
+        await self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            await self._conn.execute("INSERT OR IGNORE INTO users (guild_id,user_id,balance) VALUES (?,?,?)", (guild_id,user_id,STARTING_BALANCE))
+            cur=await self._conn.execute("UPDATE users SET balance=balance-? WHERE guild_id=? AND user_id=? AND balance>=?", (price,guild_id,user_id,price))
+            if cur.rowcount != 1:
+                cur=await self._conn.execute("SELECT balance FROM users WHERE guild_id=? AND user_id=?", (guild_id,user_id))
+                balance=int((await cur.fetchone())["balance"]); await self._conn.rollback()
+                return False,"balance",balance
+            await self._conn.execute("INSERT INTO inventory (guild_id,user_id,item_id,amount) VALUES (?,?,?,?) ON CONFLICT(guild_id,user_id,item_id) DO UPDATE SET amount=amount+excluded.amount", (guild_id,user_id,item_id,amount))
+            cur=await self._conn.execute("SELECT balance FROM users WHERE guild_id=? AND user_id=?", (guild_id,user_id))
+            balance=int((await cur.fetchone())["balance"])
+            await self._conn.commit(); return True,"ok",balance
+        except Exception:
+            await self._conn.rollback(); raise
 
     async def add_balance(self, guild_id, user_id, amount):
         guild_id, user_id = str(guild_id), str(user_id)
