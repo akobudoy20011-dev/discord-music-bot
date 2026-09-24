@@ -13,6 +13,7 @@ from rpg.world import list_regions, get_region, list_events, get_event
 from rpg.exploration import world_status, travel, explore
 from rpg.towns import town_status, inn, shrine, alchemist, buy
 from rpg.items import get_item
+from rpg.crafting import MATERIALS, list_recipes, craft, salvage
 
 
 def xp_bar(current, maximum, length=14):
@@ -335,6 +336,76 @@ class RPG(commands.Cog):
             return
         item = result["item"]
         await ctx.send(f"✦ **UPGRADED** · {item['icon']} **{item['name']}** **+{result['old_level']} → +{result['new_level']}** · Paid **{result['cost']:,} RPG gold**.")
+
+    @rpg.command(name="materials", aliases=["mats", "resources"])
+    async def materials_command(self, ctx):
+        rows = await self.db.get_rpg_materials(ctx.guild.id, ctx.author.id)
+        if not rows:
+            await ctx.send("⛏️ You have no crafting materials yet. Defeat enemies or salvage equipment.")
+            return
+        lines = []
+        for row in rows:
+            data = MATERIALS.get(row["material_id"], {})
+            lines.append(f"{data.get('icon', '✦')} **{data.get('name', row['material_id'])}** ×{row['amount']}\\n{data.get('description', '')}")
+        await ctx.send(embed=discord.Embed(
+            title="♡ ECLIPSE · MATERIALS ♡",
+            description="\\n\\n".join(lines),
+            color=COLOR_PRIMARY
+        ))
+
+    @rpg.command(name="recipes", aliases=["recipe", "forge"])
+    async def recipes_command(self, ctx):
+        lines = []
+        for item_id, recipe in list_recipes():
+            item = get_item(item_id)
+            mats = " · ".join(
+                f"{MATERIALS[mid]['icon']} {MATERIALS[mid]['name']} ×{amount}"
+                for mid, amount in recipe["materials"].items()
+            )
+            gates = []
+            if recipe.get("requires_discovery"):
+                gates.append(f"discover {recipe['requires_discovery']}")
+            if recipe.get("requires_guardian"):
+                gates.append(f"defeat {recipe['requires_guardian']}")
+            gate_text = f" · 🔒 {', '.join(gates)}" if gates else ""
+            lines.append(f"{item['icon']} **{item['name']}** · 💰 {recipe['gold']:,}\\n{mats}{gate_text}")
+        await ctx.send(embed=discord.Embed(
+            title="♡ ECLIPSE · FORGE RECIPES ♡",
+            description="\\n\\n".join(lines) + "\\n\\nUse \`!rpg craft <item>\`.",
+            color=COLOR_PRIMARY
+        ))
+
+    @rpg.command(name="craft")
+    async def craft_command(self, ctx, item_id: str = None):
+        if not item_id:
+            await ctx.send("Use \`!rpg recipes\` to see what the forge can create.")
+            return
+        result = await craft(self.db, ctx.guild.id, ctx.author.id, item_id)
+        if not result["ok"]:
+            await ctx.send(f"❌ {result['message']}")
+            return
+        item = result["item"]
+        await ctx.send(
+            f"🔥 **FORGED** · {item['icon']} **{item['name']}** "
+            f"({item.get('rarity', 'common').title()})\\n"
+            f"The forge consumes the materials and **{result['recipe']['gold']:,} RPG gold**."
+        )
+
+    @rpg.command(name="salvage", aliases=["dismantle", "break"])
+    async def salvage_command(self, ctx, item_id: str = None):
+        if not item_id:
+            await ctx.send("Use \`!rpg inventory\` and choose an unequipped item to salvage.")
+            return
+        result = await salvage(self.db, ctx.guild.id, ctx.author.id, item_id)
+        if not result["ok"]:
+            await ctx.send(f"❌ {result['message']}")
+            return
+        item = result["item"]
+        yields = " · ".join(
+            f"{MATERIALS[mid]['icon']} {MATERIALS[mid]['name']} ×{amount}"
+            for mid, amount in result["yields"].items()
+        )
+        await ctx.send(f"♻️ **SALVAGED** · {item['icon']} **{item['name']}**\\nRecovered: {yields}")
 
     @rpg.command(name="skills")
     async def skills_command(self, ctx):
