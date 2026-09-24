@@ -8,7 +8,10 @@ ENEMIES = {
     "ash_drake": {"name":"Ash Drake","hp":160,"attack":22,"xp":130,"gold":100},
 }
 
-def random_enemy():
-    key=random.choice(list(ENEMIES))
+def random_enemy(region_id=None):
+    from .world import get_region, START_REGION
+    region = get_region(region_id or START_REGION)
+    pool = region["enemies"] if region else list(ENEMIES)
+    key=random.choice(pool)
     data=ENEMIES[key].copy(); data["id"]=key
     return data
