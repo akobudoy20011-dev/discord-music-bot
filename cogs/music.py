@@ -365,6 +365,8 @@ class GuildMusicState:
         # player thread unwinding. Track end handlers so one generation can
         # never advance the queue twice.
         self.ending_generations = set()
+        # Explicit state makes every playback transition observable.
+        self.player_state = "IDLE"
 
 
 class QueuePageView(discord.ui.View):
@@ -721,6 +723,13 @@ class Music(commands.Cog):
         return None
 
     async def _start_resolved_track(self, guild, state, query, requester_name, data):
+        state.player_state = "STARTING"
+        logger.info(
+            "PLAYER STARTING guild=%s query=%r generation_next=%s",
+            guild.id,
+            query,
+            state.playback_generation + 1,
+        )
         stream_url = data.get("url")
         if not stream_url:
             raise SongDownloadError("YouTube returned no stream URL.")
@@ -805,6 +814,13 @@ class Music(commands.Cog):
             # race inside discord.py's audio player.
             await self._wait_for_player_idle(vc)
             vc.play(source, after=after_playing)
+            state.player_state = "PLAYING"
+            logger.info(
+                "PLAYER PLAYING guild=%s generation=%s title=%r",
+                guild.id,
+                generation,
+                title,
+            )
         except Exception:
             try:
                 source.cleanup()
@@ -812,6 +828,7 @@ class Music(commands.Cog):
                 pass
             if state.playback_generation == generation:
                 state.current = None
+                state.player_state = "ERROR"
             raise
 
         if state.text_channel:
@@ -855,6 +872,17 @@ class Music(commands.Cog):
             return
 
         state.ending_generations.add(generation)
+        state.player_state = "TRANSITIONING"
+        vc_snapshot = guild.voice_client
+        logger.info(
+            "PLAYER END guild=%s generation=%s query=%r error=%r playing=%s paused=%s",
+            guild.id,
+            generation,
+            query,
+            error,
+            vc_snapshot.is_playing() if vc_snapshot else None,
+            vc_snapshot.is_paused() if vc_snapshot else None,
+        )
         try:
             if state.intentional_stop_generation == generation:
                 state.intentional_stop_generation = None
@@ -862,6 +890,8 @@ class Music(commands.Cog):
                     state.current = None
 
                 if state.current is None and not state.queue:
+                    state.player_state = "IDLE"
+                    self._schedule_autodisconnect(guild)
                     return
 
                 await self._wait_for_player_idle(guild.voice_client)
@@ -907,6 +937,7 @@ class Music(commands.Cog):
                 state.history.append(finished)
                 state.last_track = finished
                 state.current = None
+                state.player_state = "TRANSITIONING"
 
             vc = guild.voice_client
             if vc is None:
@@ -943,79 +974,148 @@ class Music(commands.Cog):
             await self._play_next_unlocked(guild)
 
     async def _play_next_unlocked(self, guild):
+        """Own all queue transitions; never recurse into itself."""
         state = self.states.get(guild.id)
         if state is None:
             return
+
         await self.ensure_settings(guild.id)
-        vc = guild.voice_client
-        if vc is None:
-            if state.twentyfour_seven and state.voice_channel_id and not state.manual_disconnect:
-                await self._restore_24_7(guild)
-            return
-        next_query = None
-        requester_name = None
-        if state.loop_mode == "single" and state.last_track:
-            next_query = state.last_track["query"]
-            requester_name = state.last_track["requester_name"]
-        elif state.queue:
-            item = state.queue.popleft()
-            next_query = item["query"]
-            requester_name = item["requester_name"]
-            if state.loop_mode == "queue" and state.last_track:
-                state.queue.append({"query": state.last_track["query"], "requester_name": state.last_track["requester_name"]})
-        if next_query is None and state.autoplay and state.last_track and state.loop_mode == "off":
-            try:
-                candidate = await self._autoplay_candidate(guild, state.last_track.get("title") or state.last_track.get("query", ""))
-                if candidate:
-                    next_query = candidate.get("webpage_url") or candidate.get("url")
-                    requester_name = "ECLIPSE Autoplay"
-                    data = candidate
-                else:
-                    data = None
-            except Exception as error:
-                logger.warning("Autoplay search failed for guild %s: %s", guild.id, error)
-                data = None
-        else:
-            data = None
-        if next_query is None:
-            state.current = None
-            if state.text_channel:
-                await state.text_channel.send("📭 Queue finished.")
-            self._schedule_autodisconnect(guild)
-            return
-        self._cancel_autodisconnect(state)
-        try:
-            data = data or await self._resolve_for_playback(guild, next_query)
-        except Exception as first_error:
-            if state.text_channel:
-                await state.text_channel.send(f"❌ Couldn't start **{next_query}**: {first_error}")
-            state.current = None
-            while state.queue:
-                failed = state.queue.popleft()
-                try:
-                    data = await self._resolve_for_playback(guild, failed["query"])
-                    next_query = failed["query"]
-                    requester_name = failed["requester_name"]
-                    break
-                except Exception as retry_error:
-                    if state.text_channel:
-                        await state.text_channel.send(f"❌ Skipping **{failed['query']}**: {retry_error}")
-            else:
-                self._schedule_autodisconnect(guild)
+
+        failed_attempts = 0
+        max_attempts = max(10, min(state.queue_limit + 5, 505))
+
+        while failed_attempts < max_attempts:
+            vc = guild.voice_client
+
+            if vc is None:
+                state.player_state = "IDLE"
+                if state.twentyfour_seven and state.voice_channel_id and not state.manual_disconnect:
+                    await self._restore_24_7(guild)
+                    vc = guild.voice_client
+                if vc is None:
+                    return
+
+            if vc.is_playing() or vc.is_paused():
+                state.player_state = "PLAYING" if vc.is_playing() else "PAUSED"
+                logger.debug(
+                    "PLAYER TRANSITION skipped: active voice client guild=%s state=%s",
+                    guild.id,
+                    state.player_state,
+                )
                 return
-        try:
-            await self._start_resolved_track(guild, state, next_query, requester_name, data)
-        except Exception as playback_error:
-            logger.error("Playback start failed for '%s': %s", next_query, playback_error)
-            try:
-                fresh = await self._resolve_for_playback(guild, next_query)
-                await self._start_resolved_track(guild, state, next_query, requester_name, fresh)
+
+            state.player_state = "TRANSITIONING"
+            next_query = None
+            requester_name = None
+            data = None
+
+            if state.loop_mode == "single" and state.last_track:
+                next_query = state.last_track["query"]
+                requester_name = state.last_track["requester_name"]
+
+            elif state.queue:
+                item = state.queue.popleft()
+                next_query = item["query"]
+                requester_name = item["requester_name"]
+                if state.loop_mode == "queue" and state.last_track:
+                    state.queue.append({
+                        "query": state.last_track["query"],
+                        "requester_name": state.last_track["requester_name"],
+                    })
+
+            elif state.autoplay and state.last_track and state.loop_mode == "off":
+                try:
+                    candidate = await self._autoplay_candidate(
+                        guild,
+                        state.last_track.get("title")
+                        or state.last_track.get("query", ""),
+                    )
+                    if candidate:
+                        next_query = candidate.get("webpage_url") or candidate.get("url")
+                        requester_name = "ECLIPSE Autoplay"
+                        data = candidate
+                except Exception as error:
+                    logger.warning("Autoplay search failed for guild %s: %s", guild.id, error)
+
+            if next_query is None:
+                state.current = None
+                state.player_state = "IDLE"
                 if state.text_channel:
-                    await state.text_channel.send("🔄 Stream refreshed and playback restarted.")
+                    await state.text_channel.send("📭 Queue finished.")
+                self._schedule_autodisconnect(guild)
+                logger.info("PLAYER IDLE guild=%s reason=queue-empty", guild.id)
+                return
+
+            self._cancel_autodisconnect(state)
+
+            if data is None:
+                try:
+                    data = await self._resolve_for_playback(guild, next_query)
+                except Exception as error:
+                    failed_attempts += 1
+                    logger.warning(
+                        "PLAYER RESOLVE FAILED guild=%s attempt=%s query=%r error=%s",
+                        guild.id,
+                        failed_attempts,
+                        next_query,
+                        error,
+                    )
+                    if state.text_channel:
+                        await state.text_channel.send(
+                            f"❌ Couldn't start **{next_query}**: {error}"
+                        )
+                    continue
+
+            try:
+                await self._start_resolved_track(
+                    guild, state, next_query, requester_name, data
+                )
+                state.player_state = "PLAYING"
                 return
             except Exception:
-                state.current = None
-                await self._play_next_unlocked(guild)
+                failed_attempts += 1
+                logger.exception(
+                    "PLAYER START FAILED guild=%s attempt=%s query=%r",
+                    guild.id,
+                    failed_attempts,
+                    next_query,
+                )
+
+                try:
+                    state.player_state = "RECOVERING"
+                    fresh = await self._resolve_for_playback(guild, next_query)
+                    await self._start_resolved_track(
+                        guild, state, next_query, requester_name, fresh
+                    )
+                    state.player_state = "PLAYING"
+                    if state.text_channel:
+                        await state.text_channel.send(
+                            "🔄 Stream refreshed and playback restarted."
+                        )
+                    return
+                except Exception as refresh_error:
+                    logger.warning(
+                        "PLAYER RECOVERY FAILED guild=%s query=%r error=%s",
+                        guild.id,
+                        next_query,
+                        refresh_error,
+                    )
+                    state.current = None
+                    state.player_state = "TRANSITIONING"
+                    continue
+
+        state.current = None
+        state.player_state = "ERROR"
+        logger.error(
+            "PLAYER TRANSITION ABORTED guild=%s after %s failed attempts",
+            guild.id,
+            failed_attempts,
+        )
+        if state.text_channel:
+            await state.text_channel.send(
+                "❌ Playback could not advance after several failed tracks. "
+                "The queue is still available; try !play again."
+            )
 
     async def _skip_guild(self, guild, channel=None, announce=False):
         state = await self.ensure_settings(guild.id)
@@ -1498,11 +1598,3 @@ class Music(commands.Cog):
             return
         status = await ctx.send(f"⏳ Fetching **{query}**...")
         ok, result_message = await send_song_as_file(ctx.channel, query, ctx.guild)
-        if ok:
-            await status.delete()
-        else:
-            await status.edit(content=f"❌ {result_message}")
-
-
-async def setup(bot):
-    await bot.add_cog(Music(bot))
