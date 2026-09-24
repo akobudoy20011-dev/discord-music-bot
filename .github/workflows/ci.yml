@@ -66,6 +66,7 @@ jobs:
               "rpg.exploration",
               "rpg.towns",
               "rpg.crafting",
+              "rpg.companions",
           ]
 
           for module in modules:
@@ -121,6 +122,21 @@ jobs:
                   assert user["arcade_wagered"] == 100
                   assert user["arcade_net"] == 100
                   assert user["arcade_best_streak"] == 1
+
+
+                  # Companions and world bosses: schema + atomic lifecycle.
+                  ok, reason, companion = await db.recruit_rpg_companion("ci-guild", "ci-user", "moonfox", 0)
+                  assert ok and companion["companion_id"] == "moonfox"
+                  ok, reason = await db.set_active_rpg_companion("ci-guild", "ci-user", "moonfox")
+                  assert ok
+                  active = await db.get_active_rpg_companion("ci-guild", "ci-user")
+                  assert active["companion_id"] == "moonfox"
+                  boss = await db.create_world_boss("ci-guild", "void_colossus", "Void Colossus", 1000, 10, 100, 50, 3600)
+                  assert boss["status"] == "active"
+                  ok, reason, hp = await db.damage_world_boss("ci-guild", "ci-user", 1000)
+                  assert ok and reason == "defeated" and hp == 0
+                  reward, reason = await db.claim_world_boss_reward("ci-guild", "ci-user")
+                  assert reward is not None and reward[2] == 1000
 
                   await db.close()
 
