@@ -14,6 +14,13 @@ def boss_phase(b):
     if ratio>0.35: return "Enraged",1.25
     return "Cataclysm",1.55
 
+def boss_effect(b, phase):
+    if b["boss_id"]=="void_colossus":
+        return {"Awakening":("void_pulse",0.90,0.18),"Enraged":("gravity_crush",0.80,0.28),"Cataclysm":("event_horizon",0.70,0.38)}[phase]
+    if b["boss_id"]=="astral_leviathan":
+        return {"Awakening":("astral_current",0.92,0.18),"Enraged":("starfall_surge",0.82,0.28),"Cataclysm":("cosmic_rupture",0.72,0.38)}[phase]
+    return {"Awakening":("sovereign_aura",0.94,0.18),"Enraged":("imperial_wrath",0.80,0.30),"Cataclysm":("final_decree",0.68,0.40)}[phase]
+
 def boss_mechanic(b, phase):
     bid=b["boss_id"]
     if bid=="void_colossus":
@@ -75,13 +82,20 @@ class WorldBoss(commands.Cog):
         if not b or b["status"]!="active" or float(b["ends_at"])<=time.time(): await ctx.send("❌ No active world boss."); return
         p=await get_player(self.db,ctx.guild.id,ctx.author.id); gear=await equipment_stats(self.db,ctx.guild.id,ctx.author.id)
         phase,multiplier=boss_phase(b)
+        effect_multiplier=await self.db.consume_world_boss_effects(ctx.guild.id,b["boss_id"],ctx.author.id)
         base=int(p["strength"])*8+int(p["magic"])*5+int(p["level"])*25+gear["power"]*6
-        damage=max(100,int(base*random.uniform(0.90,1.10)*multiplier))
+        damage=max(100,int(base*random.uniform(0.90,1.10)*multiplier*effect_multiplier))
+        effect_id,debuff_multiplier,proc_chance=boss_effect(b,phase)
+        triggered=False
+        if random.random()<proc_chance:
+            await self.db.add_world_boss_effect(ctx.guild.id,b["boss_id"],ctx.author.id,effect_id,debuff_multiplier,uses=2,duration=120)
+            triggered=True
         damage=min(damage,max(1,int(b["hp"])))
         ok,reason,hp=await self.db.damage_world_boss(ctx.guild.id,ctx.author.id,damage)
         if not ok: await ctx.send("❌ The world boss is no longer active."); return
         new_boss=await self.db.get_world_boss(ctx.guild.id)
-        await ctx.send(f"⚔️ **{ctx.author.display_name}** dealt **{damage:,}** damage · Boss HP **{hp:,}**.")
+        effect_note=f" · 💢 **{effect_id.replace("_"," ").title()}** weakened your next attacks" if triggered else ""
+        await ctx.send(f"⚔️ **{ctx.author.display_name}** dealt **{damage:,}** damage · Boss HP **{hp:,}**{effect_note}.")
         if new_boss and boss_phase(new_boss)[0] != phase:
             new_phase=boss_phase(new_boss)[0]
             mechanic,mechanic_text=boss_mechanic(new_boss,new_phase)
