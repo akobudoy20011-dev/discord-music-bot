@@ -51,6 +51,22 @@ CREATE TABLE IF NOT EXISTS users (
     PRIMARY KEY (guild_id, user_id)
 );
 
+CREATE TABLE IF NOT EXISTS game_stats (
+    guild_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    game_id TEXT NOT NULL,
+    plays INTEGER NOT NULL DEFAULT 0,
+    wins INTEGER NOT NULL DEFAULT 0,
+    losses INTEGER NOT NULL DEFAULT 0,
+    ties INTEGER NOT NULL DEFAULT 0,
+    wagered INTEGER NOT NULL DEFAULT 0,
+    won_coins INTEGER NOT NULL DEFAULT 0,
+    lost_coins INTEGER NOT NULL DEFAULT 0,
+    best_streak INTEGER NOT NULL DEFAULT 0,
+    current_streak INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (guild_id, user_id, game_id)
+);
+
 CREATE TABLE IF NOT EXISTS inventory (
     guild_id TEXT NOT NULL,
     user_id TEXT NOT NULL,
@@ -406,6 +422,51 @@ class Database:
         return len(rows) + 1
 
     # ------------------------------------------------------------
+    # ------------------------------------------------------------
+    # GAME HALL STATS
+    # ------------------------------------------------------------
+
+    async def record_game(self, guild_id, user_id, game_id, result="loss", wager=0, net=0):
+        guild_id, user_id, game_id = str(guild_id), str(user_id), str(game_id)
+        net = int(net)
+        wager = max(0, int(wager))
+        await self._conn.execute(
+            "INSERT INTO game_stats "
+            "(guild_id,user_id,game_id,plays,wins,losses,ties,wagered,won_coins,lost_coins,best_streak,current_streak) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(guild_id,user_id,game_id) DO UPDATE SET "
+            "plays=plays+1,wins=wins+excluded.wins,losses=losses+excluded.losses,ties=ties+excluded.ties,"
+            "wagered=wagered+excluded.wagered,won_coins=won_coins+excluded.won_coins,lost_coins=lost_coins+excluded.lost_coins,"
+            "current_streak=CASE WHEN excluded.wins=1 THEN current_streak+1 ELSE 0 END,"
+            "best_streak=MAX(best_streak,CASE WHEN excluded.wins=1 THEN current_streak+1 ELSE best_streak END)",
+            (guild_id,user_id,game_id,1,int(result=="win"),int(result=="loss"),int(result=="tie"),
+             wager,max(0,net),max(0,-net),int(result=="win"),int(result=="win"))
+        )
+        await self._conn.commit()
+
+    async def get_game_stats(self, guild_id, user_id, game_id=None):
+        if game_id:
+            cur = await self._conn.execute(
+                "SELECT * FROM game_stats WHERE guild_id=? AND user_id=? AND game_id=?",
+                (str(guild_id),str(user_id),str(game_id))
+            )
+            row = await cur.fetchone()
+            return dict(row) if row else None
+        cur = await self._conn.execute(
+            "SELECT * FROM game_stats WHERE guild_id=? AND user_id=? ORDER BY plays DESC",
+            (str(guild_id),str(user_id))
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def game_leaderboard(self, guild_id, game_id, limit=10):
+        cur = await self._conn.execute(
+            "SELECT user_id,plays,wins,losses,ties,wagered,won_coins,lost_coins,best_streak "
+            "FROM game_stats WHERE guild_id=? AND game_id=? "
+            "ORDER BY wins DESC,best_streak DESC,won_coins DESC LIMIT ?",
+            (str(guild_id),str(game_id),int(limit))
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
     # ECLIPSE PROFILE / BANK / MUSIC / WORLD
     # ------------------------------------------------------------
 
