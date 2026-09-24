@@ -23,6 +23,7 @@ swapping the backend later means editing this one file, not every cog.
 import json
 import os
 import time
+import random
 
 import aiosqlite
 
@@ -82,6 +83,8 @@ CREATE TABLE IF NOT EXISTS rpg_players (
     gold INTEGER NOT NULL DEFAULT 0,
     created_at REAL NOT NULL,
     last_adventure REAL,
+    region TEXT NOT NULL DEFAULT 'moonlit_vale',
+    travel_until REAL NOT NULL DEFAULT 0,
     PRIMARY KEY (guild_id, user_id)
 );
 
@@ -116,6 +119,15 @@ CREATE TABLE IF NOT EXISTS rpg_battles (
     guarding INTEGER NOT NULL DEFAULT 0,
     created_at REAL NOT NULL,
     PRIMARY KEY (guild_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS rpg_worlds (
+    guild_id TEXT PRIMARY KEY,
+    season TEXT NOT NULL DEFAULT 'eclipse',
+    day INTEGER NOT NULL DEFAULT 1,
+    weather TEXT NOT NULL DEFAULT 'clear',
+    instability INTEGER NOT NULL DEFAULT 0,
+    updated_at REAL NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS rpg_skills (
@@ -160,6 +172,12 @@ class Database:
         self._conn = await aiosqlite.connect(self.path)
         self._conn.row_factory = aiosqlite.Row
         await self._conn.executescript(SCHEMA)
+        cur = await self._conn.execute("PRAGMA table_info(rpg_players)")
+        columns = {row["name"] for row in await cur.fetchall()}
+        if "region" not in columns:
+            await self._conn.execute("ALTER TABLE rpg_players ADD COLUMN region TEXT NOT NULL DEFAULT 'moonlit_vale'")
+        if "travel_until" not in columns:
+            await self._conn.execute("ALTER TABLE rpg_players ADD COLUMN travel_until REAL NOT NULL DEFAULT 0")
         await self._conn.commit()
 
     async def close(self):
@@ -417,7 +435,7 @@ class Database:
         allowed = {
             "class_key", "level", "xp", "hp", "max_hp",
             "mp", "max_mp", "strength", "defense",
-            "magic", "agility", "gold", "last_adventure"
+            "magic", "agility", "gold", "last_adventure", "region", "travel_until"
         }
         fields = {k: v for k, v in fields.items() if k in allowed}
 
@@ -465,6 +483,51 @@ class Database:
 
         return old_level, level, player
 
+
+
+    async def get_rpg_world(self, guild_id):
+        guild_id = str(guild_id)
+        cur = await self._conn.execute(
+            "SELECT * FROM rpg_worlds WHERE guild_id = ?", (guild_id,)
+        )
+        row = await cur.fetchone()
+        if row is None:
+            await self._conn.execute(
+                "INSERT INTO rpg_worlds (guild_id, updated_at) VALUES (?, ?)",
+                (guild_id, time.time())
+            )
+            await self._conn.commit()
+            cur = await self._conn.execute(
+                "SELECT * FROM rpg_worlds WHERE guild_id = ?", (guild_id,)
+            )
+            row = await cur.fetchone()
+        return dict(row)
+
+    async def update_rpg_world(self, guild_id, **fields):
+        allowed = {"season", "day", "weather", "instability", "updated_at"}
+        fields = {k: v for k, v in fields.items() if k in allowed}
+        if not fields:
+            return await self.get_rpg_world(guild_id)
+        await self.get_rpg_world(guild_id)
+        clause = ", ".join(f"{k} = ?" for k in fields)
+        await self._conn.execute(
+            f"UPDATE rpg_worlds SET {clause} WHERE guild_id = ?",
+            list(fields.values()) + [str(guild_id)]
+        )
+        await self._conn.commit()
+        return await self.get_rpg_world(guild_id)
+
+    async def advance_rpg_world(self, guild_id):
+        world = await self.get_rpg_world(guild_id)
+        weather = random.choice(["clear", "mist", "rain", "moonlight", "ashfall"])
+        instability = min(10, max(0, int(world["instability"]) + random.choice([-1, 0, 0, 1])))
+        return await self.update_rpg_world(
+            guild_id,
+            day=int(world["day"]) + 1,
+            weather=weather,
+            instability=instability,
+            updated_at=time.time()
+        )
 
     async def get_rpg_quests(self, guild_id, user_id):
         cur = await self._conn.execute(
