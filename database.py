@@ -389,6 +389,135 @@ CREATE TABLE IF NOT EXISTS eclipse_world_contributors (
     PRIMARY KEY (guild_id, event_id, user_id)
 );
 
+CREATE TABLE IF NOT EXISTS guilds (
+    guild_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    level INTEGER NOT NULL DEFAULT 1,
+    xp INTEGER NOT NULL DEFAULT 0,
+    treasury INTEGER NOT NULL DEFAULT 0,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS guild_members (
+    guild_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'member',
+    joined_at REAL NOT NULL,
+    contribution INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (guild_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS guild_invites (
+    invite_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id TEXT NOT NULL,
+    inviter_id TEXT NOT NULL,
+    invitee_id TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    expires_at REAL NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open'
+);
+
+CREATE TABLE IF NOT EXISTS guild_events (
+    guild_id TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL,
+    target INTEGER NOT NULL,
+    progress INTEGER NOT NULL DEFAULT 0,
+    reward_coins INTEGER NOT NULL DEFAULT 0,
+    reward_xp INTEGER NOT NULL DEFAULT 0,
+    ends_at REAL NOT NULL,
+    completed INTEGER NOT NULL DEFAULT 0,
+    created_at REAL NOT NULL,
+    PRIMARY KEY (guild_id, event_id)
+);
+
+CREATE TABLE IF NOT EXISTS guild_event_contributors (
+    guild_id TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    contribution INTEGER NOT NULL DEFAULT 0,
+    rewarded INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (guild_id, event_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS guild_bosses (
+    guild_id TEXT PRIMARY KEY,
+    boss_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    max_hp INTEGER NOT NULL,
+    hp INTEGER NOT NULL,
+    attack INTEGER NOT NULL DEFAULT 50,
+    reward_coins INTEGER NOT NULL DEFAULT 10000,
+    reward_xp INTEGER NOT NULL DEFAULT 1000,
+    ends_at REAL NOT NULL,
+    defeated INTEGER NOT NULL DEFAULT 0,
+    created_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS guild_boss_contributors (
+    guild_id TEXT NOT NULL,
+    boss_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    damage INTEGER NOT NULL DEFAULT 0,
+    rewarded INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (guild_id, boss_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS guild_wars (
+    war_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id TEXT NOT NULL,
+    opponent_guild_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open',
+    guild_score INTEGER NOT NULL DEFAULT 0,
+    opponent_score INTEGER NOT NULL DEFAULT 0,
+    created_at REAL NOT NULL,
+    ends_at REAL NOT NULL,
+    winner_guild_id TEXT
+);
+
+CREATE TABLE IF NOT EXISTS guild_raids (
+    raid_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id TEXT NOT NULL,
+    raid_id_key TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    boss_hp INTEGER NOT NULL,
+    max_hp INTEGER NOT NULL,
+    reward_coins INTEGER NOT NULL DEFAULT 25000,
+    reward_xp INTEGER NOT NULL DEFAULT 2500,
+    ends_at REAL NOT NULL,
+    created_at REAL NOT NULL,
+    completed INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS guild_raid_contributors (
+    raid_id INTEGER NOT NULL,
+    user_id TEXT NOT NULL,
+    damage INTEGER NOT NULL DEFAULT 0,
+    rewarded INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (raid_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS guild_legendary_equipment (
+    guild_id TEXT NOT NULL,
+    equipment_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    rarity TEXT NOT NULL DEFAULT 'legendary',
+    acquired_at REAL NOT NULL,
+    PRIMARY KEY (guild_id, equipment_id)
+);
+
+CREATE TABLE IF NOT EXISTS guild_server_events (
+    guild_id TEXT PRIMARY KEY,
+    event_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    multiplier REAL NOT NULL DEFAULT 1.0,
+    ends_at REAL NOT NULL,
+    created_at REAL NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS warnings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     guild_id TEXT NOT NULL,
@@ -776,42 +905,139 @@ class Database:
             await self._conn.rollback()
             raise
 
+    async def withdraw_balance(self, guild_id, user_id, amount):
+        """Atomically withdraw coins; never allows an overdraft."""
+        guild_id, user_id = str(guild_id), str(user_id)
+        amount = int(amount)
+        if amount <= 0:
+            return False, "amount", 0
+        await self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            await self._conn.execute(
+                "INSERT OR IGNORE INTO users (guild_id,user_id,balance) VALUES (?,?,?)",
+                (guild_id, user_id, STARTING_BALANCE),
+            )
+            cur = await self._conn.execute(
+                "UPDATE users SET balance=balance-? WHERE guild_id=? AND user_id=? AND balance>=?",
+                (amount, guild_id, user_id, amount),
+            )
+            if cur.rowcount != 1:
+                cur = await self._conn.execute(
+                    "SELECT balance FROM users WHERE guild_id=? AND user_id=?",
+                    (guild_id, user_id),
+                )
+                row = await cur.fetchone()
+                await self._conn.rollback()
+                return False, "balance", int(row["balance"])
+            cur = await self._conn.execute(
+                "SELECT balance FROM users WHERE guild_id=? AND user_id=?",
+                (guild_id, user_id),
+            )
+            balance = int((await cur.fetchone())["balance"])
+            await self._conn.commit()
+            return True, "ok", balance
+        except Exception:
+            await self._conn.rollback()
+            raise
+
+    async def settle_expired_marketplace(self, guild_id):
+        """Return escrowed marketplace items from every expired open listing."""
+        guild_id = str(guild_id)
+        now = time.time()
+        await self._conn.execute("BEGIN IMMEDIATE")
+        returned = 0
+        try:
+            cur = await self._conn.execute(
+                "SELECT * FROM economy_trades WHERE guild_id=? AND status='open' AND expires_at<=?",
+                (guild_id, now),
+            )
+            rows = await cur.fetchall()
+            for row in rows:
+                await self._conn.execute(
+                    "INSERT INTO inventory(guild_id,user_id,item_id,amount) VALUES(?,?,?,?) "
+                    "ON CONFLICT(guild_id,user_id,item_id) DO UPDATE SET amount=amount+excluded.amount",
+                    (guild_id, row["seller_id"], row["item_id"], int(row["amount"])),
+                )
+                await self._conn.execute(
+                    "UPDATE economy_trades SET status='expired' WHERE trade_id=?",
+                    (int(row["trade_id"]),),
+                )
+                returned += 1
+            await self._conn.commit()
+            return returned
+        except Exception:
+            await self._conn.rollback()
+            raise
+
     async def create_trade(self, guild_id, seller_id, item_id, amount, price, expires_in=3600):
-        guild_id, seller_id = str(guild_id), str(seller_id)
+        guild_id, seller_id, item_id = str(guild_id), str(seller_id), str(item_id)
         amount, price = int(amount), int(price)
         if amount <= 0 or price <= 0:
             return None, "invalid"
-        remaining = await self.consume_item(guild_id, seller_id, item_id, amount)
-        if remaining is None:
-            return None, "item"
-        now = time.time()
-        cur = await self._conn.execute(
-            "INSERT INTO economy_trades (guild_id,seller_id,item_id,amount,price,status,created_at,expires_at) VALUES (?,?,?,?,?,?,?,?)",
-            (guild_id,seller_id,str(item_id),amount,price,"open",now,now+max(60,int(expires_in)))
-        )
-        await self._conn.commit()
-        return int(cur.lastrowid), "ok"
+        await self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            cur = await self._conn.execute(
+                "UPDATE inventory SET amount=amount-? WHERE guild_id=? AND user_id=? AND item_id=? AND amount>=?",
+                (amount, guild_id, seller_id, item_id, amount),
+            )
+            if cur.rowcount != 1:
+                await self._conn.rollback()
+                return None, "item"
+            await self._conn.execute(
+                "DELETE FROM inventory WHERE guild_id=? AND user_id=? AND item_id=? AND amount<=0",
+                (guild_id, seller_id, item_id),
+            )
+            now = time.time()
+            cur = await self._conn.execute(
+                "INSERT INTO economy_trades(guild_id,seller_id,item_id,amount,price,status,created_at,expires_at) VALUES(?,?,?,?,?,?,?,?)",
+                (guild_id,seller_id,item_id,amount,price,"open",now,now+max(60,int(expires_in))),
+            )
+            await self._conn.commit()
+            return int(cur.lastrowid), "ok"
+        except Exception:
+            await self._conn.rollback()
+            raise
 
     async def get_open_trades(self, guild_id, limit=10):
-        guild_id = str(guild_id)
-        await self._conn.execute("UPDATE economy_trades SET status='expired' WHERE guild_id=? AND status='open' AND expires_at<=?", (guild_id,time.time()))
-        await self._conn.commit()
-        cur = await self._conn.execute("SELECT * FROM economy_trades WHERE guild_id=? AND status='open' ORDER BY trade_id DESC LIMIT ?", (guild_id,int(limit)))
+        await self.settle_expired_marketplace(guild_id)
+        cur = await self._conn.execute(
+            "SELECT * FROM economy_trades WHERE guild_id=? AND status='open' ORDER BY trade_id DESC LIMIT ?",
+            (str(guild_id), int(limit)),
+        )
         return [dict(r) for r in await cur.fetchall()]
 
     async def cancel_trade(self, guild_id, seller_id, trade_id):
+        guild_id, seller_id = str(guild_id), str(seller_id)
         await self._conn.execute("BEGIN IMMEDIATE")
         try:
-            cur=await self._conn.execute("SELECT * FROM economy_trades WHERE trade_id=? AND guild_id=? AND seller_id=? AND status='open'",(int(trade_id),str(guild_id),str(seller_id)))
-            row=await cur.fetchone()
+            cur = await self._conn.execute(
+                "SELECT * FROM economy_trades WHERE trade_id=? AND guild_id=? AND seller_id=? AND status='open'",
+                (int(trade_id), guild_id, seller_id),
+            )
+            row = await cur.fetchone()
             if not row:
-                await self._conn.rollback(); return None
-            await self._conn.execute("UPDATE economy_trades SET status='cancelled' WHERE trade_id=?",(int(trade_id),))
+                await self._conn.rollback()
+                return None
+            if float(row["expires_at"]) <= time.time():
+                await self._conn.execute("UPDATE economy_trades SET status='expired' WHERE trade_id=?", (int(trade_id),))
+                await self._conn.execute(
+                    "INSERT INTO inventory(guild_id,user_id,item_id,amount) VALUES(?,?,?,?) "
+                    "ON CONFLICT(guild_id,user_id,item_id) DO UPDATE SET amount=amount+excluded.amount",
+                    (guild_id,seller_id,row["item_id"],int(row["amount"])),
+                )
+                await self._conn.commit()
+                return None
+            await self._conn.execute("UPDATE economy_trades SET status='cancelled' WHERE trade_id=?", (int(trade_id),))
+            await self._conn.execute(
+                "INSERT INTO inventory(guild_id,user_id,item_id,amount) VALUES(?,?,?,?) "
+                "ON CONFLICT(guild_id,user_id,item_id) DO UPDATE SET amount=amount+excluded.amount",
+                (guild_id,seller_id,row["item_id"],int(row["amount"])),
+            )
             await self._conn.commit()
-            await self.add_item(guild_id,seller_id,row["item_id"],row["amount"])
             return dict(row)
         except Exception:
-            await self._conn.rollback(); raise
+            await self._conn.rollback()
+            raise
 
     async def buy_trade(self, guild_id, buyer_id, trade_id):
         guild_id,buyer_id=str(guild_id),str(buyer_id)
@@ -819,11 +1045,21 @@ class Database:
         try:
             cur=await self._conn.execute("SELECT * FROM economy_trades WHERE trade_id=? AND guild_id=? AND status='open'",(int(trade_id),guild_id))
             row=await cur.fetchone()
-            if not row or float(row["expires_at"])<=time.time():
-                if row: await self._conn.execute("UPDATE economy_trades SET status='expired' WHERE trade_id=?",(int(trade_id),))
-                await self._conn.commit(); return None,"missing"
+            if not row:
+                await self._conn.rollback()
+                return None,"missing"
+            if float(row["expires_at"])<=time.time():
+                await self._conn.execute("UPDATE economy_trades SET status='expired' WHERE trade_id=?",(int(trade_id),))
+                await self._conn.execute(
+                    "INSERT INTO inventory(guild_id,user_id,item_id,amount) VALUES(?,?,?,?) "
+                    "ON CONFLICT(guild_id,user_id,item_id) DO UPDATE SET amount=amount+excluded.amount",
+                    (guild_id,row["seller_id"],row["item_id"],int(row["amount"])),
+                )
+                await self._conn.commit()
+                return None,"missing"
             if row["seller_id"]==buyer_id:
                 await self._conn.rollback(); return None,"self"
+            await self._conn.execute("INSERT OR IGNORE INTO users(guild_id,user_id,balance) VALUES(?,?,?)",(guild_id,buyer_id,STARTING_BALANCE))
             cur=await self._conn.execute("UPDATE users SET balance=balance-? WHERE guild_id=? AND user_id=? AND balance>=?",(int(row["price"]),guild_id,buyer_id,int(row["price"])))
             if cur.rowcount!=1:
                 await self._conn.rollback(); return None,"balance"
