@@ -67,6 +67,8 @@ COGS = [
     "cogs.science_game",
     "cogs.rpg",
     "cogs.guilds",
+    "cogs.companions",
+    "cogs.worldboss",
 ]
 
 
