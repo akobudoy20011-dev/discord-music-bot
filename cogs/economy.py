@@ -287,7 +287,6 @@ class Economy(commands.Cog):
         if investment_id is None:
             await ctx.send("💸 You don't have enough coins for that investment.")
             return
-        await self.db.record_economy_activity(ctx.guild.id, ctx.author.id, spent=amount)
         await ctx.send(
             f"📈 **{plan.title()} Investment #{investment_id}** created.\n"
             f"💰 Principal: **{amount:,}**\n"
@@ -318,6 +317,11 @@ class Economy(commands.Cog):
     @commands.command(name="redeem")
     @commands.cooldown(1, 3, commands.BucketType.user)
     async def redeem(self, ctx, investment_id: int):
+        active = await self.db.get_investments(ctx.guild.id, ctx.author.id, active_only=True)
+        principal = next(
+            (int(row["principal"]) for row in active if int(row["investment_id"]) == int(investment_id)),
+            0,
+        )
         payout, reason = await self.db.redeem_investment(ctx.guild.id, ctx.author.id, investment_id)
         if payout is None:
             if reason == "missing":
@@ -325,8 +329,10 @@ class Economy(commands.Cog):
             else:
                 await ctx.send(f"⏳ Investment matures in **{fmt_time(reason)}**.")
             return
-        await self.db.record_economy_activity(ctx.guild.id, ctx.author.id, earned=payout)
-        await ctx.send(f"✨ Investment **#{investment_id}** matured. You received **{payout:,} coins**.")
+        profit = max(0, int(payout) - principal)
+        if profit:
+            await self.db.record_economy_activity(ctx.guild.id, ctx.author.id, earned=profit)
+        await ctx.send(f"✨ Investment **#{investment_id}** matured. You received **{payout:,} coins** (**+{profit:,} profit**).")
 
     @commands.command(name="market", aliases=["listings", "bazaar"])
     async def market(self, ctx):
