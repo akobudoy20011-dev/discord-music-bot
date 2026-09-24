@@ -6,6 +6,7 @@ its upgrade level, preserving compatibility with existing inventories.
 """
 
 from .items import get_item, rarity_multiplier
+from .companions import COMPANIONS
 
 EQUIPMENT_SLOTS = ("weapon", "armor", "accessory", "relic")
 
@@ -133,6 +134,18 @@ async def equipment_stats(db, guild_id, user_id):
         scale = rarity_multiplier(item) * (1 + max(0, int(row["level"]) - 1) * 0.25)
         for key in totals:
             totals[key] += int(round(float(item.get(key, 0)) * scale))
+
+    # Active companion bonuses are folded into the same aggregate used by
+    # combat.py, so companions become genuine RPG stat passives without
+    # changing the finished combat engine.
+    companion = await db.get_active_rpg_companion(guild_id, user_id)
+    if companion:
+        data = COMPANIONS.get(str(companion["companion_id"]).lower())
+        if data:
+            scale = 1 + max(0, int(companion["level"]) - 1) * 0.10
+            for key, value in data["bonus"].items():
+                if key in totals:
+                    totals[key] += int(round(float(value) * scale))
     return totals
 
 def upgrade_cost(item, level):
