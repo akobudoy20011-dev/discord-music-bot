@@ -24,7 +24,7 @@ from constants import COLOR_MUSIC, footer
 
 logger = logging.getLogger("music_bot")
 
-YTDLP_COOKIES_FILE = os.getenv("YTDLP_COOKIES_FILE") or "cookies.txt"
+YTDLP_COOKIES_FILE = os.getenv("YTDLP_COOKIES_FILE") or ""
 
 # yt-dlp rewrites the cookie file after every request (YouTube rotates
 # session cookies), so it needs a writable path. Render (and similar
@@ -66,11 +66,14 @@ YTDL_OPTIONS = {
     "no_warnings": True,
     "default_search": "auto",
     "source_address": "0.0.0.0",
-    "extractor_args": {"youtube": {"player_client": ["android"]}},
+    "retries": 3,
+    "extractor_retries": 3,
+    "fragment_retries": 3,
+    "socket_timeout": 20,
 
 }
 
-if YTDLP_COOKIES_FILE:
+if YTDLP_COOKIES_FILE and os.path.isfile(YTDLP_COOKIES_FILE):
     YTDL_OPTIONS["cookiefile"] = YTDLP_COOKIES_FILE
 
 FFMPEG_OPTIONS = {
@@ -102,8 +105,9 @@ async def resolve_query(loop, query):
 
         if "Sign in to confirm" in str(e):
             raise SongDownloadError(
-                "YouTube is blocking this server as a bot — needs "
-                "YTDLP_COOKIES_FILE configured."
+                "YouTube rejected this request (403/PO-token challenge). "
+                "Update yt-dlp first; if the host still gets challenged, "
+                "configure a valid YTDLP_COOKIES_FILE or PO-token provider."
             ) from e
 
         raise SongDownloadError(str(e)) from e
@@ -135,11 +139,14 @@ async def fetch_song_mp3(query):
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
-        "extractor_args": {"youtube": {"player_client": ["android"]}},
+        "retries": 3,
+        "extractor_retries": 3,
+        "fragment_retries": 3,
+        "socket_timeout": 20,
     
     }
 
-    if YTDLP_COOKIES_FILE:
+    if YTDLP_COOKIES_FILE and os.path.isfile(YTDLP_COOKIES_FILE):
         dl_opts["cookiefile"] = YTDLP_COOKIES_FILE
 
     loop = asyncio.get_event_loop()
@@ -161,8 +168,9 @@ async def fetch_song_mp3(query):
 
         if "Sign in to confirm" in str(e):
             raise SongDownloadError(
-                "YouTube is blocking this server as a bot — needs "
-                "YTDLP_COOKIES_FILE configured."
+                "YouTube rejected this download (403/PO-token challenge). "
+                "Update yt-dlp first; if the host still gets challenged, "
+                "configure a valid YTDLP_COOKIES_FILE or PO-token provider."
             ) from e
 
         raise SongDownloadError(str(e)) from e
