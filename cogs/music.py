@@ -22,6 +22,7 @@ import yt_dlp
 from discord.ext import commands
 
 from constants import COLOR_MUSIC, footer
+from systems.music_player import PlaybackRuntime
 
 logger = logging.getLogger("music_bot")
 
@@ -101,11 +102,30 @@ YTDL_OPTIONS = {
 if YTDLP_COOKIES_FILE and os.path.isfile(YTDLP_COOKIES_FILE):
     YTDL_OPTIONS["cookiefile"] = YTDLP_COOKIES_FILE
 
+# Keep the processing deliberately subtle. FFmpeg's loudnorm filter supports
+# single-pass/live-stream normalization, while the limiter catches peaks after
+# the small tonal lift. The short fade removes the hard click/pop some streams
+# can produce at the exact start of playback.
+AUDIO_FILTERS_ENABLED = os.getenv("ECLIPSE_AUDIO_FILTERS", "1").lower() not in {
+    "0", "false", "no", "off"
+}
+AUDIO_FILTER_CHAIN = (
+    "bass=g=1.5:f=100,"
+    "treble=g=0.5:f=6000,"
+    "loudnorm=I=-14:LRA=11:TP=-1.5:linear=false,"
+    "alimiter=limit=0.97:attack=5:release=80:latency=1,"
+    "afade=t=in:st=0:d=0.20"
+)
+
 FFMPEG_OPTIONS = {
     "before_options": (
         "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
     ),
-    "options": "-vn",
+    "options": (
+        '-vn -af "' + AUDIO_FILTER_CHAIN + '"'
+        if AUDIO_FILTERS_ENABLED
+        else "-vn"
+    ),
 }
 
 ytdl = yt_dlp.YoutubeDL(YTDL_OPTIONS)
@@ -367,6 +387,9 @@ class GuildMusicState:
         self.ending_generations = set()
         # Explicit state makes every playback transition observable.
         self.player_state = "IDLE"
+        self.player_state_since = time.monotonic()
+        self.player_transition_id = 0
+        self.last_transition_reason = "initialized"
 
 
 class QueuePageView(discord.ui.View):
@@ -477,6 +500,10 @@ class Music(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.states = {}
+        # PlaybackRuntime owns lifecycle bookkeeping. Queue policy and Discord
+        # commands remain in this cog, while watchdog/recovery code can inspect
+        # one consistent state machine.
+        self.player_runtime = PlaybackRuntime()
 
     def state_for(self, guild_id):
         if guild_id not in self.states:
@@ -723,7 +750,7 @@ class Music(commands.Cog):
         return None
 
     async def _start_resolved_track(self, guild, state, query, requester_name, data):
-        state.player_state = "STARTING"
+        self.player_runtime.transition(state, "STARTING")
         logger.info(
             "PLAYER STARTING guild=%s query=%r generation_next=%s",
             guild.id,
@@ -814,7 +841,7 @@ class Music(commands.Cog):
             # race inside discord.py's audio player.
             await self._wait_for_player_idle(vc)
             vc.play(source, after=after_playing)
-            state.player_state = "PLAYING"
+            self.player_runtime.transition(state, "PLAYING")
             logger.info(
                 "PLAYER PLAYING guild=%s generation=%s title=%r",
                 guild.id,
@@ -828,7 +855,7 @@ class Music(commands.Cog):
                 pass
             if state.playback_generation == generation:
                 state.current = None
-                state.player_state = "ERROR"
+                self.player_runtime.transition(state, "ERROR")
             raise
 
         if state.text_channel:
@@ -872,7 +899,7 @@ class Music(commands.Cog):
             return
 
         state.ending_generations.add(generation)
-        state.player_state = "TRANSITIONING"
+        self.player_runtime.transition(state, "TRANSITIONING")
         vc_snapshot = guild.voice_client
         logger.info(
             "PLAYER END guild=%s generation=%s query=%r error=%r playing=%s paused=%s",
@@ -890,7 +917,7 @@ class Music(commands.Cog):
                     state.current = None
 
                 if state.current is None and not state.queue:
-                    state.player_state = "IDLE"
+                    self.player_runtime.transition(state, "IDLE")
                     self._schedule_autodisconnect(guild)
                     return
 
@@ -937,7 +964,7 @@ class Music(commands.Cog):
                 state.history.append(finished)
                 state.last_track = finished
                 state.current = None
-                state.player_state = "TRANSITIONING"
+                self.player_runtime.transition(state, "TRANSITIONING")
 
             vc = guild.voice_client
             if vc is None:
@@ -988,7 +1015,7 @@ class Music(commands.Cog):
             vc = guild.voice_client
 
             if vc is None:
-                state.player_state = "IDLE"
+                self.player_runtime.transition(state, "IDLE")
                 if state.twentyfour_seven and state.voice_channel_id and not state.manual_disconnect:
                     await self._restore_24_7(guild)
                     vc = guild.voice_client
@@ -996,7 +1023,7 @@ class Music(commands.Cog):
                     return
 
             if vc.is_playing() or vc.is_paused():
-                state.player_state = "PLAYING" if vc.is_playing() else "PAUSED"
+                self.player_runtime.transition(state, "PLAYING") if vc.is_playing() else "PAUSED"
                 logger.debug(
                     "PLAYER TRANSITION skipped: active voice client guild=%s state=%s",
                     guild.id,
@@ -1004,7 +1031,7 @@ class Music(commands.Cog):
                 )
                 return
 
-            state.player_state = "TRANSITIONING"
+            self.player_runtime.transition(state, "TRANSITIONING")
             next_query = None
             requester_name = None
             data = None
@@ -1039,7 +1066,7 @@ class Music(commands.Cog):
 
             if next_query is None:
                 state.current = None
-                state.player_state = "IDLE"
+                self.player_runtime.transition(state, "IDLE")
                 if state.text_channel:
                     await state.text_channel.send("📭 Queue finished.")
                 self._schedule_autodisconnect(guild)
@@ -1070,7 +1097,7 @@ class Music(commands.Cog):
                 await self._start_resolved_track(
                     guild, state, next_query, requester_name, data
                 )
-                state.player_state = "PLAYING"
+                self.player_runtime.transition(state, "PLAYING")
                 return
             except Exception:
                 failed_attempts += 1
@@ -1082,12 +1109,12 @@ class Music(commands.Cog):
                 )
 
                 try:
-                    state.player_state = "RECOVERING"
+                    self.player_runtime.transition(state, "RECOVERING")
                     fresh = await self._resolve_for_playback(guild, next_query)
                     await self._start_resolved_track(
                         guild, state, next_query, requester_name, fresh
                     )
-                    state.player_state = "PLAYING"
+                    self.player_runtime.transition(state, "PLAYING")
                     if state.text_channel:
                         await state.text_channel.send(
                             "🔄 Stream refreshed and playback restarted."
@@ -1101,11 +1128,11 @@ class Music(commands.Cog):
                         refresh_error,
                     )
                     state.current = None
-                    state.player_state = "TRANSITIONING"
+                    self.player_runtime.transition(state, "TRANSITIONING")
                     continue
 
         state.current = None
-        state.player_state = "ERROR"
+        self.player_runtime.transition(state, "ERROR")
         logger.error(
             "PLAYER TRANSITION ABORTED guild=%s after %s failed attempts",
             guild.id,
