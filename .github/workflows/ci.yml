@@ -128,6 +128,9 @@ jobs:
           print("database smoke test passed")
           PY
 
+      - name: Exercise guild and atomic economy subsystems
+        run: python tests/guild_economy_smoke.py
+
       - name: Exercise RPG special subsystem
         run: python tests/rpg_specials_smoke.py
 
