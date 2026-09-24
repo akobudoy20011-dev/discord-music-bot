@@ -306,7 +306,8 @@ class Guilds(commands.Cog):
         if not mine:
             return
         player = await self.db.get_rpg_player(ctx.guild.id, ctx.author.id)
-        damage = max(25, int(player["strength"]) * 4 + int(player["level"]) * 5)
+        gear = await equipment_stats(self.db, ctx.guild.id, ctx.author.id)
+        damage = max(25, int(player["strength"]) * 4 + int(player["level"]) * 5 + int(gear["power"]) * 3)
         ok, reason, hp = await self.db.damage_guild_boss(mine["guild_id"], ctx.author.id, damage)
         if not ok:
             await ctx.send("❌ No active boss or you are not a member.")
@@ -372,7 +373,8 @@ class Guilds(commands.Cog):
         if not mine:
             return
         player = await self.db.get_rpg_player(ctx.guild.id, ctx.author.id)
-        damage = max(50, int(player["strength"]) * 6 + int(player["level"]) * 10)
+        gear = await equipment_stats(self.db, ctx.guild.id, ctx.author.id)
+        damage = max(50, int(player["strength"]) * 6 + int(player["level"]) * 10 + int(gear["power"]) * 5)
         ok, reason, hp = await self.db.damage_guild_raid(mine["guild_id"], ctx.author.id, damage)
         if not ok:
             await ctx.send("❌ No active raid or you are not a member.")
