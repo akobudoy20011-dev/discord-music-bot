@@ -1395,21 +1395,64 @@ class Database:
             "DELETE FROM warnings WHERE guild_id = ? AND user_id = ?",
             (str(guild_id), str(user_id))
         )
-        await self._conn.commit()    async def resolve_arcade_match(self, match_id, winner_id):
-        cur = await self._conn.execute("SELECT * FROM arcade_tournament_matches WHERE match_id=?", (int(match_id),))
+        await self._conn.commit()    async def claim_arcade_match(self, match_id, user_id):
+        cur = await self._conn.execute(
+            "SELECT * FROM arcade_tournament_matches WHERE match_id=?",
+            (int(match_id),)
+        )
         m = await cur.fetchone()
         if not m or m["status"] != "ready":
             return False, None
+        if str(user_id) not in {str(m["player_a"]), str(m["player_b"])}:
+            return False, None
+        await self._conn.execute(
+            "UPDATE arcade_tournament_matches SET status='playing' "
+            "WHERE match_id=? AND status='ready'",
+            (int(match_id),)
+        )
+        await self._conn.commit()
+        cur = await self._conn.execute(
+            "SELECT * FROM arcade_tournament_matches WHERE match_id=?",
+            (int(match_id),)
+        )
+        current = await cur.fetchone()
+        if not current or current["status"] != "playing":
+            return False, None
+        return True, dict(current)
+
+    async def resolve_arcade_match(self, match_id, winner_id):
+        cur = await self._conn.execute(
+            "SELECT * FROM arcade_tournament_matches WHERE match_id=?",
+            (int(match_id),)
+        )
+        m = await cur.fetchone()
+        if not m or m["status"] not in ("ready", "playing"):
+            return False, None
         if str(winner_id) not in {str(m["player_a"]), str(m["player_b"])}:
             return False, None
-        await self._conn.execute("UPDATE arcade_tournament_matches SET winner_id=?,status='complete' WHERE match_id=?", (str(winner_id), int(match_id)))
+        await self._conn.execute(
+            "UPDATE arcade_tournament_matches SET winner_id=?,status='complete' "
+            "WHERE match_id=? AND status IN ('ready','playing')",
+            (str(winner_id), int(match_id))
+        )
         loser = m["player_b"] if str(winner_id) == str(m["player_a"]) else m["player_a"]
-        await self._conn.execute("UPDATE arcade_tournament_players SET wins=wins+1 WHERE tournament_id=? AND user_id=?", (m["tournament_id"], str(winner_id)))
+        await self._conn.execute(
+            "UPDATE arcade_tournament_players SET wins=wins+1 "
+            "WHERE tournament_id=? AND user_id=?",
+            (m["tournament_id"], str(winner_id))
+        )
         if loser:
-            await self._conn.execute("UPDATE arcade_tournament_players SET eliminated=1 WHERE tournament_id=? AND user_id=?", (m["tournament_id"], str(loser)))
+            await self._conn.execute(
+                "UPDATE arcade_tournament_players SET eliminated=1 "
+                "WHERE tournament_id=? AND user_id=?",
+                (m["tournament_id"], str(loser))
+            )
         await self._conn.commit()
         result = await self._advance_tournament(int(m["tournament_id"]))
-        return True, result or {"finished": False, "tournament_id": int(m["tournament_id"])}
+        return True, result or {
+            "finished": False,
+            "tournament_id": int(m["tournament_id"])
+        }
 
     # ECLIPSE PROFILE / BANK / MUSIC / WORLD
     # ------------------------------------------------------------
