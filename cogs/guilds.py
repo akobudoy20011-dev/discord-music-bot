@@ -227,6 +227,9 @@ class Guilds(commands.Cog):
         mine = await self._role(ctx)
         if not mine:
             return
+        if int(mine["level"]) < 2:
+            await ctx.send("❌ Guild Level **2** required to start a guild event.")
+            return
         event_id = f"event-{int(time.time())}"
         event = await self.db.create_guild_event(
             mine["guild_id"], event_id, "ECLIPSE Ascension",
@@ -394,7 +397,7 @@ class Guilds(commands.Cog):
 
     @guild.group(name="war", invoke_without_command=True)
     async def guild_war(self, ctx):
-        await ctx.send("⚔️ `!guild war declare <guild_id>` · `status <war_id>` · `score <war_id> [points]`")
+        await ctx.send("⚔️ `!guild war declare <guild_id>` · `strike <war_id>` · `status <war_id>` · `end <war_id>`")
 
     @guild_war.command(name="declare")
     async def guild_war_declare(self, ctx, opponent_guild_id: str):
