@@ -88,6 +88,17 @@ CREATE TABLE IF NOT EXISTS economy_effects (
     PRIMARY KEY (guild_id, user_id, effect_id)
 );
 
+CREATE TABLE IF NOT EXISTS economy_investments (
+    guild_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    investment_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    principal INTEGER NOT NULL,
+    multiplier REAL NOT NULL,
+    created_at REAL NOT NULL,
+    matures_at REAL NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active'
+);
+
 CREATE TABLE IF NOT EXISTS game_stats (
     guild_id TEXT NOT NULL,
     user_id TEXT NOT NULL,
@@ -646,6 +657,158 @@ class Database:
             await self._conn.commit(); return True,"ok",balance
         except Exception:
             await self._conn.rollback(); raise
+
+    async def bank_deposit(self, guild_id, user_id, amount):
+        guild_id, user_id = str(guild_id), str(user_id)
+        amount = int(amount)
+        if amount <= 0:
+            return False, "amount", 0
+        await self.get_user(guild_id, user_id)
+        await self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            cur = await self._conn.execute(
+                "UPDATE users SET balance=balance-?, bank_balance=bank_balance+? "
+                "WHERE guild_id=? AND user_id=? AND balance>=?",
+                (amount, amount, guild_id, user_id, amount)
+            )
+            if cur.rowcount != 1:
+                await self._conn.rollback()
+                user = await self.get_user(guild_id, user_id)
+                return False, "balance", int(user["balance"])
+            await self._conn.commit()
+            return True, "ok", amount
+        except Exception:
+            await self._conn.rollback()
+            raise
+
+    async def bank_withdraw(self, guild_id, user_id, amount):
+        guild_id, user_id = str(guild_id), str(user_id)
+        amount = int(amount)
+        if amount <= 0:
+            return False, "amount", 0
+        await self.get_user(guild_id, user_id)
+        await self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            cur = await self._conn.execute(
+                "UPDATE users SET bank_balance=bank_balance-?, balance=balance+? "
+                "WHERE guild_id=? AND user_id=? AND bank_balance>=?",
+                (amount, amount, guild_id, user_id, amount)
+            )
+            if cur.rowcount != 1:
+                await self._conn.rollback()
+                user = await self.get_user(guild_id, user_id)
+                return False, "bank", int(user["bank_balance"])
+            await self._conn.commit()
+            return True, "ok", amount
+        except Exception:
+            await self._conn.rollback()
+            raise
+
+    async def apply_bank_interest(self, guild_id, user_id, now=None, rate=0.01):
+        guild_id, user_id = str(guild_id), str(user_id)
+        now = float(now or time.time())
+        await self.get_user(guild_id, user_id)
+        await self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            cur = await self._conn.execute(
+                "SELECT bank_balance,last_bank_interest FROM users WHERE guild_id=? AND user_id=?",
+                (guild_id, user_id)
+            )
+            row = await cur.fetchone()
+            bank = int(row["bank_balance"])
+            last = row["last_bank_interest"]
+            if bank <= 0:
+                await self._conn.execute(
+                    "UPDATE users SET last_bank_interest=? WHERE guild_id=? AND user_id=?",
+                    (now, guild_id, user_id)
+                )
+                await self._conn.commit()
+                return 0, bank
+            if last is not None and now - float(last) < 24 * 3600:
+                await self._conn.rollback()
+                return 0, bank
+            interest = max(1, int(bank * max(0.0, float(rate))))
+            await self._conn.execute(
+                "UPDATE users SET bank_balance=bank_balance+?,last_bank_interest=? WHERE guild_id=? AND user_id=?",
+                (interest, now, guild_id, user_id)
+            )
+            await self._conn.commit()
+            return interest, bank + interest
+        except Exception:
+            await self._conn.rollback()
+            raise
+
+    async def create_investment(self, guild_id, user_id, principal, multiplier, duration):
+        guild_id, user_id = str(guild_id), str(user_id)
+        principal = int(principal)
+        multiplier = float(multiplier)
+        duration = int(duration)
+        if principal <= 0 or multiplier <= 1.0 or duration <= 0:
+            return None, "invalid"
+        await self.get_user(guild_id, user_id)
+        now = time.time()
+        await self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            cur = await self._conn.execute(
+                "UPDATE users SET balance=balance-? WHERE guild_id=? AND user_id=? AND balance>=?",
+                (principal, guild_id, user_id, principal)
+            )
+            if cur.rowcount != 1:
+                await self._conn.rollback()
+                return None, "balance"
+            cur = await self._conn.execute(
+                "INSERT INTO economy_investments "
+                "(guild_id,user_id,principal,multiplier,created_at,matures_at,status) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (guild_id,user_id,principal,multiplier,now,now+duration,"active")
+            )
+            investment_id = cur.lastrowid
+            await self._conn.commit()
+            return int(investment_id), "ok"
+        except Exception:
+            await self._conn.rollback()
+            raise
+
+    async def get_investments(self, guild_id, user_id, active_only=False):
+        query = "SELECT * FROM economy_investments WHERE guild_id=? AND user_id=?"
+        params = [str(guild_id), str(user_id)]
+        if active_only:
+            query += " AND status='active'"
+        query += " ORDER BY investment_id DESC"
+        cur = await self._conn.execute(query, params)
+        return [dict(row) for row in await cur.fetchall()]
+
+    async def redeem_investment(self, guild_id, user_id, investment_id):
+        guild_id, user_id = str(guild_id), str(user_id)
+        investment_id = int(investment_id)
+        now = time.time()
+        await self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            cur = await self._conn.execute(
+                "SELECT * FROM economy_investments WHERE investment_id=? AND guild_id=? AND user_id=? AND status='active'",
+                (investment_id,guild_id,user_id)
+            )
+            row = await cur.fetchone()
+            if row is None:
+                await self._conn.rollback()
+                return None, "missing"
+            if now < float(row["matures_at"]):
+                await self._conn.rollback()
+                return None, float(row["matures_at"]) - now
+            payout = int(int(row["principal"]) * float(row["multiplier"]))
+            await self._conn.execute(
+                "UPDATE economy_investments SET status='redeemed' WHERE investment_id=?",
+                (investment_id,)
+            )
+            await self._conn.execute(
+                "UPDATE users SET balance=balance+? WHERE guild_id=? AND user_id=?",
+                (payout,guild_id,user_id)
+            )
+            await self._conn.commit()
+            return payout, "ok"
+        except Exception:
+            await self._conn.rollback()
+            raise
 
     async def add_balance(self, guild_id, user_id, amount):
         guild_id, user_id = str(guild_id), str(user_id)
