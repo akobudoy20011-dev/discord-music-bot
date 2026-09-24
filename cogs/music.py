@@ -1598,3 +1598,11 @@ class Music(commands.Cog):
             return
         status = await ctx.send(f"⏳ Fetching **{query}**...")
         ok, result_message = await send_song_as_file(ctx.channel, query, ctx.guild)
+        if ok:
+            await status.delete()
+        else:
+            await status.edit(content=f"❌ {result_message}")
+
+
+async def setup(bot):
+    await bot.add_cog(Music(bot))
