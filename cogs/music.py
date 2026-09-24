@@ -1290,6 +1290,9 @@ class Music(commands.Cog):
 
     @commands.command(name="download", aliases=["dl", "send"])
     async def download_song(self, ctx, *, query):
+        if not await self.bot.db.get_music_premium(ctx.guild.id):
+            await ctx.send("💎 Downloads require Premium.")
+            return
         status = await ctx.send(f"⏳ Fetching **{query}**...")
         ok, result_message = await send_song_as_file(ctx.channel, query, ctx.guild)
         if ok:
