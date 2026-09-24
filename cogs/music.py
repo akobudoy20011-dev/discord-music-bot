@@ -817,7 +817,7 @@ class Music(commands.Cog):
         if state.text_channel:
             embed = discord.Embed(
                 title="🎵 Now Playing",
-                description=f"**{title}**\\n{webpage_url or ''}",
+                description=f"**{title}**\n{webpage_url or ''}",
                 color=COLOR_MUSIC,
             )
             embed.set_footer(text=f"Requested by {requester_name}")
