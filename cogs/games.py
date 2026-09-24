@@ -398,9 +398,9 @@ class Games(commands.Cog):
                 await ctx.send(f"💸 You only have **{user['balance']:,} coins**.")
                 return
             ok, _, _ = await self.db.withdraw_balance(ctx.guild.id, ctx.author.id, bet)
-        if not ok:
-            await ctx.send("💸 Your balance changed before the wager could be placed.")
-            return
+            if not ok:
+                await ctx.send("💸 Your balance changed before the wager could be placed.")
+                return
 
         view = RPSView(self, ctx, bet)
 
