@@ -1023,7 +1023,11 @@ class Music(commands.Cog):
                     return
 
             if vc.is_playing() or vc.is_paused():
-                self.player_runtime.transition(state, "PLAYING") if vc.is_playing() else "PAUSED"
+                self.player_runtime.transition(
+                    state,
+                    "PLAYING" if vc.is_playing() else "PAUSED",
+                    reason="voice client already active",
+                )
                 logger.debug(
                     "PLAYER TRANSITION skipped: active voice client guild=%s state=%s",
                     guild.id,
@@ -1235,6 +1239,7 @@ class Music(commands.Cog):
             await ctx.send("🛡️ You need the DJ role or Manage Server.")
             return
         vc.pause()
+        self.player_runtime.transition(self.state_for(ctx.guild.id), "PAUSED", reason="manual pause")
         await ctx.send("⏸️ Paused.")
 
     @commands.command(name="resume")
@@ -1248,6 +1253,7 @@ class Music(commands.Cog):
             await ctx.send("🛡️ You need the DJ role or Manage Server.")
             return
         vc.resume()
+        self.player_runtime.transition(self.state_for(ctx.guild.id), "PLAYING", reason="manual resume")
         await ctx.send("▶️ Resumed.")
 
     @commands.command(name="previous", aliases=["prev", "back"])
