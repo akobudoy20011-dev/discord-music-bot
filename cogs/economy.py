@@ -295,6 +295,57 @@ class Economy(commands.Cog):
         await self.db.record_economy_activity(ctx.guild.id, ctx.author.id, earned=payout)
         await ctx.send(f"✨ Investment **#{investment_id}** matured. You received **{payout:,} coins**.")
 
+    @commands.command(name="market", aliases=["listings", "bazaar"])
+    async def market(self, ctx):
+        rows = await self.db.get_open_trades(ctx.guild.id, 15)
+        if not rows:
+            await ctx.send("🏪 The marketplace is empty.")
+            return
+        lines=[]
+        for r in rows:
+            seller=ctx.guild.get_member(int(r["seller_id"]))
+            name=seller.display_name if seller else f"User {r['seller_id']}"
+            lines.append(f"**#{r['trade_id']}** • {r['item_id']} ×{r['amount']} • 💰 **{int(r['price']):,}** • {name}")
+        embed=discord.Embed(title="🏪 Server Marketplace",description="\n".join(lines),color=COLOR_GOLD)
+        embed.set_footer(text="Buy with !marketbuy <listing id> • Sell with !sell <item> <amount> <price>")
+        await ctx.send(embed=footer(embed,ctx))
+
+    @commands.command(name="sell")
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def sell(self, ctx, item_id: str, amount: int, price: int):
+        item_id=item_id.lower()
+        if item_id not in SHOP_ITEMS:
+            await ctx.send("❌ That item cannot be traded.")
+            return
+        if amount <= 0 or price <= 0:
+            await ctx.send("❌ Amount and price must be positive.")
+            return
+        trade_id, reason=await self.db.create_trade(ctx.guild.id,ctx.author.id,item_id,amount,price)
+        if trade_id is None:
+            await ctx.send("❌ You don't have enough of that item.")
+            return
+        await ctx.send(f"🏪 Listing **#{trade_id}** created: **{item_id} ×{amount}** for **{price:,} coins**.")
+
+    @commands.command(name="marketbuy", aliases=["buylisting"])
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def marketbuy(self, ctx, trade_id: int):
+        row, reason=await self.db.buy_trade(ctx.guild.id,ctx.author.id,trade_id)
+        if row is None:
+            messages={"missing":"❌ Listing unavailable or expired.","self":"❌ You can't buy your own listing.","balance":"💸 You don't have enough coins."}
+            await ctx.send(messages.get(reason,"❌ Purchase failed."))
+            return
+        await self.db.record_economy_activity(ctx.guild.id,ctx.author.id,spent=int(row["price"]))
+        await self.db.record_economy_activity(ctx.guild.id,row["seller_id"],earned=int(row["price"]))
+        await ctx.send(f"🛍️ Purchased **{row['item_id']} ×{row['amount']}** for **{int(row['price']):,} coins**.")
+    
+    @commands.command(name="cancelmarket", aliases=["cancelsell"])
+    async def cancelmarket(self, ctx, trade_id: int):
+        row=await self.db.cancel_trade(ctx.guild.id,ctx.author.id,trade_id)
+        if row is None:
+            await ctx.send("❌ Listing not found or you don't own it.")
+            return
+        await ctx.send(f"↩️ Listing **#{trade_id}** cancelled. Your items were returned.")
+
     # ------------------------------------------------------------
     @commands.command(name="pay", aliases=["give"])
     @commands.cooldown(1, 5, commands.BucketType.user)
