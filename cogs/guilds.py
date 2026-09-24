@@ -387,7 +387,7 @@ class Guilds(commands.Cog):
         if not ok:
             await ctx.send("❌ No active raid or you are not a member.")
             return
-        await ctx.send(f"⚔️ Raid **{phase_names.get(phase, "Awakening")}**: **{damage:,}** damage · Boss HP: **{hp:,}**.")
+        await ctx.send(f"⚔️ Raid **{phase_names.get(phase, 'Awakening')}**: **{damage:,}** damage · Boss HP: **{hp:,}**.")
         if reason == "completed":
             await ctx.send("🏆 **RAID CLEARED.** Contributors can claim with `!guild raid claim`.")
 
