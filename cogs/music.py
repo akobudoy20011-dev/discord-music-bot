@@ -404,16 +404,42 @@ class Music(commands.Cog):
         source = discord.PCMVolumeTransformer(source, volume=state.volume)
 
         def after_playing(error):
-            if error:
-                logger.error("FFmpeg/player error for '%s': %s", title, error)
-
             fut = asyncio.run_coroutine_threadsafe(
-                self._play_next(guild), self.bot.loop
+                self._handle_player_end(guild, query, requester_name, error),
+                self.bot.loop
             )
             try:
                 fut.result()
             except Exception:
-                logger.exception("Error advancing queue")
+                logger.exception("Error handling playback completion")
+
+    async def _handle_player_end(self, guild, query, requester_name, error):
+        state = self.states.get(guild.id)
+        if state is None:
+            return
+
+        if error:
+            logger.error("FFmpeg/player error for '%s': %s", query, error)
+            try:
+                fresh = await self._resolve_for_playback(guild, query)
+                if guild.voice_client is not None:
+                    await self._start_resolved_track(
+                        guild, state, query, requester_name, fresh
+                    )
+                    if state.text_channel:
+                        await state.text_channel.send(
+                            "🔄 YouTube stream failed; refreshed and resumed."
+                        )
+                    return
+            except Exception as refresh_error:
+                logger.error(
+                    "Automatic stream refresh failed for '%s': %s",
+                    query,
+                    refresh_error,
+                )
+
+        state.current = None
+        await self._play_next(guild)
 
         guild.voice_client.play(source, after=after_playing)
 
