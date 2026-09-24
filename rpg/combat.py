@@ -1,14 +1,25 @@
-"""Persistent PvE combat engine with equipment-aware stats."""
+"""Persistent PvE combat engine with skills, equipment, and special moves."""
+import json
 import random
 import time
 
 from .enemies import random_enemy
 from .skills import get_skill
+from .specials import get_special, available_specials, can_use_special
 from .loot import roll_loot, describe
 from .quests import progress as quest_progress
 from .world import REGIONS, get_region
 from .equipment import equipment_stats
 from .crafting import MATERIALS
+
+
+def _json_loads(value, fallback):
+    try:
+        data = json.loads(value or "")
+        return data if isinstance(data, dict) else fallback.copy()
+    except (TypeError, ValueError):
+        return fallback.copy()
+
 
 async def _effective_stats(db, guild_id, user_id, player=None):
     player = player or await db.get_rpg_player(guild_id, user_id)
@@ -23,137 +34,425 @@ async def _effective_stats(db, guild_id, user_id, player=None):
         "power": gear["power"],
     }
 
-async def start(db,guild_id,user_id,enemy_override=None):
-    existing=await db.get_rpg_battle(guild_id,user_id)
+
+async def _sync_special_unlocks(db, guild_id, user_id, player):
+    for special_id, _data in available_specials(player["class_key"], player["level"]):
+        if not await db.has_rpg_special(guild_id, user_id, special_id):
+            await db.unlock_rpg_special(guild_id, user_id, special_id, source="level")
+
+
+def _status_text(effects):
+    bits = []
+    if effects.get("enemy_freeze_turns", 0):
+        bits.append(f"❄️ frozen {effects['enemy_freeze_turns']}t")
+    if effects.get("enemy_burn_turns", 0):
+        bits.append(f"🔥 burning {effects['enemy_burn_turns']}t")
+    if effects.get("enemy_weaken_turns", 0):
+        bits.append(f"🕸️ weakened {effects['enemy_weaken_turns']}t")
+    if effects.get("enemy_stagger_turns", 0):
+        bits.append("⚡ staggered")
+    if effects.get("player_guard_turns", 0):
+        bits.append(f"🛡️ guard {effects['player_guard_turns']}t")
+    if effects.get("player_blessing_turns", 0):
+        bits.append(f"☀️ blessed {effects['player_blessing_turns']}t")
+    if effects.get("player_bloom_turns", 0):
+        bits.append(f"🌸 bloom {effects['player_bloom_turns']}t")
+    return " · ".join(bits)
+
+
+async def start(db, guild_id, user_id, enemy_override=None):
+    existing = await db.get_rpg_battle(guild_id, user_id)
     if existing:
-        return {"ok":False,"battle":existing}
-    player=await db.get_rpg_player(guild_id,user_id)
-    enemy=enemy_override or random_enemy(player.get("region"))
+        return {"ok": False, "battle": existing}
+
+    player = await db.get_rpg_player(guild_id, user_id)
+    await _sync_special_unlocks(db, guild_id, user_id, player)
+    enemy = enemy_override or random_enemy(player.get("region"))
     await db.set_rpg_battle(
-        guild_id,user_id,
-        enemy_id=enemy["id"], enemy_name=enemy["name"],
-        enemy_hp=enemy["hp"], enemy_max_hp=enemy["hp"],
-        enemy_attack=enemy["attack"], turn=1, guarding=0,
-        created_at=time.time()
+        guild_id,
+        user_id,
+        enemy_id=enemy["id"],
+        enemy_name=enemy["name"],
+        enemy_hp=enemy["hp"],
+        enemy_max_hp=enemy["hp"],
+        enemy_attack=enemy["attack"],
+        turn=1,
+        guarding=0,
+        effects="{}",
+        special_cooldowns="{}",
+        created_at=time.time(),
     )
-    return {"ok":True,"battle":await db.get_rpg_battle(guild_id,user_id),"player":player}
+    return {
+        "ok": True,
+        "battle": await db.get_rpg_battle(guild_id, user_id),
+        "player": player,
+    }
 
-async def attack(db,guild_id,user_id,skill_id=None):
-    battle=await db.get_rpg_battle(guild_id,user_id)
+
+def ENEMIES_REWARD(enemy_id, field):
+    from .enemies import ENEMIES
+    return ENEMIES[enemy_id][field]
+
+
+async def _victory_rewards(db, guild_id, user_id, battle, player, damage):
+    await db.delete_rpg_battle(guild_id, user_id)
+    xp_reward = ENEMIES_REWARD(battle["enemy_id"], "xp")
+    gold_reward = ENEMIES_REWARD(battle["enemy_id"], "gold")
+    old, new, player = await db.add_rpg_xp(guild_id, user_id, xp_reward)
+    player = await db.update_rpg_player(
+        guild_id, user_id, gold=player["gold"] + gold_reward
+    )
+
+    region = get_region(player.get("region")) or REGIONS["moonlit_vale"]
+    loot = roll_loot(battle["enemy_id"], region.get("loot_bonus", 0))
+    guardian_regions = {
+        r.get("guardian"): rid for rid, r in REGIONS.items() if r.get("guardian")
+    }
+    if battle["enemy_id"] in guardian_regions:
+        await db.defeat_rpg_guardian(
+            guild_id, guardian_regions[battle["enemy_id"]], user_id
+        )
+    if loot:
+        await db.add_rpg_item(guild_id, user_id, loot, 1)
+
+    region_materials = {
+        "moonlit_vale": "moon_petal",
+        "whispering_wood": "thorn_fiber",
+        "ashen_crown": "ash_core",
+        "starfall_coast": "star_fragment",
+    }
+    material_id = region_materials.get(region.get("id")) if region.get("id") else None
+    if not material_id:
+        for rid, data in REGIONS.items():
+            if data.get("name") == region.get("name"):
+                material_id = region_materials.get(rid)
+                break
+    material_gain = random.randint(1, 2) + (
+        1 if battle["enemy_id"] in guardian_regions else 0
+    )
+    if material_id and material_id in MATERIALS:
+        await db.add_rpg_material(
+            guild_id, user_id, material_id, material_gain
+        )
+    if battle["enemy_id"] in guardian_regions:
+        await db.add_rpg_material(guild_id, user_id, "guardian_essence", 3)
+
+    await quest_progress(
+        db, guild_id, user_id, "kills", 1, battle["enemy_id"]
+    )
+    return {
+        "ok": True,
+        "victory": True,
+        "damage": damage,
+        "xp": xp_reward,
+        "gold": gold_reward,
+        "loot": loot,
+        "loot_name": describe(loot) if loot else None,
+        "level_up": new > old,
+        "player": player,
+    }
+
+
+async def _finish_turn(db, guild_id, user_id, battle, player, stats, effects, cooldowns, damage, special=False):
+    enemy_hp = max(0, int(battle["enemy_hp"]) - int(damage))
+    if enemy_hp <= 0:
+        battle = dict(battle)
+        battle["enemy_hp"] = enemy_hp
+        return await _victory_rewards(db, guild_id, user_id, battle, player, damage)
+
+    incoming = max(1, int(battle["enemy_attack"] - stats["defense"] * 0.45))
+    if effects.get("enemy_weaken_turns", 0):
+        incoming = max(1, int(incoming * (1.0 - float(effects.get("enemy_weaken_pct", 0.25)))))
+
+    if effects.get("player_blessing_turns", 0):
+        incoming = max(1, int(incoming * 0.65))
+
+    if effects.get("player_guard_turns", 0):
+        incoming = max(1, int(incoming * 0.45))
+
+    if random.random() < min(0.35, stats["agility"] * 0.01):
+        incoming = 0
+
+    hp = max(0, int(player["hp"]) - incoming)
+    await db.update_rpg_player(guild_id, user_id, hp=hp)
+
+    if hp <= 0:
+        await db.delete_rpg_battle(guild_id, user_id)
+        return {
+            "ok": True,
+            "defeat": True,
+            "damage": damage,
+            "incoming": incoming,
+            "special": special,
+        }
+
+    # Enemy-control effects are consumed by the enemy turn, not by the player's
+    # cast. Infinite Darkness therefore preserves the original five-move freeze.
+    frozen = int(effects.get("enemy_freeze_turns", 0))
+    staggered = int(effects.get("enemy_stagger_turns", 0))
+    enemy_skipped = frozen > 0 or staggered > 0
+
+    if frozen > 0:
+        effects["enemy_freeze_turns"] = frozen - 1
+    elif staggered > 0:
+        effects["enemy_stagger_turns"] = staggered - 1
+
+    # Player-side duration ticks happen after the turn resolves.
+    for key in ("player_guard_turns", "player_blessing_turns", "player_bloom_turns"):
+        if effects.get(key, 0) > 0:
+            effects[key] = max(0, int(effects[key]) - 1)
+
+    if effects.get("enemy_burn_turns", 0) > 0:
+        effects["enemy_burn_turns"] = max(0, int(effects["enemy_burn_turns"]) - 1)
+    if effects.get("enemy_weaken_turns", 0) > 0:
+        effects["enemy_weaken_turns"] = max(0, int(effects["enemy_weaken_turns"]) - 1)
+
+    # Cooldowns tick down once per completed combat turn.
+    cooldowns = {
+        key: max(0, int(value) - 1)
+        for key, value in cooldowns.items()
+        if int(value) > 1
+    }
+
+    new_player = await db.get_rpg_player(guild_id, user_id)
+    if effects.get("player_bloom_turns", 0) > 0:
+        heal = max(4, int(stats["magic"] * 0.75))
+        mp_gain = max(2, int(stats["magic"] * 0.18))
+        new_player = await db.update_rpg_player(
+            guild_id,
+            user_id,
+            hp=min(stats["max_hp"], int(new_player["hp"]) + heal),
+            mp=min(stats["max_mp"], int(new_player["mp"]) + mp_gain),
+        )
+    elif effects.get("player_blessing_turns", 0) > 0:
+        heal = max(2, int(stats["magic"] * 0.35))
+        new_player = await db.update_rpg_player(
+            guild_id,
+            user_id,
+            hp=min(stats["max_hp"], int(new_player["hp"]) + heal),
+        )
+
+    await db.set_rpg_battle(
+        guild_id,
+        user_id,
+        enemy_hp=enemy_hp,
+        turn=int(battle["turn"]) + 1,
+        guarding=1 if effects.get("player_guard_turns", 0) else 0,
+        effects=json.dumps(effects, separators=(",", ":")),
+        special_cooldowns=json.dumps(cooldowns, separators=(",", ":")),
+    )
+    return {
+        "ok": True,
+        "victory": False,
+        "damage": damage,
+        "incoming": 0 if enemy_skipped else incoming,
+        "enemy_skipped": enemy_skipped,
+        "enemy_hp": enemy_hp,
+        "enemy_max_hp": battle["enemy_max_hp"],
+        "player": new_player,
+        "effects": effects,
+        "status": _status_text(effects),
+        "special": special,
+    }
+
+
+async def attack(db, guild_id, user_id, skill_id=None):
+    battle = await db.get_rpg_battle(guild_id, user_id)
     if not battle:
-        return {"ok":False,"message":"No active battle."}
+        return {"ok": False, "message": "No active battle."}
 
-    player, gear, stats = await _effective_stats(db,guild_id,user_id)
-    damage=max(
+    player, gear, stats = await _effective_stats(db, guild_id, user_id)
+    effects = _json_loads(battle.get("effects"), {})
+    cooldowns = _json_loads(battle.get("special_cooldowns"), {})
+
+    # Passive damage-over-time is applied before the player's next action.
+    opening_damage = 0
+    if effects.get("enemy_burn_turns", 0):
+        opening_damage = max(1, int(effects.get("enemy_burn_damage", 1)))
+        battle["enemy_hp"] = max(0, int(battle["enemy_hp"]) - opening_damage)
+        if battle["enemy_hp"] <= 0:
+            return await _victory_rewards(
+                db, guild_id, user_id, battle, player, opening_damage
+            )
+
+    damage = max(
         1,
         int(
             (stats["strength"] + gear["power"])
-            * random.uniform(.85,1.15)
-            - battle["turn"]*.15
-        )
+            * random.uniform(0.85, 1.15)
+            - int(battle["turn"]) * 0.15
+        ),
     )
-    mp_cost=0
-    skill=None
+    mp_cost = 0
 
     if skill_id:
-        skill=get_skill(player["class_key"],skill_id)
-        owned=await db.get_rpg_skills(guild_id,user_id)
+        skill = get_skill(player["class_key"], skill_id)
+        owned = await db.get_rpg_skills(guild_id, user_id)
         if not skill or skill["id"] not in owned:
-            return {"ok":False,"message":"That skill is not unlocked for you."}
-        if player["mp"]<skill["cost"]:
-            return {"ok":False,"message":f"Not enough MP. Need {skill['cost']}."}
-        mp_cost=skill["cost"]
-        if skill["kind"] in ("magic","holy"):
-            damage=max(1,int(stats["magic"]*skill["power"] + gear["power"]*.5))
+            return {"ok": False, "message": "That skill is not unlocked for you."}
+        if player["mp"] < skill["cost"]:
+            return {"ok": False, "message": f"Not enough MP. Need {skill['cost']}."}
+        mp_cost = skill["cost"]
+        if skill["kind"] in ("magic", "holy"):
+            damage = max(1, int(stats["magic"] * skill["power"] + gear["power"] * 0.5))
         else:
-            damage=max(1,int((stats["strength"] + gear["power"])*skill["power"]))
+            damage = max(1, int((stats["strength"] + gear["power"]) * skill["power"]))
 
-    enemy_hp=max(0,battle["enemy_hp"]-damage)
-    player=await db.update_rpg_player(
-        guild_id,user_id,mp=max(0,player["mp"]-mp_cost)
-    )
-
-    if enemy_hp<=0:
-        await db.delete_rpg_battle(guild_id,user_id)
-        xp_reward=ENEMIES_REWARD(battle["enemy_id"],"xp")
-        gold_reward=ENEMIES_REWARD(battle["enemy_id"],"gold")
-        old,new,player=await db.add_rpg_xp(guild_id,user_id,xp_reward)
-        player=await db.update_rpg_player(
-            guild_id,user_id,gold=player["gold"]+gold_reward
-        )
-        region=get_region(player.get("region")) or REGIONS["moonlit_vale"]
-        loot=roll_loot(battle["enemy_id"],region.get("loot_bonus",0))
-        guardian_regions={
-            r.get("guardian"):rid for rid,r in REGIONS.items() if r.get("guardian")
-        }
-        if battle["enemy_id"] in guardian_regions:
-            await db.defeat_rpg_guardian(
-                guild_id,guardian_regions[battle["enemy_id"]],user_id
+        if skill["kind"] == "guard":
+            effects["player_guard_turns"] = max(2, int(effects.get("player_guard_turns", 0)))
+        elif skill["kind"] == "restore":
+            player = await db.update_rpg_player(
+                guild_id, user_id,
+                mp=min(stats["max_mp"], int(player["mp"]) - mp_cost + max(8, int(stats["magic"] * 0.55)))
             )
-        if loot:
-            await db.add_rpg_item(guild_id,user_id,loot,1)
+            mp_cost = 0
+        elif skill["kind"] == "evasion":
+            effects["player_blessing_turns"] = max(1, int(effects.get("player_blessing_turns", 0)))
+        elif skill["kind"] == "buff":
+            damage = int(damage * 1.25)
 
-        # Every victory feeds the crafting economy. Regional materials are
-        # common; guardian essence is reserved for realm guardians.
-        region_materials = {
-            "moonlit_vale": "moon_petal",
-            "whispering_wood": "thorn_fiber",
-            "ashen_crown": "ash_core",
-            "starfall_coast": "star_fragment",
-        }
-        material_id = region_materials.get(region.get("id")) if region.get("id") else None
-        if not material_id:
-            for rid, data in REGIONS.items():
-                if data.get("name") == region.get("name"):
-                    material_id = region_materials.get(rid)
-                    break
-        material_gain = random.randint(1, 2) + (1 if battle["enemy_id"] in guardian_regions else 0)
-        if material_id and material_id in MATERIALS:
-            await db.add_rpg_material(guild_id,user_id,material_id,material_gain)
-        if battle["enemy_id"] in guardian_regions:
-            await db.add_rpg_material(guild_id,user_id,"guardian_essence",3)
-
-        await quest_progress(
-            db,guild_id,user_id,"kills",1,battle["enemy_id"]
-        )
-        return {
-            "ok":True,"victory":True,"damage":damage,
-            "xp":xp_reward,"gold":gold_reward,"loot":loot,
-            "loot_name":describe(loot) if loot else None,
-            "level_up":new>old,"player":player,
-        }
-
-    incoming=max(1,int(battle["enemy_attack"]-stats["defense"]*.45))
-    if random.random()<min(.35,stats["agility"]*.01):
-        incoming=0
-
-    hp=max(0,player["hp"]-incoming)
-    await db.update_rpg_player(guild_id,user_id,hp=hp)
-    if hp<=0:
-        await db.delete_rpg_battle(guild_id,user_id)
-        return {
-            "ok":True,"defeat":True,"damage":damage,
-            "incoming":incoming
-        }
-
-    await db.set_rpg_battle(
-        guild_id,user_id,enemy_hp=enemy_hp,
-        turn=battle["turn"]+1,guarding=0
+    player = await db.update_rpg_player(
+        guild_id, user_id, mp=max(0, int(player["mp"]) - mp_cost)
     )
-    return {
-        "ok":True,"victory":False,"damage":damage,
-        "incoming":incoming,"enemy_hp":enemy_hp,
-        "enemy_max_hp":battle["enemy_max_hp"],
-        "player":await db.get_rpg_player(guild_id,user_id)
-    }
+    result = await _finish_turn(
+        db, guild_id, user_id, battle, player, stats, effects, cooldowns,
+        damage, special=False
+    )
+    if opening_damage:
+        result["damage"] += opening_damage
+    return result
 
-async def flee(db,guild_id,user_id):
-    battle=await db.get_rpg_battle(guild_id,user_id)
+
+async def special(db, guild_id, user_id, special_id):
+    battle = await db.get_rpg_battle(guild_id, user_id)
+    if not battle:
+        return {"ok": False, "message": "No active battle."}
+
+    player, gear, stats = await _effective_stats(db, guild_id, user_id)
+    await _sync_special_unlocks(db, guild_id, user_id, player)
+
+    sid = str(special_id).strip().lower()
+    data = get_special(sid)
+    if not data or not can_use_special(player["class_key"], sid):
+        return {"ok": False, "message": "That special does not belong to your current class."}
+
+    unlocked = await db.has_rpg_special(guild_id, user_id, sid)
+    if not unlocked:
+        return {
+            "ok": False,
+            "message": f"**{data['name']}** unlocks at level **{data['level']}**.",
+        }
+
+    effects = _json_loads(battle.get("effects"), {})
+    cooldowns = _json_loads(battle.get("special_cooldowns"), {})
+    remaining = int(cooldowns.get(sid, 0))
+    if remaining > 0:
+        return {
+            "ok": False,
+            "message": f"**{data['name']}** is still cooling down for **{remaining}** turn(s).",
+        }
+    if int(player["mp"]) < int(data["cost"]):
+        return {
+            "ok": False,
+            "message": f"Not enough MP. **{data['name']}** needs **{data['cost']} MP**.",
+        }
+
+    enemy_hp = int(battle["enemy_hp"])
+    damage = 0
+    message = data["description"]
+    kind = data["kind"]
+
+    if kind == "ice_wall":
+        damage = max(1, int((stats["strength"] + gear["power"]) * data["power"]))
+        effects["player_guard_turns"] = 2
+        effects["enemy_stagger_turns"] = max(1, int(effects.get("enemy_stagger_turns", 0)))
+        message = "The heavens crystallize. An ice wall rises around you."
+    elif kind == "burn":
+        damage = max(1, int(stats["magic"] * data["power"] + gear["power"]))
+        effects["enemy_burn_turns"] = 3
+        effects["enemy_burn_damage"] = max(3, int(stats["magic"] * 0.35))
+        message = "A blazing garden takes root beneath the enemy."
+    elif kind == "freeze":
+        damage = max(1, int(stats["magic"] * data["power"] + stats["agility"] * 0.25))
+        effects["enemy_freeze_turns"] = int(data["duration"])
+        message = "Darkness closes over the enemy. It is frozen for five moves."
+    elif kind == "holy":
+        damage = max(1, int(stats["magic"] * data["power"] + stats["strength"] * 0.65))
+        message = "Judgement descends from above."
+    elif kind == "blessing":
+        heal = max(12, int(stats["magic"] * 1.7))
+        player = await db.update_rpg_player(
+            guild_id, user_id,
+            hp=min(stats["max_hp"], int(player["hp"]) + heal),
+        )
+        effects["player_blessing_turns"] = 3
+        message = f"Amaterasu answers. You recover **{heal} HP** and gain radiant protection."
+    elif kind == "reaver":
+        damage = max(1, int((stats["strength"] + gear["power"]) * data["power"]))
+        heal = max(1, int(damage * 0.35))
+        player = await db.update_rpg_player(
+            guild_id, user_id,
+            hp=min(stats["max_hp"], int(player["hp"]) + heal),
+        )
+        message = f"Blood answers blood. You recover **{heal} HP**."
+    elif kind == "bloom":
+        heal = max(16, int(stats["magic"] * 1.9))
+        player = await db.update_rpg_player(
+            guild_id, user_id,
+            hp=min(stats["max_hp"], int(player["hp"]) + heal),
+        )
+        effects["player_bloom_turns"] = 4
+        message = f"The world blooms around you. You recover **{heal} HP**."
+    elif kind == "overdrive":
+        damage = max(1, int(stats["magic"] * data["power"] + gear["power"] * 1.5))
+        message = "Your arcane core overloads the battlefield."
+    elif kind == "fallen":
+        base = max(1, int((stats["strength"] + gear["power"]) * data["power"]))
+        damage = int(base * random.uniform(1.05, 1.25))
+        message = "The fallen rise and strike as one."
+    elif kind == "thunder":
+        damage = max(1, int(stats["magic"] * data["power"] + stats["strength"] * 0.35))
+        if random.random() < 0.65:
+            effects["enemy_stagger_turns"] = max(1, int(effects.get("enemy_stagger_turns", 0)))
+            message = "Celestial thunder crashes down and staggers the enemy."
+        else:
+            message = "Celestial thunder crashes down."
+    elif kind == "abyss":
+        damage = max(1, int((stats["strength"] + stats["magic"] * 0.45) * data["power"]))
+        effects["enemy_weaken_turns"] = 3
+        effects["enemy_weaken_pct"] = 0.30
+        message = "The abyssal tide recedes, leaving the enemy weakened."
+    elif kind == "tempest":
+        damage = max(1, int(stats["magic"] * data["power"] + stats["agility"] * 0.5))
+        if random.random() < 0.55:
+            effects["enemy_stagger_turns"] = 1
+        message = "A celestial tempest tears across the realm."
+    elif kind == "worldbreaker":
+        damage = max(1, int((stats["strength"] + gear["power"]) * data["power"]))
+        if random.random() < 0.35:
+            effects["enemy_stagger_turns"] = 1
+        message = "The battlefield fractures beneath Worldbreaker's force."
+
+    player = await db.update_rpg_player(
+        guild_id, user_id, mp=int(player["mp"]) - int(data["cost"])
+    )
+    cooldowns[sid] = int(data["cooldown"])
+
+    result = await _finish_turn(
+        db, guild_id, user_id, battle, player, stats, effects, cooldowns,
+        damage, special=True
+    )
+    result["special_id"] = sid
+    result["special_name"] = data["name"]
+    result["special_icon"] = data["icon"]
+    result["special_message"] = message
+    result["status"] = _status_text(result.get("effects", effects))
+    return result
+
+
+async def flee(db, guild_id, user_id):
+    battle = await db.get_rpg_battle(guild_id, user_id)
     if not battle:
         return False
-    await db.delete_rpg_battle(guild_id,user_id)
+    await db.delete_rpg_battle(guild_id, user_id)
     return True
-
-def ENEMIES_REWARD(enemy_id,field):
-    from .enemies import ENEMIES
-    return ENEMIES[enemy_id][field]
