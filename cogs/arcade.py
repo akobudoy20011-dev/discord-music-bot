@@ -181,6 +181,362 @@ class Arcade(commands.Cog):
             return await ctx.send("❌ Only an open tournament can be cancelled/refunded.")
         await ctx.send(f"🛑 **{t['name']} cancelled.** Refunded **{refund:,} coins** to entrants.")
 
+    async def _complete_tournament_match(self, ctx, match, winner_id, reason=None):
+        loser_id = (
+            match["player_b"]
+            if str(winner_id) == str(match["player_a"])
+            else match["player_a"]
+        )
+        ok, result = await self.db.resolve_arcade_match(match["match_id"], winner_id)
+        if not ok:
+            return False, None
+
+        game_id = str(match["game_id"])
+        await self.finish(match["guild_id"], winner_id, game_id, "win", 0, 0, ctx)
+        if loser_id:
+            await self.finish(match["guild_id"], loser_id, game_id, "loss", 0, 0, ctx)
+
+        if result and result.get("finished"):
+            await ctx.send(
+                f"👑 **TOURNAMENT COMPLETE.** <@{winner_id}> wins "
+                f"**{match['tournament_name']}** and receives "
+                f"**{result['payout']:,} coins.**"
+            )
+        else:
+            suffix = f" · {reason}" if reason else ""
+            await ctx.send(
+                f"⚔️ <@{winner_id}> wins **Match #{match['match_id']}**"
+                f"{suffix}. The next round is now ready."
+            )
+        return True, result
+
+    @tournament.command(name="play", aliases=["fight", "enter"])
+    async def tournament_play(self, ctx, match_id: int):
+        ok, match = await self.db.claim_arcade_match(
+            ctx.guild.id, match_id, ctx.author.id
+        )
+        if not ok:
+            return await ctx.send(
+                "❌ That match is not ready, does not belong to this server, "
+                "or you are not one of its players."
+            )
+
+        game_id = str(match["game_id"])
+        player_a = ctx.guild.get_member(int(match["player_a"]))
+        player_b = ctx.guild.get_member(int(match["player_b"]))
+        if not player_a or not player_b:
+            other_id = (
+                match["player_b"]
+                if str(ctx.author.id) == str(match["player_a"])
+                else match["player_a"]
+            )
+            await self._complete_tournament_match(
+                ctx, match, other_id, "opponent unavailable"
+            )
+            return
+
+        if game_id == "dicebattle":
+            import random
+            a = random.randint(1, 6)
+            b = random.randint(1, 6)
+            if a == b:
+                await ctx.send(
+                    embed=self.embed(
+                        "🎲 TOURNAMENT · DICE BATTLE",
+                        f"<@{player_a.id}> rolled **{a}**\n"
+                        f"<@{player_b.id}> rolled **{b}**\n\n"
+                        "👔 **DRAW — roll again.**",
+                        COLOR_GOLD,
+                    )
+                )
+                await self.db._conn.execute(
+                    "UPDATE arcade_tournament_matches SET status='ready' "
+                    "WHERE match_id=? AND status='playing'",
+                    (int(match_id),)
+                )
+                await self.db._conn.commit()
+                return
+
+            winner = player_a if a > b else player_b
+            await ctx.send(
+                embed=self.embed(
+                    "🎲 TOURNAMENT · DICE BATTLE",
+                    f"<@{player_a.id}> rolled **{a}**\n"
+                    f"<@{player_b.id}> rolled **{b}**",
+                )
+            )
+            await self._complete_tournament_match(ctx, match, winner.id)
+            return
+
+        if game_id == "ttt":
+            await ctx.send(
+                embed=self.embed(
+                    "⭕ TOURNAMENT · TIC-TAC-TOE",
+                    f"**{player_a.display_name}** (X) vs "
+                    f"**{player_b.display_name}** (O)\n"
+                    f"Match **#{match_id}** · first player starts.",
+                ),
+                view=self._tournament_ttt_view(ctx, match, player_a, player_b),
+            )
+            return
+
+        if game_id == "connect4":
+            await ctx.send(
+                embed=self.embed(
+                    "🔴 TOURNAMENT · CONNECT FOUR",
+                    f"**{player_a.display_name}** (🔴) vs "
+                    f"**{player_b.display_name}** (🟡)\n"
+                    f"Match **#{match_id}** · first player starts.\n\n"
+                    + "\n".join("⚪" * 7 for _ in range(6)),
+                ),
+                view=self._tournament_connect4_view(ctx, match, player_a, player_b),
+            )
+            return
+
+        await self.db.resolve_arcade_match(match_id, player_b.id)
+        await ctx.send("❌ Unsupported tournament game; the match was resolved safely.")
+
+    def _tournament_ttt_view(self, ctx, match, player_a, player_b):
+        board = [""] * 9
+        players = [player_a, player_b]
+        turn = 0
+        cog = self
+
+        class TournamentTTT(discord.ui.View):
+            def __init__(view):
+                super().__init__(timeout=300)
+                view.done = False
+                for idx in range(9):
+                    button = discord.ui.Button(
+                        label="·",
+                        style=discord.ButtonStyle.secondary,
+                        row=idx // 3,
+                    )
+
+                    async def press(interaction, index=idx, btn=button):
+                        nonlocal turn
+                        if view.done:
+                            return
+                        if interaction.user.id != players[turn].id:
+                            return await interaction.response.send_message(
+                                "❌ Not your turn.", ephemeral=True
+                            )
+                        if board[index]:
+                            return await interaction.response.send_message(
+                                "❌ That square is occupied.", ephemeral=True
+                            )
+
+                        board[index] = "X" if turn == 0 else "O"
+                        btn.label = board[index]
+                        wins = (
+                            (0,1,2),(3,4,5),(6,7,8),
+                            (0,3,6),(1,4,7),(2,5,8),
+                            (0,4,8),(2,4,6),
+                        )
+                        winner = turn if any(
+                            board[a] and board[a] == board[b] == board[c]
+                            for a, b, c in wins
+                        ) else None
+                        draw = winner is None and all(board)
+
+                        if winner is not None or draw:
+                            view.done = True
+                            view.stop()
+                            for child in view.children:
+                                child.disabled = True
+
+                            if draw:
+                                await interaction.response.edit_message(
+                                    embed=cog.embed(
+                                        "⭕ TOURNAMENT · TIC-TAC-TOE",
+                                        "👔 **DRAW. Replay the match with the same match ID.**",
+                                        COLOR_GOLD,
+                                    ),
+                                    view=view,
+                                )
+                                await cog.db._conn.execute(
+                                    "UPDATE arcade_tournament_matches SET status='ready' "
+                                    "WHERE match_id=? AND status='playing'",
+                                    (int(match["match_id"]),),
+                                )
+                                await cog.db._conn.commit()
+                                return
+
+                            winner_user = players[winner]
+                            await interaction.response.edit_message(
+                                embed=cog.embed(
+                                    "⭕ TOURNAMENT · TIC-TAC-TOE",
+                                    f"🏆 **{winner_user.display_name} wins Match #{match['match_id']}.**",
+                                    discord.Color.green(),
+                                ),
+                                view=view,
+                            )
+                            await cog._complete_tournament_match(
+                                ctx, match, winner_user.id
+                            )
+                            return
+
+                        turn = 1 - turn
+                        await interaction.response.edit_message(
+                            embed=cog.embed(
+                                "⭕ TOURNAMENT · TIC-TAC-TOE",
+                                f"**{players[turn].display_name}**'s turn.\n"
+                                f"X · {players[0].display_name}\n"
+                                f"O · {players[1].display_name}",
+                            ),
+                            view=view,
+                        )
+
+            async def on_timeout(view):
+                if view.done:
+                    return
+                view.done = True
+                view.stop()
+                winner = players[1 - turn]
+                await cog._complete_tournament_match(
+                    ctx, match, winner.id, "opponent timed out"
+                )
+
+        return TournamentTTT()
+
+    def _tournament_connect4_view(self, ctx, match, player_a, player_b):
+        board = [[None] * 7 for _ in range(6)]
+        players = [player_a, player_b]
+        turn = 0
+        cog = self
+
+        class TournamentConnect4(discord.ui.View):
+            def __init__(view):
+                super().__init__(timeout=600)
+                view.done = False
+                select = discord.ui.Select(
+                    placeholder="Choose a column",
+                    options=[
+                        discord.SelectOption(
+                            label=f"Column {i + 1}", value=str(i)
+                        )
+                        for i in range(7)
+                    ],
+                )
+
+                async def choose(interaction):
+                    nonlocal turn
+                    if view.done:
+                        return
+                    if interaction.user.id != players[turn].id:
+                        return await interaction.response.send_message(
+                            "❌ Not your turn.", ephemeral=True
+                        )
+
+                    col = int(select.values[0])
+                    row = next(
+                        (r for r in range(5, -1, -1) if board[r][col] is None),
+                        None,
+                    )
+                    if row is None:
+                        return await interaction.response.send_message(
+                            "❌ That column is full.", ephemeral=True
+                        )
+
+                    board[row][col] = turn
+                    winner = None
+                    for r in range(6):
+                        for c in range(7):
+                            player = board[r][c]
+                            if player is None:
+                                continue
+                            for dr, dc in ((1,0),(0,1),(1,1),(1,-1)):
+                                if all(
+                                    0 <= r + dr*n < 6
+                                    and 0 <= c + dc*n < 7
+                                    and board[r + dr*n][c + dc*n] == player
+                                    for n in range(4)
+                                ):
+                                    winner = player
+                                    break
+                            if winner is not None:
+                                break
+                        if winner is not None:
+                            break
+
+                    full = all(
+                        cell is not None
+                        for rowv in board
+                        for cell in rowv
+                    )
+                    board_text = "\n".join(
+                        "".join(
+                            "🔴" if cell == 0 else "🟡" if cell == 1 else "⚪"
+                            for cell in rowv
+                        )
+                        for rowv in board
+                    )
+
+                    if winner is not None or full:
+                        view.done = True
+                        view.stop()
+                        for child in view.children:
+                            child.disabled = True
+
+                        if winner is None:
+                            await interaction.response.edit_message(
+                                embed=cog.embed(
+                                    "🔴 TOURNAMENT · CONNECT FOUR",
+                                    f"{board_text}\n\n"
+                                    "👔 **DRAW. Replay the match with the same match ID.**",
+                                    COLOR_GOLD,
+                                ),
+                                view=view,
+                            )
+                            await cog.db._conn.execute(
+                                "UPDATE arcade_tournament_matches SET status='ready' "
+                                "WHERE match_id=? AND status='playing'",
+                                (int(match["match_id"]),),
+                            )
+                            await cog.db._conn.commit()
+                            return
+
+                        winner_user = players[winner]
+                        await interaction.response.edit_message(
+                            embed=cog.embed(
+                                "🔴 TOURNAMENT · CONNECT FOUR",
+                                f"{board_text}\n\n"
+                                f"🏆 **{winner_user.display_name} wins "
+                                f"Match #{match['match_id']}.**",
+                                discord.Color.green(),
+                            ),
+                            view=view,
+                        )
+                        await cog._complete_tournament_match(
+                            ctx, match, winner_user.id
+                        )
+                        return
+
+                    turn = 1 - turn
+                    await interaction.response.edit_message(
+                        embed=cog.embed(
+                            "🔴 TOURNAMENT · CONNECT FOUR",
+                            f"{board_text}\n\n"
+                            f"**{players[turn].display_name}**'s turn.",
+                        ),
+                        view=view,
+                    )
+
+                select.callback = choose
+                view.add_item(select)
+
+            async def on_timeout(view):
+                if view.done:
+                    return
+                view.done = True
+                view.stop()
+                winner = players[1 - turn]
+                await cog._complete_tournament_match(
+                    ctx, match, winner.id, "opponent timed out"
+                )
+
+        return TournamentConnect4()
+
     @commands.command(name="arcade")
     async def arcade(self, ctx):
         await ctx.send(embed=self.embed(
