@@ -630,6 +630,11 @@ class Database:
         if "event_until" not in world_columns:
             await self._conn.execute("ALTER TABLE rpg_worlds ADD COLUMN event_until REAL")
 
+        guilds_cur = await self._conn.execute("PRAGMA table_info(guilds)")
+        guild_columns_existing = {row["name"] for row in await guilds_cur.fetchall()}
+        if "server_id" not in guild_columns_existing:
+            await self._conn.execute("ALTER TABLE guilds ADD COLUMN server_id TEXT NOT NULL DEFAULT ''")
+
         auction_cur = await self._conn.execute("PRAGMA table_info(economy_auctions)")
         auction_columns = {row["name"] for row in await auction_cur.fetchall()}
         if "asset_type" not in auction_columns:
@@ -1185,13 +1190,17 @@ class Database:
 
     async def settle_expired_auctions(self, guild_id):
         guild_id=str(guild_id)
-        cur=await self._conn.execute("SELECT auction_id FROM economy_auctions WHERE guild_id=? AND status='open' AND ends_at<=?",(guild_id,time.time()))
+        cur=await self._conn.execute(
+            "SELECT auction_id FROM economy_auctions WHERE guild_id=? AND status='open' AND ends_at<=?",
+            (guild_id,time.time()),
+        )
         ids=[int(r["auction_id"]) for r in await cur.fetchall()]
-        count=0
+        settled=[]
         for auction_id in ids:
             row,reason=await self.settle_auction(guild_id,auction_id)
-            if row is not None and reason=="ok": count+=1
-        return count
+            if row is not None and reason=="ok":
+                settled.append(row)
+        return settled
 
     async def get_collectibles(self, guild_id, user_id):
         cur=await self._conn.execute("SELECT collectible_id,amount FROM economy_collectibles WHERE guild_id=? AND user_id=? AND amount>0 ORDER BY amount DESC,collectible_id",(str(guild_id),str(user_id)))
@@ -2383,8 +2392,6 @@ class Database:
         try:
             cur=await self._conn.execute("SELECT 1 FROM guild_members WHERE guild_id=? AND user_id=?",(guild_id,user_id))
             if not await cur.fetchone(): await self._conn.rollback(); return False,"member",0
-            cur=await self._conn.execute("UPDATE users SET balance=balance-? WHERE guild_id=? AND user_id=? AND balance>=?",(amount,guild_id.split(":")[0] if False else "",user_id,amount))
-            # Discord guild/server id is stored separately from RPG/economy guild key; resolve it.
             g=await self.get_guild(guild_id)
             if not g:
                 await self._conn.rollback(); return False,"missing",0
