@@ -28,6 +28,7 @@ class RPG(commands.Cog):
     async def profile(self,ctx):
         player=await get_player(self.db,ctx.guild.id,ctx.author.id); cls=get_class(player["class_key"]); need=max(1,player['level']*100)
         embed=discord.Embed(title=f"♡ ECLIPSE · {cls['icon']} {cls['name']} ♡",description=f"**{ctx.author.display_name}**\nLevel **{player['level']}** · {cls['description']}\n\n{xp_bar(player['xp'],need)} **{player['xp']}/{need} XP**",color=COLOR_PRIMARY)
+        embed.add_field(name="♡ REALM",value=f"{get_region(player.get('region'))['icon']} {get_region(player.get('region'))['name']}" if get_region(player.get("region")) else "Unknown",inline=False)
         embed.add_field(name="♡ VITALS",value=f"❤️ {player['hp']}/{player['max_hp']} HP\n💠 {player['mp']}/{player['max_mp']} MP\n💰 {player['gold']:,} RPG gold",inline=True)
         embed.add_field(name="♡ STATS",value=f"⚔️ {player['strength']} STR\n🛡️ {player['defense']} DEF\n🔮 {player['magic']} MAG\n🪽 {player['agility']} AGI",inline=True)
         embed.set_thumbnail(url=ctx.author.display_avatar.url); embed.set_footer(text="୨୧ !rpg class · !rpg adventure · !rpg rest"); await ctx.send(embed=embed)
