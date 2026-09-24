@@ -361,6 +361,10 @@ class GuildMusicState:
         self.reconnect_task = None
         self.manual_disconnect = False
         self.playback_lock = asyncio.Lock()
+        # A finished/stopped VoiceClient can briefly still have its audio
+        # player thread unwinding. Track end handlers so one generation can
+        # never advance the queue twice.
+        self.ending_generations = set()
 
 
 class QueuePageView(discord.ui.View):
@@ -646,9 +650,32 @@ class Music(commands.Cog):
     async def enqueue(self, ctx, query):
         if ctx.voice_client is None:
             if not ctx.author.voice or not ctx.author.voice.channel:
-                await ctx.send("🎤 Join a voice channel first.")
+                await ctx.send(
+                    "🎤 Join a voice channel first, then use `!play <song>`. "
+                    "Discord does not expose a voice channel for the bot to join "
+                    "when you are not connected to one."
+                )
                 return
-            await self._connect_to_channel(ctx.guild, ctx.author.voice.channel)
+
+            try:
+                await self._connect_to_channel(ctx.guild, ctx.author.voice.channel)
+            except Exception as error:
+                logger.exception(
+                    "Could not join voice channel %s in guild %s",
+                    ctx.author.voice.channel.id,
+                    ctx.guild.id,
+                )
+                await ctx.send(
+                    f"❌ I couldn't join **{ctx.author.voice.channel.name}**: {error}"
+                )
+                return
+
+            if ctx.voice_client is None:
+                await ctx.send(
+                    "❌ Discord did not create a voice connection. Try the command again."
+                )
+                return
+
             await self._remember_voice(ctx.guild, ctx.author.voice.channel)
         state = await self.ensure_settings(ctx.guild.id)
         state.text_channel = ctx.channel
@@ -697,8 +724,10 @@ class Music(commands.Cog):
         stream_url = data.get("url")
         if not stream_url:
             raise SongDownloadError("YouTube returned no stream URL.")
+
         title = data.get("title", query)
         webpage_url = data.get("webpage_url")
+
         state.playback_generation += 1
         generation = state.playback_generation
         state.intentional_stop_generation = None
@@ -710,130 +739,201 @@ class Music(commands.Cog):
             "stream_url": stream_url,
             "generation": generation,
             "key": webpage_url or data.get("id") or query,
+            "started_at": time.monotonic(),
+            "duration": data.get("duration"),
+            "paused_at": None,
+            "paused_total": 0.0,
         }
         state.recent.append(state.current["key"])
+
         source = discord.FFmpegPCMAudio(stream_url, **FFMPEG_OPTIONS)
         source = discord.PCMVolumeTransformer(source, volume=state.volume)
 
         def after_playing(error):
             """
-            discord.py invokes this callback from the voice player's worker
-            thread. Schedule the coroutine back onto the bot loop explicitly
-            and keep a reference to the task long enough to surface failures.
+            discord.py calls this from its audio-player worker thread.
+            Hand the coroutine back to the bot loop with the documented
+            thread-safe future bridge. Clean the finished source explicitly.
             """
-            def schedule():
-                try:
-                    task = asyncio.create_task(
-                        self._handle_player_end(
-                            guild,
-                            query,
-                            requester_name,
-                            generation,
-                            error,
-                        ),
-                        name=f"music-end-{guild.id}-{generation}",
-                    )
-
-                    def report_failure(done):
-                        try:
-                            done.result()
-                        except asyncio.CancelledError:
-                            pass
-                        except Exception:
-                            logger.exception(
-                                "Player-end handler crashed for guild %s",
-                                guild.id,
-                            )
-
-                    task.add_done_callback(report_failure)
-                except Exception:
-                    logger.exception(
-                        "Could not schedule player-end callback for guild %s",
-                        guild.id,
-                    )
-
             try:
-                self.bot.loop.call_soon_threadsafe(schedule)
+                source.cleanup()
             except Exception:
                 logger.exception(
-                    "Could not hand player-end callback to bot loop for guild %s",
+                    "Failed to clean up finished audio source for guild %s generation %s",
                     guild.id,
+                    generation,
+                )
+
+            try:
+                future = asyncio.run_coroutine_threadsafe(
+                    self._handle_player_end(
+                        guild,
+                        query,
+                        requester_name,
+                        generation,
+                        error,
+                    ),
+                    self.bot.loop,
+                )
+
+                def report_failure(done):
+                    try:
+                        done.result()
+                    except asyncio.CancelledError:
+                        pass
+                    except Exception:
+                        logger.exception(
+                            "Player-end handler crashed for guild %s generation %s",
+                            guild.id,
+                            generation,
+                        )
+
+                future.add_done_callback(report_failure)
+            except Exception:
+                logger.exception(
+                    "Could not schedule player-end handler for guild %s generation %s",
+                    guild.id,
+                    generation,
                 )
 
         try:
             vc = guild.voice_client
             if vc is None:
                 raise RuntimeError("Voice connection disappeared before playback started.")
+
+            # Protect queue transitions/replay/skip from the tiny EOF teardown
+            # race inside discord.py's audio player.
+            await self._wait_for_player_idle(vc)
             vc.play(source, after=after_playing)
         except Exception:
+            try:
+                source.cleanup()
+            except Exception:
+                pass
             if state.playback_generation == generation:
                 state.current = None
             raise
+
         if state.text_channel:
             embed = discord.Embed(
                 title="🎵 Now Playing",
-                description=f"**{title}**\n{webpage_url or ''}",
+                description=f"**{title}**\\n{webpage_url or ''}",
                 color=COLOR_MUSIC,
             )
             embed.set_footer(text=f"Requested by {requester_name}")
-            await state.text_channel.send(embed=embed, view=MusicControlView(self, guild.id))
+            await state.text_channel.send(
+                embed=embed,
+                view=MusicControlView(self, guild.id),
+            )
+
+    async def _wait_for_player_idle(self, vc, timeout=3.0):
+        """Wait for discord.py's previous audio player to fully stop."""
+        if vc is None:
+            return
+
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+
+        while vc.is_playing() or vc.is_paused():
+            if loop.time() >= deadline:
+                raise RuntimeError(
+                    "Discord voice player did not become idle before the next track."
+                )
+            await asyncio.sleep(0.05)
 
     async def _handle_player_end(self, guild, query, requester_name, generation, error):
         state = self.states.get(guild.id)
         if state is None or generation != state.playback_generation:
             return
-        if state.intentional_stop_generation == generation:
-            state.intentional_stop_generation = None
-            if state.current and state.current.get("generation") == generation:
-                state.current = None
-            if state.current is None and not state.queue:
-                return
-            await self._play_next(guild)
-            return
-        if error:
-            logger.error("FFmpeg/player error for '%s': %s", query, error)
-            for _ in range(self.MAX_RECOVERY_ATTEMPTS):
-                try:
-                    fresh = await self._resolve_for_playback(guild, query)
-                    if guild.voice_client is not None:
-                        await self._start_resolved_track(guild, state, query, requester_name, fresh)
-                        if state.text_channel:
-                            await state.text_channel.send("🔄 Stream failed; ECLIPSE refreshed the source.")
-                        return
-                except Exception as refresh_error:
-                    logger.warning("Playback recovery failed for '%s': %s", query, refresh_error)
-        if state.current and state.current.get("generation") == generation:
-            finished = dict(state.current)
-            state.history.append(finished)
-            state.last_track = finished
-            state.current = None
 
-        # Give discord.py one event-loop turn to finish detaching the old
-        # FFmpeg source before starting the next source. Without this, a
-        # completed stream can occasionally leave VoiceClient in a transient
-        # state where the next vc.play() is rejected and the queue silently
-        # stalls.
-        await asyncio.sleep(0.1)
-
-        try:
-            await self._play_next(guild)
-        except Exception:
-            logger.exception(
-                "Failed to advance music queue after '%s' in guild %s",
-                query,
+        if generation in state.ending_generations:
+            logger.warning(
+                "Ignoring duplicate player-end callback for guild %s generation %s",
                 guild.id,
+                generation,
             )
-            # Do not leave the queue permanently stuck after a transient
-            # VoiceClient/FFmpeg handoff failure. Retry once on the loop.
-            await asyncio.sleep(0.5)
+            return
+
+        state.ending_generations.add(generation)
+        try:
+            if state.intentional_stop_generation == generation:
+                state.intentional_stop_generation = None
+                if state.current and state.current.get("generation") == generation:
+                    state.current = None
+
+                if state.current is None and not state.queue:
+                    return
+
+                await self._wait_for_player_idle(guild.voice_client)
+                await self._play_next(guild)
+                return
+
+            if error:
+                logger.error(
+                    "FFmpeg/player error for '%s' in guild %s generation %s: %s",
+                    query,
+                    guild.id,
+                    generation,
+                    error,
+                )
+
+                for attempt in range(1, self.MAX_RECOVERY_ATTEMPTS + 1):
+                    try:
+                        fresh = await self._resolve_for_playback(guild, query)
+                        if guild.voice_client is not None:
+                            await self._start_resolved_track(
+                                guild,
+                                state,
+                                query,
+                                requester_name,
+                                fresh,
+                            )
+                            if state.text_channel:
+                                await state.text_channel.send(
+                                    "🔄 Stream failed; ECLIPSE refreshed the source."
+                                )
+                            return
+                    except Exception as refresh_error:
+                        logger.warning(
+                            "Playback recovery %s/%s failed for '%s': %s",
+                            attempt,
+                            self.MAX_RECOVERY_ATTEMPTS,
+                            query,
+                            refresh_error,
+                        )
+
+            if state.current and state.current.get("generation") == generation:
+                finished = dict(state.current)
+                state.history.append(finished)
+                state.last_track = finished
+                state.current = None
+
+            vc = guild.voice_client
+            if vc is None:
+                return
+
+            await self._wait_for_player_idle(vc)
+
             try:
-                if guild.voice_client is not None:
-                    await self._play_next(guild)
+                await self._play_next(guild)
             except Exception:
                 logger.exception(
-                    "Second queue-advance attempt failed for guild %s",
+                    "Failed to advance music queue after '%s' in guild %s",
+                    query,
                     guild.id,
                 )
+                await asyncio.sleep(0.5)
+                if guild.voice_client is not None:
+                    try:
+                        await self._wait_for_player_idle(guild.voice_client)
+                        await self._play_next(guild)
+                    except Exception:
+                        logger.exception(
+                            "Second queue-advance attempt failed for guild %s",
+                            guild.id,
+                        )
+        finally:
+            state.ending_generations.discard(generation)
 
     async def _play_next(self, guild):
         state = self.states.get(guild.id)
