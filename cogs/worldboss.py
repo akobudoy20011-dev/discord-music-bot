@@ -1,20 +1,30 @@
 """Server-wide RPG world boss system."""
+import random
 import time
 import discord
 from discord.ext import commands
 from rpg.equipment import equipment_stats
 from rpg.manager import get_player
 
+PHASES=(('Awakening',1.00,0.70),('Enraged',1.25,0.35),('Cataclysm',1.55,0.00))
+
+def boss_phase(b):
+    ratio=max(0.0,float(b['hp'])/max(1,int(b['max_hp'])))
+    if ratio>0.70: return 'Awakening',1.00
+    if ratio>0.35: return 'Enraged',1.25
+    return 'Cataclysm',1.55
+
 BOSSES={
-    "void_colossus":{"name":"Void Colossus","icon":"🌑","hp":250000,"attack":180,"coins":75000,"xp":7500,"duration":7200},
-    "astral_leviathan":{"name":"Astral Leviathan","icon":"🌌","hp":500000,"attack":260,"coins":150000,"xp":15000,"duration":10800},
-    "eclipse_sovereign":{"name":"Eclipse Sovereign","icon":"👑","hp":1000000,"attack":400,"coins":300000,"xp":30000,"duration":14400},
+    "void_colossus":{"name":"Void Colossus","icon":"🌑","hp":250000,"attack":180,"coins":75000,"xp":7500,"duration":7200,"loot":"worldboss_void_core"},
+    "astral_leviathan":{"name":"Astral Leviathan","icon":"🌌","hp":500000,"attack":260,"coins":150000,"xp":15000,"duration":10800,"loot":"worldboss_leviathan_heart"},
+    "eclipse_sovereign":{"name":"Eclipse Sovereign","icon":"👑","hp":1000000,"attack":400,"coins":300000,"xp":30000,"duration":14400,"loot":"worldboss_sovereign_heart"},
 }
 
 class WorldBoss(commands.Cog):
     def __init__(self,bot): self.bot=bot; self.db=bot.db
     def _embed(self,b):
         m=BOSSES.get(b["boss_id"],{})
+        phase,multiplier=boss_phase(b)
         return discord.Embed(title=f"{m['icon']} {b['name']}",description=f"HP **{int(b['hp']):,}/{int(b['max_hp']):,}**\nTime: <t:{int(b['ends_at'])}:R>\nReward pool: **{int(b['reward_coins']):,} coins + {int(b['reward_xp']):,} XP**\n\nAttack with !worldboss attack · Claim with !worldboss claim",color=discord.Color.dark_purple())
 
     @commands.group(name="worldboss",aliases=["wb"],invoke_without_command=True)
@@ -42,8 +52,10 @@ class WorldBoss(commands.Cog):
     async def attack(self,ctx):
         b=await self.db.get_world_boss(ctx.guild.id)
         if not b or b["status"]!="active" or float(b["ends_at"])<=time.time(): await ctx.send("❌ No active world boss."); return
-        p=await get_player(self.db,ctx.guild.id,ctx.author.id); gear=await equipment_stats(self.db,ctx.guild.id,ctx.author.id); companion=await self.db.get_active_rpg_companion(ctx.guild.id,ctx.author.id)
-        damage=max(100,int(p["strength"])*8+int(p["magic"])*5+int(p["level"])*25+gear["power"]*6)
+        p=await get_player(self.db,ctx.guild.id,ctx.author.id); gear=await equipment_stats(self.db,ctx.guild.id,ctx.author.id)
+        phase,multiplier=boss_phase(b)
+        base=int(p["strength"])*8+int(p["magic"])*5+int(p["level"])*25+gear["power"]*6
+        damage=max(100,int(base*random.uniform(0.90,1.10)*multiplier))
         damage=min(damage,max(1,int(b["hp"])))
         ok,reason,hp=await self.db.damage_world_boss(ctx.guild.id,ctx.author.id,damage)
         if not ok: await ctx.send("❌ The world boss is no longer active."); return
