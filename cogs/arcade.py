@@ -114,6 +114,8 @@ class Arcade(commands.Cog):
         messages = {"closed":"Tournament is closed.","full":"Tournament is full.","joined":"You already joined.","balance":"You cannot afford the entry fee."}
         if not ok:
             return await ctx.send("❌ " + messages.get(reason, reason))
+        user = await self.db.get_user(ctx.guild.id, ctx.author.id)
+        await check_achievements(self.db, ctx, ctx.author, user)
         await ctx.send(f"🎟️ {ctx.author.mention} entered **{t['name']}**.")
 
     @tournament.command(name="start")
