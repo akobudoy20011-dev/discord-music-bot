@@ -74,6 +74,20 @@ COGS = [
 
 @bot.event
 async def setup_hook():
+    global WEB_SERVER_TASK
+
+    # Start Render's HTTP health server first so port binding does not
+    # depend on Discord cog loading completing successfully.
+    try:
+        WEB_SERVER_TASK = asyncio.create_task(
+            start_web_server(),
+            name="eclipse-web-server",
+        )
+        await asyncio.sleep(0)
+        logger.info("Render health server startup task scheduled.")
+    except Exception:
+        logger.exception("Failed to schedule Render health server.")
+
     bot.db = Database()
     bind_database(Database)
     await bot.db.connect()
@@ -99,8 +113,7 @@ async def setup_hook():
             if cog in critical_cogs:
                 raise RuntimeError(f"Critical cog failed to load: {cog}") from e
 
-    global WEB_SERVER_TASK
-    WEB_SERVER_TASK = asyncio.create_task(start_web_server(), name="eclipse-web-server")
+    logger.info("All cogs loaded; Discord bot startup can continue.")
 
 
 @bot.event
