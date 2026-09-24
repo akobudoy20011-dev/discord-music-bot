@@ -59,6 +59,7 @@ COGS = [
     "cogs.arcade",
     "cogs.music",
     "cogs.watchdog",
+    "cogs.cache_cleanup",
     "cogs.premium",
     "cogs.maintenance",
     "cogs.fun",
