@@ -346,25 +346,137 @@ class Games(commands.Cog):
         if HAS_GENAI and api_key:
             self.ai_client = genai.Client(api_key=api_key)
 
+class GamesHubView(discord.ui.View):
+    """Interactive game center with built-in game rules."""
+
+    def __init__(self, *, author_id=None, timeout=300):
+        super().__init__(timeout=timeout)
+        self.author_id = author_id
+        self.game_select = discord.ui.Select(
+            placeholder="Choose a game to see how to play...",
+            min_values=1, max_values=1,
+            options=[
+                discord.SelectOption(label="Trivia", value="trivia", emoji="🧠", description="Answer questions for coins"),
+                discord.SelectOption(label="Rock Paper Scissors", value="rps", emoji="🪨", description="Beat the bot"),
+                discord.SelectOption(label="Roll", value="roll", emoji="🎲", description="Roll high and win"),
+                discord.SelectOption(label="Guess", value="guess", emoji="🔢", description="Guess the hidden number"),
+                discord.SelectOption(label="Coinflip", value="coinflip", emoji="🪙", description="Call heads or tails"),
+                discord.SelectOption(label="Slots", value="slots", emoji="🎰", description="Spin for matching reels"),
+                discord.SelectOption(label="Blackjack", value="blackjack", emoji="🃏", description="Beat the dealer"),
+                discord.SelectOption(label="8-Ball", value="8ball", emoji="🎱", description="Ask the magic 8-ball"),
+                discord.SelectOption(label="Tic-Tac-Toe", value="ttt", emoji="⭕", description="Challenge another player"),
+                discord.SelectOption(label="Connect Four", value="connect4", emoji="🔴", description="Connect four pieces"),
+                discord.SelectOption(label="Dice Battle", value="dicebattle", emoji="⚔️", description="Roll against another player"),
+            ],
+        )
+        self.game_select.callback = self._select_game
+        self.add_item(self.game_select)
+
+    async def _guard(self, interaction):
+        if self.author_id is not None and interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ This game center belongs to the person who opened it.", ephemeral=True)
+            return False
+        return True
+
+    async def _select_game(self, interaction):
+        if not await self._guard(interaction):
+            return
+        game = self.game_select.values[0]
+        pages = {
+            "trivia": ("🧠 TRIVIA", `!trivia`\n\nA question appears with four buttons. Pick the answer before the 30-second timer expires. Correct answers award coins."),
+            "rps": ("🪨 ROCK · PAPER · SCISSORS", `!rps` — opens the button game\n`!rps rock 1000` — play with a wager\n\nRock beats Scissors. Scissors beats Paper. Paper beats Rock. Winning wagers pay 2×; ties return the wager."),
+            "roll": ("🎲 ROLL", `!roll 1000` — default 100-sided die\n`!roll 100 1000` — choose sides and bet\n\nRoll high enough to hit the current winning threshold and receive the payout."),
+            "guess": ("🔢 GUESS", `!guess 7 1000`\n\nPick a number from 1–10 and wager. Guess the hidden number to receive the 5× payout."),
+            "coinflip": ("🪙 COINFLIP", `!coinflip heads 1000`\n\nChoose Heads or Tails. Correct calls pay 2× your wager."),
+            "slots": ("🎰 SLOTS", `!slots 1000`\n\nPlace a wager and spin three reels. Matching symbols determine the payout."),
+            "blackjack": ("🃏 BLACKJACK", `!blackjack 1000`\n\nUse Hit to draw or Stand to stop. Get closer to 21 than the dealer without going over."),
+            "8ball": ("🎱 MAGIC 8-BALL", `!8ball Will I win?`\n\nAsk a yes/no-style question and ECLIPSE returns a mysterious answer. No wager required."),
+            "ttt": ("⭕ TIC-TAC-TOE", `!ttt @player`\n`!ttt @player 1000`\n\nTake turns placing X and O. Get three in a row. A draw returns both wagers."),
+            "connect4": ("🔴 CONNECT FOUR", `!connect4 @player`\n`!connect4 @player 1000`\n\nTake turns dropping pieces into seven columns. Connect four horizontally, vertically, or diagonally."),
+            "dicebattle": ("⚔️ DICE BATTLE", `!dicebattle @player`\n`!dicebattle @player 1000`\n\nBoth players roll. The higher roll wins the wager. A tie returns both wagers."),
+        }
+        title, instructions = pages[game]
+        embed = discord.Embed(title=f"🎮 ECLIPSE GAME CENTER · {title}", description=instructions, color=COLOR_PRIMARY)
+        embed.set_footer(text="୨୧ Select another game above to view its rules.")
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    @discord.ui.button(label="Game List", emoji="🎮", style=discord.ButtonStyle.primary)
+    async def game_list(self, interaction, button):
+        if not await self._guard(interaction):
+            return
+        await interaction.response.edit_message(embed=build_games_home_embed(), view=self)
+
+    @discord.ui.button(label="Arcade", emoji="⚔️", style=discord.ButtonStyle.secondary)
+    async def arcade(self, interaction, button):
+        if not await self._guard(interaction):
+            return
+        embed = discord.Embed(
+            title="⚔️ ECLIPSE · MULTIPLAYER ARCADE",
+            description=(
+                "**Challenge other players**\n"
+                f"{q}!ttt @player [bet]{q} · Tic-Tac-Toe\n"
+                f"{q}!connect4 @player [bet]{q} · Connect Four\n"
+                f"{q}!dicebattle @player [bet]{q} · Dice Battle\n\n"
+                "**Progression**\n"
+                f"{q}!arcadeprofile{q} · Your arcade record\n"
+                f"{q}!gamestats{q} · Detailed stats\n"
+                f"{q}!gameleaderboard <game>{q} · Game leaderboard\n"
+                f"{q}!season{q} · Current arcade season\n"
+                f"{q}!dailies{q} · Today's challenge\n"
+                f"{q}!claimdaily{q} · Claim completed daily reward\n\n"
+                "**Tournaments**\n"
+                f"{q}!tournament{q} · Tournament hub"
+            ),
+            color=COLOR_GOLD,
+        )
+        embed.set_footer(text="୨୧ Multiplayer wagers cap at 1,000,000 coins.")
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    @discord.ui.button(label="How It Works", emoji="❔", style=discord.ButtonStyle.success)
+    async def how_it_works(self, interaction, button):
+        if not await self._guard(interaction):
+            return
+        embed = discord.Embed(
+            title="❔ HOW TO PLAY · ECLIPSE GAMES",
+            description=(
+                "**1 · Pick a game**\nUse the menu above to see its command and rules.\n\n"
+                "**2 · Wagers**\nBetting games withdraw the wager when the game starts. Wins pay out; ties return the wager.\n\n"
+                "**3 · Multiplayer**\nMention another player for Tic-Tac-Toe, Connect Four, or Dice Battle.\n\n"
+                "**4 · Progression**\nArcade games track plays, wins, streaks, net coins, XP, and daily progress.\n\n"
+                f"**5 · Full commands**\nUse {q}!help{q} for the complete ECLIPSE command center."
+            ),
+            color=COLOR_PRIMARY,
+        )
+        await interaction.response.edit_message(embed=embed, view=self)
+
+
+def build_games_home_embed():
+    embed = discord.Embed(
+        title="🎮 ECLIPSE · GAME CENTER",
+        description=(
+            "**11 playable games · single-player + multiplayer**\n"
+            "Choose a game from the menu to see exactly how to play it.\n\n"
+            "### 🎲 SOLO · LUCK & SKILL\n"
+            "🧠 **Trivia** · 🪨 **RPS** · 🎲 **Roll** · 🔢 **Guess**\n"
+            "🪙 **Coinflip** · 🎰 **Slots** · 🃏 **Blackjack** · 🎱 **8-Ball**\n\n"
+            "### ⚔️ MULTIPLAYER · ARCADE\n"
+            "⭕ **Tic-Tac-Toe** · 🔴 **Connect Four** · ⚔️ **Dice Battle**\n\n"
+            "### 🏆 PROGRESSION\n"
+            f"{q}!arcadeprofile{q} · {q}!gamestats{q} · {q}!gameleaderboard <game>{q}\n"
+            f"{q}!season{q} · {q}!dailies{q} · {q}!claimdaily{q} · {q}!tournament{q}\n\n"
+            "**Maximum wager:** 1,000,000 coins\n"
+            "୨୧ Pick a game above for its command + rules."
+        ),
+        color=COLOR_PRIMARY,
+    )
+    embed.set_footer(text="ECLIPSE · GAME CENTER")
+    return embed
+
+
     @commands.command(name="games")
     async def games(self, ctx):
-        """Displays available mini-games and rules."""
-        embed = discord.Embed(
-            title="🎮 Mini-Games Hub",
-            description=(
-                "Test your luck and skills to earn coins!\n\n"
-                "🧠 `!trivia` — Answer questions for bonus coins.\n"
-                "🪨 `!rps [choice] [bet]` — Play Rock, Paper, Scissors.\n"
-                "🎲 `!roll <bet>` — Roll a die (55+ wins 2x).\n"
-                "🔢 `!guess <1-10> <bet>` — Guess secret number (5x payout!).\n"
-                "🪙 `!coinflip <heads/tails> <bet>` — Flip a coin (2x payout).\n"
-                "🎰 `!slots <bet>` — Spin the slot machine reels.\n"
-                "🃏 `!blackjack <bet>` — Interactive card table.\n"
-                "🎱 `!8ball <question>` — Ask the mysterious magic 8-ball."
-            ),
-            color=COLOR_PRIMARY
-        )
-        await ctx.send(embed=footer(embed, ctx))
+        """Open the interactive ECLIPSE game center."""
+        await ctx.send(embed=build_games_home_embed(), view=GamesHubView(author_id=ctx.author.id))
 
     @commands.command(name="trivia")
     @commands.cooldown(1, 10, commands.BucketType.user)
