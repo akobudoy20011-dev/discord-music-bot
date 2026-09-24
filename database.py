@@ -127,7 +127,26 @@ CREATE TABLE IF NOT EXISTS rpg_worlds (
     day INTEGER NOT NULL DEFAULT 1,
     weather TEXT NOT NULL DEFAULT 'clear',
     instability INTEGER NOT NULL DEFAULT 0,
+    active_event TEXT,
+    event_until REAL,
     updated_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS rpg_guardians (
+    guild_id TEXT NOT NULL,
+    region_id TEXT NOT NULL,
+    defeated INTEGER NOT NULL DEFAULT 0,
+    defeated_by TEXT,
+    defeated_at REAL,
+    PRIMARY KEY (guild_id, region_id)
+);
+
+CREATE TABLE IF NOT EXISTS rpg_discoveries (
+    guild_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    discovery_id TEXT NOT NULL,
+    discovered_at REAL NOT NULL,
+    PRIMARY KEY (guild_id, user_id, discovery_id)
 );
 
 CREATE TABLE IF NOT EXISTS rpg_skills (
@@ -178,6 +197,14 @@ class Database:
             await self._conn.execute("ALTER TABLE rpg_players ADD COLUMN region TEXT NOT NULL DEFAULT 'moonlit_vale'")
         if "travel_until" not in columns:
             await self._conn.execute("ALTER TABLE rpg_players ADD COLUMN travel_until REAL NOT NULL DEFAULT 0")
+
+        world_cur = await self._conn.execute("PRAGMA table_info(rpg_worlds)")
+        world_columns = {row["name"] for row in await world_cur.fetchall()}
+        if "active_event" not in world_columns:
+            await self._conn.execute("ALTER TABLE rpg_worlds ADD COLUMN active_event TEXT")
+        if "event_until" not in world_columns:
+            await self._conn.execute("ALTER TABLE rpg_worlds ADD COLUMN event_until REAL")
+
         await self._conn.commit()
 
     async def close(self):
@@ -504,7 +531,7 @@ class Database:
         return dict(row)
 
     async def update_rpg_world(self, guild_id, **fields):
-        allowed = {"season", "day", "weather", "instability", "updated_at"}
+        allowed = {"season", "day", "weather", "instability", "active_event", "event_until", "updated_at"}
         fields = {k: v for k, v in fields.items() if k in allowed}
         if not fields:
             return await self.get_rpg_world(guild_id)
@@ -517,7 +544,7 @@ class Database:
         await self._conn.commit()
         return await self.get_rpg_world(guild_id)
 
-    async def advance_rpg_world(self, guild_id):
+    async def advance_rpg_world(self, guild_id, event_id=None, event_until=None):
         world = await self.get_rpg_world(guild_id)
         weather = random.choice(["clear", "mist", "rain", "moonlight", "ashfall"])
         instability = min(10, max(0, int(world["instability"]) + random.choice([-1, 0, 0, 1])))
@@ -526,8 +553,56 @@ class Database:
             day=int(world["day"]) + 1,
             weather=weather,
             instability=instability,
+            active_event=event_id,
+            event_until=event_until,
             updated_at=time.time()
         )
+
+    async def get_rpg_guardian(self, guild_id, region_id):
+        cur = await self._conn.execute(
+            "SELECT * FROM rpg_guardians WHERE guild_id=? AND region_id=?",
+            (str(guild_id), str(region_id))
+        )
+        row = await cur.fetchone()
+        if row is None:
+            await self._conn.execute(
+                "INSERT INTO rpg_guardians (guild_id, region_id) VALUES (?, ?)",
+                (str(guild_id), str(region_id))
+            )
+            await self._conn.commit()
+            return {"guild_id":str(guild_id),"region_id":str(region_id),"defeated":0,"defeated_by":None,"defeated_at":None}
+        return dict(row)
+
+    async def defeat_rpg_guardian(self, guild_id, region_id, user_id):
+        await self.get_rpg_guardian(guild_id, region_id)
+        await self._conn.execute(
+            "UPDATE rpg_guardians SET defeated=1, defeated_by=?, defeated_at=? WHERE guild_id=? AND region_id=?",
+            (str(user_id), time.time(), str(guild_id), str(region_id))
+        )
+        await self._conn.commit()
+        return await self.get_rpg_guardian(guild_id, region_id)
+
+    async def get_rpg_discoveries(self, guild_id, user_id):
+        cur = await self._conn.execute(
+            "SELECT discovery_id, discovered_at FROM rpg_discoveries WHERE guild_id=? AND user_id=? ORDER BY discovered_at",
+            (str(guild_id), str(user_id))
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def has_rpg_discovery(self, guild_id, user_id, discovery_id):
+        cur = await self._conn.execute(
+            "SELECT 1 FROM rpg_discoveries WHERE guild_id=? AND user_id=? AND discovery_id=?",
+            (str(guild_id), str(user_id), str(discovery_id))
+        )
+        return await cur.fetchone() is not None
+
+    async def add_rpg_discovery(self, guild_id, user_id, discovery_id):
+        await self._conn.execute(
+            "INSERT OR IGNORE INTO rpg_discoveries (guild_id,user_id,discovery_id,discovered_at) VALUES (?,?,?,?)",
+            (str(guild_id),str(user_id),str(discovery_id),time.time())
+        )
+        await self._conn.commit()
+        return True
 
     async def get_rpg_quests(self, guild_id, user_id):
         cur = await self._conn.execute(
