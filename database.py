@@ -897,15 +897,35 @@ class Database:
 
     async def set_rpg_battle(self, guild_id, user_id, **fields):
         guild_id, user_id = str(guild_id), str(user_id)
-        allowed = {"enemy_id","enemy_name","enemy_hp","enemy_max_hp","enemy_attack","turn","guarding","created_at"}
-        fields = {k:v for k,v in fields.items() if k in allowed}
-        await self._conn.execute(
-            "INSERT INTO rpg_battles (guild_id,user_id,enemy_id,enemy_name,enemy_hp,enemy_max_hp,enemy_attack,turn,guarding,created_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?) "
-            "ON CONFLICT(guild_id,user_id) DO UPDATE SET " +
-            ",".join(f"{k}=excluded.{k}" for k in fields),
-            (guild_id,user_id,fields.get("enemy_id",""),fields.get("enemy_name",""),int(fields.get("enemy_hp",0)),int(fields.get("enemy_max_hp",0)),int(fields.get("enemy_attack",0)),int(fields.get("turn",1)),int(fields.get("guarding",0)),float(fields.get("created_at",time.time()))
+        allowed = {
+            "enemy_id", "enemy_name", "enemy_hp", "enemy_max_hp",
+            "enemy_attack", "turn", "guarding", "created_at"
+        }
+        fields = {k: v for k, v in fields.items() if k in allowed}
+        values = (
+            guild_id,
+            user_id,
+            fields.get("enemy_id", ""),
+            fields.get("enemy_name", ""),
+            int(fields.get("enemy_hp", 0)),
+            int(fields.get("enemy_max_hp", 0)),
+            int(fields.get("enemy_attack", 0)),
+            int(fields.get("turn", 1)),
+            int(fields.get("guarding", 0)),
+            float(fields.get("created_at", time.time())),
         )
+        sql = (
+            "INSERT INTO rpg_battles "
+            "(guild_id,user_id,enemy_id,enemy_name,enemy_hp,enemy_max_hp,"
+            "enemy_attack,turn,guarding,created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(guild_id,user_id) DO UPDATE SET "
+            "enemy_id=excluded.enemy_id, enemy_name=excluded.enemy_name, "
+            "enemy_hp=excluded.enemy_hp, enemy_max_hp=excluded.enemy_max_hp, "
+            "enemy_attack=excluded.enemy_attack, turn=excluded.turn, "
+            "guarding=excluded.guarding, created_at=excluded.created_at"
+        )
+        await self._conn.execute(sql, values)
         await self._conn.commit()
 
     async def delete_rpg_battle(self, guild_id, user_id):
