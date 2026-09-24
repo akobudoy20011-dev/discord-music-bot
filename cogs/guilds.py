@@ -112,7 +112,7 @@ class Guilds(commands.Cog):
 
     @guild.command(name="join")
     async def guild_join(self, ctx, guild_id: str):
-        ok, reason = await self.db.join_guild(guild_id, ctx.author.id)
+        ok, reason = await self.db.join_guild(guild_id, ctx.author.id, ctx.guild.id)
         if not ok:
             messages = {
                 "missing": "❌ Guild not found.",
@@ -412,6 +412,28 @@ class Guilds(commands.Cog):
             f"`{war['opponent_guild_id']}`: **{war['opponent_score']}**\n"
             f"Ends: <t:{int(war['ends_at'])}:R>"
         ))
+
+    @guild_war.command(name="end")
+    async def guild_war_end(self, ctx, war_id: int):
+        war = await self.db.get_guild_war(war_id)
+        if not war:
+            await ctx.send("❌ War not found.")
+            return
+        mine = await self._member(ctx)
+        if not mine:
+            return
+        if mine["guild_id"] not in {str(war["guild_id"]), str(war["opponent_guild_id"])}:
+            await ctx.send("❌ That war does not involve your guild.")
+            return
+        result = await self.db.end_guild_war(war_id)
+        if not result:
+            await ctx.send("⏳ The war has not reached its end time yet.")
+            return
+        winner = result["winner_guild_id"]
+        await ctx.send(
+            f"🏁 War **#{war_id}** ended. "
+            f"{'Winner: `'+str(winner)+'`' if winner else 'It was a draw.'}"
+        )
 
     @guild_war.command(name="score")
     @commands.cooldown(1, 10, commands.BucketType.user)
