@@ -9,10 +9,30 @@ from rpg.manager import get_player
 PHASES=(('Awakening',1.00,0.70),('Enraged',1.25,0.35),('Cataclysm',1.55,0.00))
 
 def boss_phase(b):
-    ratio=max(0.0,float(b['hp'])/max(1,int(b['max_hp'])))
-    if ratio>0.70: return 'Awakening',1.00
-    if ratio>0.35: return 'Enraged',1.25
-    return 'Cataclysm',1.55
+    ratio=max(0.0,float(b["hp"])/max(1,int(b["max_hp"])))
+    if ratio>0.70: return "Awakening",1.00
+    if ratio>0.35: return "Enraged",1.25
+    return "Cataclysm",1.55
+
+def boss_mechanic(b, phase):
+    bid=b["boss_id"]
+    if bid=="void_colossus":
+        return {
+            "Awakening": ("🌑 Void Pulse", "The Colossus distorts reality around the battlefield."),
+            "Enraged": ("🕳️ Gravity Crush", "Void pressure surges through every attacker."),
+            "Cataclysm": ("☄️ Event Horizon", "The battlefield is collapsing into the Void."),
+        }[phase]
+    if bid=="astral_leviathan":
+        return {
+            "Awakening": ("🌌 Astral Current", "Celestial energy floods the battlefield."),
+            "Enraged": ("🌊 Starfall Surge", "The Leviathan unleashes a violent astral wave."),
+            "Cataclysm": ("💫 Cosmic Rupture", "The sky itself begins breaking apart."),
+        }[phase]
+    return {
+        "Awakening": ("👑 Sovereign Aura", "The Sovereign tests the strength of its challengers."),
+        "Enraged": ("⚡ Imperial Wrath", "The Sovereign's power erupts across the battlefield."),
+        "Cataclysm": ("🔥 Final Decree", "The Sovereign begins erasing everything before it."),
+    }[phase]
 
 BOSSES={
     "void_colossus":{"name":"Void Colossus","icon":"🌑","hp":250000,"attack":180,"coins":75000,"xp":7500,"duration":7200,"loot":"worldboss_void_core"},
@@ -25,6 +45,7 @@ class WorldBoss(commands.Cog):
     def _embed(self,b):
         m=BOSSES.get(b["boss_id"],{})
         phase,multiplier=boss_phase(b)
+        mechanic,mechanic_text=boss_mechanic(b,phase)
         return discord.Embed(title=f"{m['icon']} {b['name']}",description=f"HP **{int(b['hp']):,}/{int(b['max_hp']):,}**\nTime: <t:{int(b['ends_at'])}:R>\nReward pool: **{int(b['reward_coins']):,} coins + {int(b['reward_xp']):,} XP**\n\nAttack with !worldboss attack · Claim with !worldboss claim",color=discord.Color.dark_purple())
 
     @commands.group(name="worldboss",aliases=["wb"],invoke_without_command=True)
@@ -59,7 +80,15 @@ class WorldBoss(commands.Cog):
         damage=min(damage,max(1,int(b["hp"])))
         ok,reason,hp=await self.db.damage_world_boss(ctx.guild.id,ctx.author.id,damage)
         if not ok: await ctx.send("❌ The world boss is no longer active."); return
+        new_boss=await self.db.get_world_boss(ctx.guild.id)
         await ctx.send(f"⚔️ **{ctx.author.display_name}** dealt **{damage:,}** damage · Boss HP **{hp:,}**.")
+        if new_boss and boss_phase(new_boss)[0] != phase:
+            new_phase=boss_phase(new_boss)[0]
+            mechanic,mechanic_text=boss_mechanic(new_boss,new_phase)
+            await ctx.send(f"⚠️ **PHASE SHIFT — {new_phase.upper()}** ⚠️\n{mechanic}\n{mechanic_text}")
+        elif random.random() < 0.12:
+            mechanic,mechanic_text=boss_mechanic(b,phase)
+            await ctx.send(f"💢 **{mechanic}** — {mechanic_text}")
         if reason=="defeated": await ctx.send("🏆 **WORLD BOSS DEFEATED.** Contributors can claim their rewards.")
 
     @worldboss.command(name="claim")
@@ -68,7 +97,12 @@ class WorldBoss(commands.Cog):
         if reward is None: await ctx.send("❌ No world-boss reward is available for you."); return
         coins,xp,damage=reward
         await self.db.add_balance(ctx.guild.id,ctx.author.id,coins); await self.db.add_xp(ctx.guild.id,ctx.author.id,xp); await self.db.add_rpg_xp(ctx.guild.id,ctx.author.id,max(1,xp//5))
-        await ctx.send(f"🎁 World-boss reward: **{coins:,} coins + {xp:,} XP** · Damage **{damage:,}**.")
+        loot_id=BOSSES.get((await self.db.get_world_boss(ctx.guild.id) or {}).get("boss_id"),{}).get("loot")
+        if loot_id and random.random()<0.20:
+            await self.db.add_rpg_item(ctx.guild.id,ctx.author.id,loot_id,1)
+            loot_text=f" · 🌟 **{loot_id}**"
+        else: loot_text=""
+        await ctx.send(f"🎁 World-boss reward: **{coins:,} coins + {xp:,} XP** · Damage **{damage:,}**{loot_text}.")
 
 async def setup(bot):
     await bot.add_cog(WorldBoss(bot))
