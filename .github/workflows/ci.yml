@@ -126,5 +126,8 @@ jobs:
           print("database smoke test passed")
           PY
 
+      - name: Exercise RPG special subsystem
+        run: python tests/rpg_specials_smoke.py
+
       - name: Exercise arcade tournament lifecycle
         run: python tests/arcade_tournament_smoke.py
