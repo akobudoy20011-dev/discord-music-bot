@@ -323,6 +323,10 @@ class Database:
     async def connect(self):
         self._conn = await aiosqlite.connect(self.path)
         self._conn.row_factory = aiosqlite.Row
+        await self._conn.execute("PRAGMA journal_mode=WAL")
+        await self._conn.execute("PRAGMA synchronous=NORMAL")
+        await self._conn.execute("PRAGMA busy_timeout=5000")
+        await self._conn.execute("PRAGMA foreign_keys=ON")
         await self._conn.executescript(SCHEMA)
         cur = await self._conn.execute("PRAGMA table_info(rpg_players)")
         columns = {row["name"] for row in await cur.fetchall()}
@@ -408,16 +412,16 @@ class Database:
 
         if row is None:
             await self._conn.execute(
-                "INSERT INTO users (guild_id, user_id, balance) "
+                "INSERT OR IGNORE INTO users (guild_id, user_id, balance) "
                 "VALUES (?, ?, ?)",
                 (guild_id, user_id, STARTING_BALANCE)
             )
             await self._conn.commit()
-
-            data = dict(DEFAULT_USER)
-            data["guild_id"] = guild_id
-            data["user_id"] = user_id
-            return data
+            cur = await self._conn.execute(
+                "SELECT * FROM users WHERE guild_id = ? AND user_id = ?",
+                (guild_id, user_id)
+            )
+            row = await cur.fetchone()
 
         data = dict(row)
         data["achievements"] = json.loads(data["achievements"] or "[]")
@@ -445,10 +449,21 @@ class Database:
         await self._conn.commit()
 
     async def add_balance(self, guild_id, user_id, amount):
-        user = await self.get_user(guild_id, user_id)
-        new_balance = max(0, user["balance"] + amount)
-        await self.update_user(guild_id, user_id, balance=new_balance)
-        return new_balance
+        guild_id, user_id = str(guild_id), str(user_id)
+        await self.get_user(guild_id, user_id)
+        amount = int(amount)
+        await self._conn.execute(
+            "UPDATE users SET balance = MAX(0, balance + ?) "
+            "WHERE guild_id = ? AND user_id = ?",
+            (amount, guild_id, user_id),
+        )
+        await self._conn.commit()
+        cur = await self._conn.execute(
+            "SELECT balance FROM users WHERE guild_id = ? AND user_id = ?",
+            (guild_id, user_id),
+        )
+        row = await cur.fetchone()
+        return int(row["balance"])
 
     async def add_xp(self, guild_id, user_id, amount):
         """Returns (old_level, new_level, new_xp)."""
