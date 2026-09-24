@@ -1,5 +1,8 @@
 discord.py[voice]>=2.4.0
-yt-dlp[default]>=2026.08.19
+# Pin the YouTube extractor to the Sep 2026 yt-dlp revision. The stable
+# release is still 2026.08.19, while the nightly contains newer YouTube
+# client fixes needed for current extraction behavior.
+yt-dlp[default] @ https://github.com/yt-dlp/yt-dlp/archive/c7fb478.tar.gz
 aiohttp>=3.9.0
 python-dotenv>=1.0.0
 aiosqlite>=0.20.0
