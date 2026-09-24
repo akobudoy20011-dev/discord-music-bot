@@ -27,6 +27,11 @@ TITLE_RULES = {
     "Unstoppable": lambda u: "Unstoppable" in u["achievements"],
     "Gambler": lambda u: "Gambler" in u["achievements"],
     "Champion": lambda u: "Champion" in u["achievements"],
+    "First Blood": lambda u: "First Blood" in u["achievements"],
+    "Arcade Veteran": lambda u: "Arcade Veteran" in u["achievements"],
+    "High Roller": lambda u: "High Roller" in u["achievements"],
+    "Tenfold": lambda u: "Tenfold" in u["achievements"],
+    "Arcade Tycoon": lambda u: "Arcade Tycoon" in u["achievements"],
     "Legend of the Server": lambda u: "Legend of the Server" in u["achievements"],
 }
 
