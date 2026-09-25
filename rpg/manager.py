@@ -8,7 +8,20 @@ from .world import START_REGION
 ADVENTURE_COOLDOWN = 45
 
 async def get_player(db, guild_id, user_id):
-    return await db.get_rpg_player(guild_id, user_id)
+    player = await db.get_rpg_player(guild_id, user_id)
+    if not player:
+        return player
+    travel_until = float(player.get("travel_until") or 0)
+    destination = player.get("travel_destination")
+    if destination and travel_until <= time.time():
+        player = await db.update_rpg_player(
+            guild_id,
+            user_id,
+            region=destination,
+            travel_until=0,
+            travel_destination=None,
+        )
+    return player
 
 async def choose_class(db, guild_id, user_id, key):
     key = str(key).lower().strip()
