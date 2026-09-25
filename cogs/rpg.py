@@ -1222,4 +1222,9 @@ class RPG(commands.Cog):
             await ctx.send(f"❌ {result['message']}")
             return
         item = result["item"]
-        yields = " · ".join(
+        yields = " · ".join(result["yields"].items())
+        yield_text = " · ".join(f"{material_id} ×{amount}" for material_id, amount in yields)
+        await ctx.send(
+            f"♻️ **SALVAGED** · {item['icon']} **{item['name']}**\n"
+            f"Materials recovered: {yield_text}"
+        )
