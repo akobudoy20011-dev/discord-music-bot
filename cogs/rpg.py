@@ -600,7 +600,14 @@ class RPG(commands.Cog):
                 elif sid in unlocked:
                     source = record.get("source", "unlock") if record else "unlock"
                     state = "✦ GRANTED" if source.startswith(("admin:", "quest:")) else "✦ READY"
-                elif player["level"] >= data["level"]:
+                elif (
+                    player["level"] >= data["level"]
+                    and not (
+                        record
+                        and int(record.get("unlocked", 1)) == 0
+                        and record.get("source") == "admin_revoke"
+                    )
+                ):
                     await self.db.unlock_rpg_special(ctx.guild.id, ctx.author.id, sid, source="level")
                     state = "✦ READY"
                 else:
