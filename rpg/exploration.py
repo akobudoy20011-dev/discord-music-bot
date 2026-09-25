@@ -29,7 +29,12 @@ async def travel(db, guild_id, user_id, region_id):
         return {"ok":False,"message":f"You are already in **{target['name']}**."}
     distance = abs(target["danger"]-(current["danger"] if current else 1))
     duration = TRAVEL_LOCK_SECONDS+target["travel"]+distance*5
-    await db.update_rpg_player(guild_id,user_id,region=region_id,travel_until=now+duration)
+    await db.update_rpg_player(
+        guild_id,
+        user_id,
+        travel_until=now+duration,
+        travel_destination=region_id,
+    )
     return {"ok":True,"region":target,"duration":duration,"from":current}
 
 async def _world_event(db,guild_id,world):
