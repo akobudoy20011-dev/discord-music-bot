@@ -5,6 +5,7 @@ XP-on-message leveling, !rank, !profile, XP leaderboard,
 and owner-only level management.
 """
 
+import asyncio
 import random
 import time
 
@@ -43,6 +44,7 @@ class Leveling(commands.Cog):
         self.bot = bot
         self.db = bot.db
         self._xp_cooldowns = {}
+        self._xp_locks = {}
 
     # ------------------------------------------------------------
     # XP ON MESSAGE
@@ -53,88 +55,77 @@ class Leveling(commands.Cog):
         if message.author.bot or not message.guild:
             return
 
-        config = await self.db.get_guild_config(message.guild.id)
-
-        user = await self.db.get_user(
-            message.guild.id,
-            message.author.id
-        )
-
-        await self.db.update_user(
-            message.guild.id,
-            message.author.id,
-            messages=user["messages"] + 1
-        )
-
-        if not config["xp_enabled"]:
-            return
-
         key = f"{message.guild.id}:{message.author.id}"
-        now = time.time()
+        lock = self._xp_locks.setdefault(key, asyncio.Lock())
 
-        if now - self._xp_cooldowns.get(key, 0) < XP_COOLDOWN:
-            return
+        async with lock:
+            config = await self.db.get_guild_config(message.guild.id)
+            user = await self.db.get_user(message.guild.id, message.author.id)
 
-        self._xp_cooldowns[key] = now
-
-        amount = random.randint(XP_MIN, XP_MAX)
-
-        old_level, new_level, _ = await self.db.add_xp(
-            message.guild.id,
-            message.author.id,
-            amount
-        )
-
-        if new_level > old_level:
-            for reached_level in range(old_level + 1, new_level + 1):
-                await self.db.grant_level_milestone(
-                    message.guild.id,
-                    message.author.id,
-                    reached_level
-                )
-
-        if new_level > old_level and config["level_announce"]:
-            channel = message.channel
-
-            if config["level_channel_id"]:
-                configured = message.guild.get_channel(
-                    int(config["level_channel_id"])
-                )
-
-                if configured:
-                    channel = configured
-
-            embed = discord.Embed(
-                title="🎉 Level Up!",
-                description=(
-                    f"{message.author.mention} reached "
-                    f"**Level {new_level}** — "
-                    f"*{rank_title(new_level)}*"
-                ),
-                color=COLOR_GOLD
-            )
-
-            await channel.send(embed=embed)
-
-            fresh_user = await self.db.get_user(
+            await self.db.update_user(
                 message.guild.id,
-                message.author.id
+                message.author.id,
+                messages=user["messages"] + 1
             )
 
-            class _FakeCtx:
-                pass
+            if not config["xp_enabled"]:
+                return
 
-            fake_ctx = _FakeCtx()
-            fake_ctx.guild = message.guild
-            fake_ctx.channel = channel
-            fake_ctx.author = message.author
+            now = time.time()
+            if now - self._xp_cooldowns.get(key, 0) < XP_COOLDOWN:
+                return
 
-            await check_achievements(
-                self.db,
-                fake_ctx,
-                message.author,
-                fresh_user
+            self._xp_cooldowns[key] = now
+            amount = random.randint(XP_MIN, XP_MAX)
+
+            old_level, new_level, _ = await self.db.add_xp(
+                message.guild.id,
+                message.author.id,
+                amount
             )
+
+            if new_level > old_level:
+                for reached_level in range(old_level + 1, new_level + 1):
+                    await self.db.grant_level_milestone(
+                        message.guild.id,
+                        message.author.id,
+                        reached_level
+                    )
+
+            if new_level > old_level and config["level_announce"]:
+                channel = message.channel
+                if config["level_channel_id"]:
+                    configured = message.guild.get_channel(int(config["level_channel_id"]))
+                    if configured:
+                        channel = configured
+
+                embed = discord.Embed(
+                    title="🎉 Level Up!",
+                    description=(
+                        f"{message.author.mention} reached "
+                        f"**Level {new_level}** — "
+                        f"*{rank_title(new_level)}*"
+                    ),
+                    color=COLOR_GOLD
+                )
+                await channel.send(embed=embed)
+
+                fresh_user = await self.db.get_user(message.guild.id, message.author.id)
+
+                class _FakeCtx:
+                    pass
+
+                fake_ctx = _FakeCtx()
+                fake_ctx.guild = message.guild
+                fake_ctx.channel = channel
+                fake_ctx.author = message.author
+
+                await check_achievements(
+                    self.db,
+                    fake_ctx,
+                    message.author,
+                    fresh_user
+                )
 
     # ------------------------------------------------------------
     # RANK
