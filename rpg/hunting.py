@@ -13,10 +13,10 @@ from .world import REGIONS, get_region, START_REGION
 
 
 HUNT_TIERS = {
-    "common": {"icon": "🐾", "label": "Common", "hp": 1.00, "attack": 1.00, "xp": 1.00, "gold": 1.00, "chance": 0.72},
-    "elite": {"icon": "⚔️", "label": "Elite", "hp": 1.45, "attack": 1.22, "xp": 1.65, "gold": 1.55, "chance": 0.20},
-    "rare": {"icon": "💎", "label": "Rare", "hp": 1.90, "attack": 1.38, "xp": 2.35, "gold": 2.15, "chance": 0.065},
-    "champion": {"icon": "👑", "label": "Champion", "hp": 2.60, "attack": 1.62, "xp": 3.50, "gold": 3.20, "chance": 0.015},
+    "common": {"icon": "🐾", "label": "Common", "hp": 1.00, "attack": 1.00, "xp": 1.00, "gold": 1.00, "chance": 0.72, "loot_bonus": 0.00},
+    "elite": {"icon": "⚔️", "label": "Elite", "hp": 1.45, "attack": 1.22, "xp": 1.65, "gold": 1.55, "chance": 0.20, "loot_bonus": 0.08},
+    "rare": {"icon": "💎", "label": "Rare", "hp": 1.90, "attack": 1.38, "xp": 2.35, "gold": 2.15, "chance": 0.065, "loot_bonus": 0.18},
+    "champion": {"icon": "👑", "label": "Champion", "hp": 2.60, "attack": 1.62, "xp": 3.50, "gold": 3.20, "chance": 0.015, "loot_bonus": 0.30},
 }
 
 HUNT_XP_PER_LEVEL = 500
