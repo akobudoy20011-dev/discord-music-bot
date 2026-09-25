@@ -12,6 +12,7 @@ from .world import REGIONS, get_region
 from .equipment import equipment_stats
 from .crafting import MATERIALS
 from .items import get_item
+from .hunting import complete_hunt
 
 
 def _json_loads(value, fallback):
@@ -100,6 +101,7 @@ async def start(db, guild_id, user_id, enemy_override=None):
         "ok": True,
         "battle": await db.get_rpg_battle(guild_id, user_id),
         "player": player,
+        "hunt": hunt_result,
     }
 
 
@@ -109,9 +111,27 @@ def ENEMIES_REWARD(enemy_id, field):
 
 
 async def _victory_rewards(db, guild_id, user_id, battle, player, damage):
+    hunt_active = await db.get_rpg_hunt_active(guild_id, user_id)
     await db.delete_rpg_battle(guild_id, user_id)
-    xp_reward = ENEMIES_REWARD(battle["enemy_id"], "xp")
-    gold_reward = ENEMIES_REWARD(battle["enemy_id"], "gold")
+
+    # Hunting variants use their scaled reward values; ordinary battles keep
+    # the original enemy table rewards.
+    if hunt_active:
+        from .hunting import HUNT_TIERS, build_hunt_target
+        region_id = player.get("region")
+        scaled = build_hunt_target(
+            battle["enemy_id"],
+            player["level"],
+            region_id,
+            hunt_active.get("tier", "common"),
+        )
+        xp_reward = int(scaled["xp"]) if scaled else ENEMIES_REWARD(battle["enemy_id"], "xp")
+        gold_reward = int(scaled["gold"]) if scaled else ENEMIES_REWARD(battle["enemy_id"], "gold")
+        display_enemy_name = hunt_active.get("enemy_name") or battle["enemy_name"]
+    else:
+        xp_reward = ENEMIES_REWARD(battle["enemy_id"], "xp")
+        gold_reward = ENEMIES_REWARD(battle["enemy_id"], "gold")
+        display_enemy_name = battle["enemy_name"]
     old, new, player = await db.add_rpg_xp(guild_id, user_id, xp_reward)
     level_count = max(0, int(new) - int(old))
     hp_gain = level_count * 12
@@ -158,6 +178,10 @@ async def _victory_rewards(db, guild_id, user_id, battle, player, damage):
     if battle["enemy_id"] in guardian_regions:
         await db.add_rpg_material(guild_id, user_id, "guardian_essence", 3)
 
+    hunt_result = await complete_hunt(
+        db, guild_id, user_id, battle["enemy_id"], xp_reward, gold_reward
+    )
+
     await quest_progress(
         db, guild_id, user_id, "kills", 1, battle["enemy_id"]
     )
@@ -167,7 +191,7 @@ async def _victory_rewards(db, guild_id, user_id, battle, player, damage):
         "defeated": True,
         "status": "defeated",
         "enemy_id": battle["enemy_id"],
-        "enemy_name": battle["enemy_name"],
+        "enemy_name": display_enemy_name,
         "damage": damage,
         "xp": xp_reward,
         "gold": gold_reward,
