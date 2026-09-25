@@ -168,15 +168,16 @@ async def salvage(db, guild_id, user_id, item_id):
     if not await db.remove_rpg_item(guild_id, user_id, item_id, 1):
         return {"ok": False, "message": "That item is no longer available."}
 
-    await db._conn.execute(
-        "DELETE FROM rpg_affixes WHERE guild_id=? AND user_id=? AND item_id=?",
-        (str(guild_id), str(user_id), item_id),
-    )
-    await db._conn.execute(
-        "DELETE FROM rpg_enchants WHERE guild_id=? AND user_id=? AND item_id=?",
-        (str(guild_id), str(user_id), item_id),
-    )
-    await db._conn.commit()
+    if int(row["amount"]) <= 1:
+        await db._conn.execute(
+            "DELETE FROM rpg_affixes WHERE guild_id=? AND user_id=? AND item_id=?",
+            (str(guild_id), str(user_id), item_id),
+        )
+        await db._conn.execute(
+            "DELETE FROM rpg_enchants WHERE guild_id=? AND user_id=? AND item_id=?",
+            (str(guild_id), str(user_id), item_id),
+        )
+        await db._conn.commit()
 
     yields = SALVAGE_YIELD.get(item.get("rarity", "common"), SALVAGE_YIELD["common"])
     for material_id, amount in yields.items():
