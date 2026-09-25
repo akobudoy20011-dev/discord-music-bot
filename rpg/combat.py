@@ -11,6 +11,7 @@ from .quests import progress as quest_progress
 from .world import REGIONS, get_region
 from .equipment import equipment_stats
 from .crafting import MATERIALS
+from .items import get_item
 
 
 def _json_loads(value, fallback):
@@ -127,7 +128,7 @@ async def _victory_rewards(db, guild_id, user_id, battle, player, damage):
         )
     if loot:
         await db.add_rpg_item(guild_id, user_id, loot, 1)
-        loot_item = __import__("rpg.items", fromlist=["get_item"]).get_item(loot)
+        loot_item = get_item(loot)
         if loot_item and loot_item.get("rarity") in {"rare", "epic", "legendary", "relic"}:
             from .expansion import assign_affixes
             await assign_affixes(db, guild_id, user_id, loot)
