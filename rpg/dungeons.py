@@ -84,6 +84,12 @@ async def start(db, guild_id, user_id, dungeon_id):
         return {"ok": False, "message": f"You are still traveling. {travel_until - now:.0f}s remain."}
     if int(player["level"]) < dungeon["min_level"]:
         return {"ok": False, "message": f"You need RPG Level {dungeon['min_level']}."}
+    active_battle = await db.get_rpg_battle(guild_id, user_id)
+    if active_battle:
+        return {"ok": False, "message": "You are already in combat. Finish or flee the battle before entering a dungeon."}
+    hunt_active = await db.get_rpg_hunt_active(guild_id, user_id)
+    if hunt_active:
+        return {"ok": False, "message": "You have a prepared monster hunt. Finish or cancel the hunt before entering a dungeon."}
     cur = await db._conn.execute("SELECT last_completed FROM rpg_dungeon_daily WHERE guild_id=? AND user_id=?", (str(guild_id), str(user_id)))
     daily = await cur.fetchone()
     if daily and float(daily["last_completed"] or 0) + DAILY_COOLDOWN > time.time():
@@ -183,8 +189,25 @@ async def retreat(db, guild_id, user_id):
     run = await _get_run(db, guild_id, user_id)
     if not run or run["status"] != "active":
         return {"ok": False, "message": "No active dungeon."}
+    player = await db.get_rpg_player(guild_id, user_id)
+    bank_gold = max(0, int(run["gold"]))
+    bank_xp = max(0, int(run["xp"]))
+    old_level, new_level, player = await db.add_rpg_xp(guild_id, user_id, bank_xp) if bank_xp else (
+        int(player["level"]), int(player["level"]), player
+    )
+    player = await db.update_rpg_player(
+        guild_id, user_id, gold=int(player["gold"]) + bank_gold
+    ) if bank_gold else player
     await _finish(db, guild_id, user_id, "retreated", int(run["floor"]))
-    return {"ok": True, "floor": int(run["floor"]), "gold": int(run["gold"]), "xp": int(run["xp"])}
+    return {
+        "ok": True,
+        "floor": int(run["floor"]),
+        "gold": bank_gold,
+        "xp": bank_xp,
+        "old_level": old_level,
+        "new_level": new_level,
+        "player": player,
+    }
 
 async def _finish(db, guild_id, user_id, status_value, floor):
     now = time.time()
