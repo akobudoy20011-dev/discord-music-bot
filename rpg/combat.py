@@ -61,6 +61,8 @@ def _status_text(effects):
         bits.append(f"☀️ blessed {effects['player_blessing_turns']}t")
     if effects.get("player_bloom_turns", 0):
         bits.append(f"🌸 bloom {effects['player_bloom_turns']}t")
+    if effects.get("player_evasion_turns", 0):
+        bits.append(f"🫥 evasion {effects['player_evasion_turns']}t")
     return " · ".join(bits)
 
 
@@ -234,7 +236,10 @@ async def _finish_turn(db, guild_id, user_id, battle, player, stats, effects, co
         if effects.get("player_guard_turns", 0):
             incoming = max(1, int(incoming * 0.45))
 
-        if random.random() < min(0.35, stats["agility"] * 0.01):
+        evasion_chance = min(0.35, stats["agility"] * 0.01)
+        if effects.get("player_evasion_turns", 0):
+            evasion_chance = max(evasion_chance, 0.70)
+        if random.random() < evasion_chance:
             incoming = 0
 
     hp = max(0, int(player["hp"]) - incoming)
@@ -261,7 +266,7 @@ async def _finish_turn(db, guild_id, user_id, battle, player, stats, effects, co
         effects["enemy_stagger_turns"] = staggered - 1
 
     # Player-side duration ticks happen after the turn resolves.
-    for key in ("player_guard_turns", "player_blessing_turns", "player_bloom_turns"):
+    for key in ("player_guard_turns", "player_blessing_turns", "player_bloom_turns", "player_evasion_turns"):
         if effects.get(key, 0) > 0:
             effects[key] = max(0, int(effects[key]) - 1)
 
@@ -324,6 +329,12 @@ async def attack(db, guild_id, user_id, skill_id=None):
         for key, value in _json_loads(battle.get("special_cooldowns"), {}).items()
         if int(value) > 0
     }
+    skill_cooldowns = {
+        key: max(0, int(value) - 1)
+        for key, value in _json_loads(effects.get("skill_cooldowns"), {}).items()
+        if int(value) > 0
+    }
+    effects["skill_cooldowns"] = skill_cooldowns
 
     # Passive damage-over-time is applied before the player's next action.
     opening_damage = 0
@@ -350,6 +361,11 @@ async def attack(db, guild_id, user_id, skill_id=None):
         owned = await db.get_rpg_skills(guild_id, user_id)
         if not skill or skill["id"] not in owned:
             return {"ok": False, "message": "That skill is not unlocked for you."}
+        if int(player["level"]) < int(skill.get("level", 1)):
+            return {"ok": False, "message": f"{skill['name']} unlocks at RPG level {skill.get('level', 1)}."}
+        remaining = int(skill_cooldowns.get(skill["id"], 0))
+        if remaining > 0:
+            return {"ok": False, "message": f"{skill['name']} is cooling down for {remaining} turn(s)."}
         if player["mp"] < skill["cost"]:
             return {"ok": False, "message": f"Not enough MP. Need {skill['cost']}."}
         mp_cost = skill["cost"]
@@ -367,9 +383,13 @@ async def attack(db, guild_id, user_id, skill_id=None):
             )
             mp_cost = 0
         elif skill["kind"] == "evasion":
-            effects["player_blessing_turns"] = max(1, int(effects.get("player_blessing_turns", 0)))
+            effects["player_evasion_turns"] = max(2, int(effects.get("player_evasion_turns", 0)))
         elif skill["kind"] == "buff":
             damage = int(damage * 1.25)
+
+        skill_cd = int(skill.get("cooldown", 0))
+        if skill_cd > 0:
+            skill_cooldowns[skill["id"]] = skill_cd
 
     player = await db.update_rpg_player(
         guild_id, user_id, mp=max(0, int(player["mp"]) - mp_cost)
