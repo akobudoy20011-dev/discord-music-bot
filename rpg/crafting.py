@@ -146,6 +146,9 @@ async def craft(db, guild_id, user_id, item_id):
             return {"ok": False, "message": "The forge lost a material during crafting. No item was created."}
 
     await db.add_rpg_item(guild_id, user_id, item_id, 1)
+    if item.get("rarity") in {"rare", "epic", "legendary", "relic"}:
+        from .expansion import assign_affixes
+        await assign_affixes(db, guild_id, user_id, item_id)
     return {"ok": True, "item": item, "recipe": recipe}
 
 async def salvage(db, guild_id, user_id, item_id):
@@ -164,6 +167,16 @@ async def salvage(db, guild_id, user_id, item_id):
 
     if not await db.remove_rpg_item(guild_id, user_id, item_id, 1):
         return {"ok": False, "message": "That item is no longer available."}
+
+    await db._conn.execute(
+        "DELETE FROM rpg_affixes WHERE guild_id=? AND user_id=? AND item_id=?",
+        (str(guild_id), str(user_id), item_id),
+    )
+    await db._conn.execute(
+        "DELETE FROM rpg_enchants WHERE guild_id=? AND user_id=? AND item_id=?",
+        (str(guild_id), str(user_id), item_id),
+    )
+    await db._conn.commit()
 
     yields = SALVAGE_YIELD.get(item.get("rarity", "common"), SALVAGE_YIELD["common"])
     for material_id, amount in yields.items():
