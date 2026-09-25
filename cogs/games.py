@@ -256,6 +256,17 @@ class GamesHubView(discord.ui.View):
                 discord.SelectOption(label="Tic-Tac-Toe", value="ttt", emoji="⭕", description="Player vs player"),
                 discord.SelectOption(label="Connect Four", value="connect4", emoji="🔴", description="Four in a row"),
                 discord.SelectOption(label="Dice Battle", value="dicebattle", emoji="⚔️", description="Dice duel · wager"),
+                discord.SelectOption(label="Roulette", value="roulette", emoji="🎡", description="Spin · wager · payout"),
+                discord.SelectOption(label="Odd / Even", value="oddeven", emoji="🔢", description="Pick odd or even"),
+                discord.SelectOption(label="War", value="war", emoji="⚔️", description="Card battle · wager"),
+                discord.SelectOption(label="Baccarat", value="baccarat", emoji="🎴", description="Player · banker · tie"),
+                discord.SelectOption(label="Higher / Lower", value="higherlower", emoji="🔮", description="Climb the multiplier"),
+                discord.SelectOption(label="Target", value="target", emoji="🎯", description="Hit the target"),
+                discord.SelectOption(label="Reaction", value="reaction", emoji="⚡", description="Test your reflexes"),
+                discord.SelectOption(label="Scramble", value="scramble", emoji="🔤", description="Unscramble the word"),
+                discord.SelectOption(label="Hangman", value="hangman", emoji="🕯️", description="Guess the hidden word"),
+                discord.SelectOption(label="Mastermind", value="mastermind", emoji="🧩", description="Break the code"),
+                discord.SelectOption(label="Mines", value="mines", emoji="💣", description="Reveal · risk · cash out"),
             ],
         )
         self.game_select.callback = self._select_game
@@ -286,6 +297,17 @@ class GamesHubView(discord.ui.View):
             "ttt": ("⭕  TIC · TAC · TOE", COLOR_GOLD, "!ttt @player  or  !ttt @player 1000", "Two players take turns placing X and O. Get three in a row. A draw returns both wagers.", "① Challenge a player\n② Choose moves\n③ Block their line\n④ Make three in a row", "Think ahead. The center is valuable."),
             "connect4": ("🔴  CONNECT FOUR", COLOR_GOLD, "!connect4 @player  or  !connect4 @player 1000", "Drop pieces into seven columns. Connect four horizontally, vertically, or diagonally.", "① Challenge a player\n② Choose a column\n③ Build your line\n④ Connect four", "Create threats in more than one direction."),
             "dicebattle": ("⚔️  DICE BATTLE", COLOR_GOLD, "!dicebattle @player  or  !dicebattle @player 1000", "Both players roll. The higher roll wins the wager. A tie returns both wagers.", "① Challenge a player\n② Set the wager\n③ Both roll\n④ Highest roll wins", "Pure dice luck. Keep the wager sensible."),
+            "roulette": ("🎡  ROULETTE", COLOR_GOLD, "!roulette 1000", "Bet on a roulette outcome and spin the wheel. The command supports the existing roulette betting modes.", "① Choose your wager\n② Choose a roulette bet\n③ Spin the wheel\n④ Collect the payout", "Roulette is luck-based; wager within the 1,000,000 cap."),
+            "oddeven": ("🔢  ODD / EVEN", COLOR_PRIMARY, "!oddeven odd 1000", "Call whether the roll will be odd or even. Correct calls pay according to the game rules.", "① Choose odd or even\n② Place your wager\n③ Roll\n④ Check the payout", "A simple number call."),
+            "war": ("⚔️  WAR", COLOR_GOLD, "!war 1000", "Draw against the house in a card battle. The higher card wins.", "① Place your wager\n② Draw your card\n③ House draws\n④ Compare cards", "Highest card wins the round."),
+            "baccarat": ("🎴  BACCARAT", COLOR_GOLD, "!baccarat 1000", "Choose Player, Banker, or Tie, then resolve the hand.", "① Place your wager\n② Pick a side\n③ Resolve the hand\n④ Collect the payout", "Choose your side before the cards resolve."),
+            "higherlower": ("🔮  HIGHER / LOWER", COLOR_PRIMARY, "!higherlower 1000", "Predict whether the next number is higher or lower and build a multiplier. Cash out before the chain breaks.", "① Place your wager\n② Predict higher or lower\n③ Build the multiplier\n④ Cash out or risk another round", "Cash out is how you lock in a live multiplier."),
+            "target": ("🎯  TARGET", COLOR_PRIMARY, "!target 1000", "A random target and roll are generated. Closer rolls receive larger payouts.", "① Place your wager\n② Receive the target\n③ Roll\n④ Check your distance and payout", "The closer you land, the larger the multiplier."),
+            "reaction": ("⚡  REACTION", COLOR_PRIMARY, "!reaction 1000", "Wait for GO, then react as quickly as possible. Early presses are false starts.", "① Place an optional wager\n② Wait\n③ Hit GO\n④ Receive the result", "Do not click before GO."),
+            "scramble": ("🔤  WORD SCRAMBLE", COLOR_PRIMARY, "!scramble 1000", "Unscramble the displayed word before the timer expires.", "① Place an optional wager\n② Read the scrambled word\n③ Reply with the answer\n④ Collect the payout if correct", "Speed matters."),
+            "hangman": ("🕯️  HANGMAN", COLOR_PRIMARY, "!hangman 1000", "Guess the hidden word one letter at a time before you run out of misses.", "① Place an optional wager\n② Guess letters\n③ Avoid six misses\n④ Solve the word", "Repeated guesses do not cost a miss."),
+            "mastermind": ("🧩  MASTERMIND", COLOR_PRIMARY, "!mastermind 1000", "Break a four-digit code with unique digits in up to eight guesses.", "① Place an optional wager\n② Submit four unique digits\n③ Use exact/misplaced feedback\n④ Break the code", "Use the feedback to eliminate digits."),
+            "mines": ("💣  MINES", COLOR_GOLD, "!mines 1000", "Reveal safe tiles to increase your multiplier, then cash out before hitting a mine.", "① Place your wager\n② Reveal tiles\n③ Raise the multiplier\n④ Cash out or risk another tile", "Cash out before you get greedy."),
         }
         title, color, command, rules, steps, tip = pages[game]
         embed = discord.Embed(
@@ -365,11 +387,14 @@ def build_games_home_embed():
             "🪙 Coinflip · 🎰 Slots · 🃏 Blackjack · 🎱 8-Ball\n\n"
             "**⚔️  ARCADE DISTRICT**\n"
             "⭕ Tic-Tac-Toe · 🔴 Connect Four · ⚔️ Dice Battle\n\n"
+            "**🎰  EXPANDED ARCADE**\n"
+            "🎡 Roulette · 🔢 Odd/Even · ⚔️ War · 🎴 Baccarat · 🔮 Higher/Lower\n"
+            "🎯 Target · ⚡ Reaction · 🔤 Scramble · 🕯️ Hangman · 🧩 Mastermind · 💣 Mines\n\n"
             "**🏆  ECLIPSE PROGRESSION**\n"
             "!arcadeprofile · !gamestats · !gameleaderboard <game>\n"
             "!season · !dailies · !claimdaily · !tournament\n\n"
             "╰──────────────୨୧──────────────╯\n"
-            "**11 GAMES** · **1,000,000 MAX WAGER**\n"
+            "**22 GAMES** · **1,000,000 MAX WAGER**\n"
             "Use the menu above to open a game's HOW TO PLAY card."
         ),
         color=COLOR_PRIMARY,
@@ -1394,7 +1419,8 @@ class Games(commands.Cog):
             "🎰 **Casino** — roulette · mines · war · baccarat · higher/lower\n"
             "🧠 **Mind** — trivia · guess · mastermind · scramble · hangman · 8ball\n"
             "⚡ **Reflex** — reaction · target\n"
-            "🎮 **Classics** — rps · roll · coinflip · slots · blackjack\n\n"
+            "🎮 **Classics** — rps · roll · coinflip · slots · blackjack\n"
+            "🎲 **More Games** — target · reaction · scramble · hangman · mastermind · mines\n\n"
             "All betting games cap individual wagers at 1,000,000 coins."
         )
         await ctx.send(embed=footer(embed, ctx))
