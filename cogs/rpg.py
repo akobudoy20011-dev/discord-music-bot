@@ -451,15 +451,26 @@ class RPG(commands.Cog):
         if not special_id:
             unlocked = set(await self.db.get_rpg_specials(ctx.guild.id, ctx.author.id))
             lines = []
+            shown = set()
             for sid, data in available:
+                shown.add(sid)
                 if sid in unlocked:
-                    state = "✦ READY"
+                    record = await self.db.get_rpg_special(ctx.guild.id, ctx.author.id, sid)
+                    source = record.get("source", "unlock") if record else "unlock"
+                    state = "✦ GRANTED" if source.startswith(("admin:", "quest:")) else "✦ READY"
                 elif player["level"] >= data["level"]:
                     await self.db.unlock_rpg_special(ctx.guild.id, ctx.author.id, sid, source="level")
                     state = "✦ READY"
                 else:
                     state = f"○ LOCKED · Lv.{data['level']}"
                 lines.append(f"{state} {data['icon']} **{data['name']}** · {sid} · {data['cost']} MP · {data['cooldown']}t CD")
+            for sid in sorted(unlocked - shown):
+                data = get_special(sid)
+                if not data:
+                    continue
+                record = await self.db.get_rpg_special(ctx.guild.id, ctx.author.id, sid)
+                source = record.get("source", "grant") if record else "grant"
+                lines.append(f"✦ GRANTED {data['icon']} **{data['name']}** · {sid} · {data['cost']} MP · {data['cooldown']}t CD · {source}")
             await ctx.send(embed=discord.Embed(title=f"♡ ECLIPSE · {player['class_key'].upper()} SPECIALS ♡", description="\n".join(lines) if lines else "No specials are assigned to this class.", color=COLOR_PRIMARY))
             return
 
@@ -467,8 +478,9 @@ class RPG(commands.Cog):
         if not data:
             await ctx.send("❌ Unknown special. Use !rpg special all to open the full codex.")
             return
-        if player["class_key"] not in data["class_keys"]:
-            await ctx.send("❌ That special is not part of your class path.")
+        owned_special = await self.db.has_rpg_special(ctx.guild.id, ctx.author.id, special_id)
+        if player["class_key"] not in data["class_keys"] and not owned_special:
+            await ctx.send("❌ That special is not part of your class path and has not been granted to you.")
             return
         battle = await self.db.get_rpg_battle(ctx.guild.id, ctx.author.id)
         if not battle:
@@ -488,6 +500,66 @@ class RPG(commands.Cog):
         enemy_state = " · enemy turn skipped" if result.get("enemy_skipped") else ""
         status = f"\n**Status:** {result['status']}" if result.get("status") else ""
         await ctx.send(f"{result['special_icon']} **{result['special_name'].upper()}**\n{result['special_message']}\n\n💥 **{result['damage']} damage** · Enemy ❤️ {result['enemy_hp']}/{result['enemy_max_hp']}\n💢 Incoming damage: **{incoming}**{enemy_state}{status}")
+
+    @rpg.command(name="specialgrant", aliases=["grantspecial", "givespecial"])
+    @commands.has_permissions(manage_guild=True)
+    async def special_grant_command(self, ctx, member: discord.Member = None, special_id: str = None):
+        if not member or not special_id:
+            await ctx.send("Use !rpg specialgrant @user <special_id>.")
+            return
+        data = get_special(special_id)
+        if not data:
+            await ctx.send("❌ Unknown special. Use !rpg special all to see valid IDs.")
+            return
+        sid = str(special_id).strip().lower()
+        await self.db.unlock_rpg_special(ctx.guild.id, member.id, sid, source=f"admin:{ctx.author.id}")
+        await ctx.send(
+            f"✦ **SPECIAL ACCESS GRANTED**\n"
+            f"{member.mention} now has **{data['icon']} {data['name']}**.\n"
+            "Class restrictions and level requirements are bypassed for this grant."
+        )
+
+    @rpg.command(name="specialrevoke", aliases=["revokespecial", "removespecial"])
+    @commands.has_permissions(manage_guild=True)
+    async def special_revoke_command(self, ctx, member: discord.Member = None, special_id: str = None):
+        if not member or not special_id:
+            await ctx.send("Use !rpg specialrevoke @user <special_id>.")
+            return
+        data = get_special(special_id)
+        if not data:
+            await ctx.send("❌ Unknown special. Use !rpg special all to see valid IDs.")
+            return
+        sid = str(special_id).strip().lower()
+        await self.db.revoke_rpg_special(ctx.guild.id, member.id, sid)
+        await ctx.send(
+            f"✦ **SPECIAL ACCESS REVOKED**\n"
+            f"{member.mention} can no longer use **{data['icon']} {data['name']}**.\n"
+            "Normal class/level unlocks are also blocked until access is granted again."
+        )
+
+    @rpg.command(name="specialaccess", aliases=["specialgrants", "specialowners"])
+    @commands.has_permissions(manage_guild=True)
+    async def special_access_command(self, ctx, member: discord.Member = None):
+        target = member or ctx.author
+        owned = await self.db.get_rpg_specials(ctx.guild.id, target.id)
+        if not owned:
+            await ctx.send(f"✦ **{target.display_name}** has no unlocked specials.")
+            return
+        lines = []
+        for sid in owned:
+            data = get_special(sid)
+            if not data:
+                continue
+            record = await self.db.get_rpg_special(ctx.guild.id, target.id, sid)
+            source = record.get("source", "unlock") if record else "unlock"
+            lines.append(f"{data['icon']} **{data['name']}** · `{sid}` · `{source}`")
+        await ctx.send(
+            embed=discord.Embed(
+                title=f"✦ SPECIAL ACCESS · {target.display_name}",
+                description="\n".join(lines) or "No valid specials found.",
+                color=COLOR_PRIMARY,
+            )
+        )
 
     @rpg.command(name="npc", aliases=["npcs", "talk"])
     async def npc_command(self, ctx, npc_id: str = None):
@@ -533,7 +605,12 @@ class RPG(commands.Cog):
         q = result["quest"]
         extra = "\n✦ **LEVEL UP**" if result["level_up"] else ""
         item_text = f" · 🎁 `{q['item']}`" if q.get("item") else ""
-        await ctx.send(f"🏆 **{q['name']}** reward claimed · +{q['xp']} XP · +{q['gold']} gold{item_text}{extra}")
+        message = f"🏆 **{q['name']}** reward claimed · +{q['xp']} XP · +{q['gold']} gold{item_text}{extra}"
+        if result.get("special_unlocked"):
+            special = get_special(result["special_unlocked"])
+            if special:
+                message += f"\n🌟 **SPECIAL ACCESS UNLOCKED** · {special['icon']} **{special['name']}**"
+        await ctx.send(message)
     @rpg.command(name="inventory", aliases=["inv", "gear"])
     async def inventory_command(self, ctx):
         items = await inventory(self.db, ctx.guild.id, ctx.author.id)
