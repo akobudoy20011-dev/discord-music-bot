@@ -110,9 +110,9 @@ class WorldBoss(commands.Cog):
     async def claim(self,ctx):
         reward,reason=await self.db.claim_world_boss_reward(ctx.guild.id,ctx.author.id)
         if reward is None: await ctx.send("❌ No world-boss reward is available for you."); return
-        coins,xp,damage=reward
+        coins,xp,damage,boss_id=reward
         await self.db.add_balance(ctx.guild.id,ctx.author.id,coins); await self.db.add_xp(ctx.guild.id,ctx.author.id,xp); await self.db.add_rpg_xp(ctx.guild.id,ctx.author.id,max(1,xp//5))
-        loot_id=BOSSES.get((await self.db.get_world_boss(ctx.guild.id) or {}).get("boss_id"),{}).get("loot")
+        loot_id=BOSSES.get(boss_id,{}).get("loot")
         if loot_id and random.random()<0.20:
             await self.db.add_rpg_item(ctx.guild.id,ctx.author.id,loot_id,1)
             from rpg.expansion import assign_affixes
