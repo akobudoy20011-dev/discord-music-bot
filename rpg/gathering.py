@@ -91,6 +91,11 @@ async def gather(db, guild_id, user_id, skill_id):
         ON CONFLICT(guild_id,user_id,collection_id) DO UPDATE SET amount=amount+excluded.amount""",
         (str(guild_id),str(user_id),item_id,amount))
     await db._conn.commit()
+    try:
+        from .expansion import daily_progress
+        await daily_progress(db, guild_id, user_id, "gather", amount)
+    except Exception:
+        pass
     return {"ok":True,"skill":skill,"item_id":item_id,"amount":amount,"rarity":rarity,
             "level":level,"xp":xp,"gained_xp":gained_xp,"region":region}
 
