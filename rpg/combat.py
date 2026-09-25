@@ -37,6 +37,8 @@ async def _effective_stats(db, guild_id, user_id, player=None):
 
 async def _sync_special_unlocks(db, guild_id, user_id, player):
     for special_id, _data in available_specials(player["class_key"], player["level"]):
+        if await db.is_rpg_special_revoked(guild_id, user_id, special_id):
+            continue
         if not await db.has_rpg_special(guild_id, user_id, special_id):
             await db.unlock_rpg_special(guild_id, user_id, special_id, source="level")
 
@@ -332,14 +334,17 @@ async def special(db, guild_id, user_id, special_id):
 
     sid = str(special_id).strip().lower()
     data = get_special(sid)
-    if not data or not can_use_special(player["class_key"], sid):
-        return {"ok": False, "message": "That special does not belong to your current class."}
+    if not data:
+        return {"ok": False, "message": "Unknown special."}
 
     unlocked = await db.has_rpg_special(guild_id, user_id, sid)
+    class_allowed = can_use_special(player["class_key"], sid)
+    if not class_allowed and not unlocked:
+        return {"ok": False, "message": "That special is not part of your class path and has not been granted to you."}
     if not unlocked:
         return {
             "ok": False,
-            "message": f"**{data['name']}** unlocks at level **{data['level']}**.",
+            "message": f"**{data['name']}** unlocks at level **{data['level']}** for its normal class path, or can be granted through a special access unlock.",
         }
 
     effects = _json_loads(battle.get("effects"), {})
