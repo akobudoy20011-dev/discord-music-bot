@@ -160,7 +160,7 @@ async def advance(db, guild_id, user_id):
     if boss:
         item_id = random.choice(dungeon["loot"])
         await db.add_rpg_item(guild_id, user_id, item_id, 1)
-        item = __import__("rpg.items", fromlist=["get_item"]).get_item(item_id)
+        item = get_item(item_id)
         if item and item.get("rarity") in {"rare", "epic", "legendary", "relic"}:
             from .expansion import assign_affixes
             await assign_affixes(db, guild_id, user_id, item_id)
