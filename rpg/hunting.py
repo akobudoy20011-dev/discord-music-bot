@@ -94,14 +94,14 @@ def _monster_level(player_level, danger, tier):
     return base + {"common": 0, "elite": 1, "rare": 2, "champion": 4}[tier]
 
 
-def build_hunt_target(enemy_id, player_level, region_id, tier=None):
+def build_hunt_target(enemy_id, player_level, region_id, tier=None, hunt_level=1):
     base = ENEMIES.get(str(enemy_id))
     if not base:
         return None
     region = get_region(region_id) or REGIONS[START_REGION]
     tier = tier or _tier_roll()
     tier_data = HUNT_TIERS[tier]
-    level = _monster_level(player_level, region["danger"], tier)
+    level = _monster_level(player_level, region["danger"], tier) + max(0, int(hunt_level) - 1) // 5
 
     # Small level scaling prevents late-game hunts from becoming irrelevant
     # while keeping the original enemy identities and loot IDs intact.
@@ -144,7 +144,7 @@ async def board(db, guild_id, user_id):
     for index in range(4):
         enemy_id = targets[index % len(targets)]
         tier = ("common", "elite", "rare", "champion")[index]
-        target = build_hunt_target(enemy_id, player["level"], region_id, tier)
+        target = build_hunt_target(enemy_id, player["level"], region_id, tier, profile["hunt_level"])
         if target:
             target["contract_id"] = f"{enemy_id}:{tier}"
             target["contract_reward_xp"] = int(target["xp"] * 0.35)
@@ -180,7 +180,7 @@ async def start_hunt(db, guild_id, user_id, target_id=None):
         enemy_id = random.choice(targets)
         tier = _tier_roll()
 
-    target = build_hunt_target(enemy_id, player["level"], region_id, tier)
+    target = build_hunt_target(enemy_id, player["level"], region_id, tier, profile["hunt_level"])
     target["hunt_profile_level"] = profile["hunt_level"]
     target["streak"] = profile["streak"]
 
