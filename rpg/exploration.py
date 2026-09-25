@@ -44,6 +44,11 @@ async def _world_event(db,guild_id,world):
     return event
 
 async def explore(db, guild_id, user_id):
+    try:
+        from .expansion import daily_progress
+        await daily_progress(db, guild_id, user_id, "explore", 1)
+    except Exception:
+        pass
     player = await db.get_rpg_player(guild_id,user_id)
     now = time.time()
     travel_until = float(player.get("travel_until") or 0)
