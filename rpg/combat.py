@@ -68,6 +68,17 @@ async def start(db, guild_id, user_id, enemy_override=None):
         return {"ok": False, "battle": existing}
 
     player = await db.get_rpg_player(guild_id, user_id)
+    now = time.time()
+    travel_until = float(player.get("travel_until") or 0)
+    if travel_until > now:
+        return {"ok": False, "message": f"You are still traveling. {travel_until - now:.0f}s remain."}
+    try:
+        from .dungeons import _get_run
+        dungeon_run = await _get_run(db, guild_id, user_id)
+        if dungeon_run and dungeon_run.get("status") == "active":
+            return {"ok": False, "message": "You are inside an active dungeon. Advance or retreat before starting another battle."}
+    except Exception:
+        pass
     await _sync_special_unlocks(db, guild_id, user_id, player)
     enemy = enemy_override or random_enemy(player.get("region"))
     await db.set_rpg_battle(
@@ -116,6 +127,10 @@ async def _victory_rewards(db, guild_id, user_id, battle, player, damage):
         )
     if loot:
         await db.add_rpg_item(guild_id, user_id, loot, 1)
+        loot_item = __import__("rpg.items", fromlist=["get_item"]).get_item(loot)
+        if loot_item and loot_item.get("rarity") in {"rare", "epic", "legendary", "relic"}:
+            from .expansion import assign_affixes
+            await assign_affixes(db, guild_id, user_id, loot)
 
     region_materials = {
         "moonlit_vale": "moon_petal",
