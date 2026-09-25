@@ -64,10 +64,12 @@ def _status_text(effects):
     return " · ".join(bits)
 
 
-async def start(db, guild_id, user_id, enemy_override=None):
+async def start(db, guild_id, user_id, enemy_override=None, hunt_mode=False):
     existing = await db.get_rpg_battle(guild_id, user_id)
     if existing:
         return {"ok": False, "battle": existing}
+    if not hunt_mode and await db.get_rpg_hunt_active(guild_id, user_id):
+        return {"ok": False, "message": "A monster hunt is already prepared. Finish or cancel the hunt first."}
 
     player = await db.get_rpg_player(guild_id, user_id)
     now = time.time()
