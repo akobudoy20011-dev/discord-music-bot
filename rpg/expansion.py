@@ -429,7 +429,7 @@ async def assign_affixes(db,guild_id,user_id,item_id):
     if not item:return []
     affixes=roll_affixes(item_id)
     for aid,value in affixes:
-        await db._conn.execute("INSERT OR REPLACE INTO rpg_affixes VALUES(?,?,?,?,?)",(str(guild_id),str(user_id),str(item_id),aid,value))
+        await db._conn.execute("INSERT OR IGNORE INTO rpg_affixes VALUES(?,?,?,?,?)",(str(guild_id),str(user_id),str(item_id),aid,value))
     await db._conn.commit()
     return affixes
 
