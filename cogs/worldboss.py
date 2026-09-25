@@ -115,6 +115,8 @@ class WorldBoss(commands.Cog):
         loot_id=BOSSES.get((await self.db.get_world_boss(ctx.guild.id) or {}).get("boss_id"),{}).get("loot")
         if loot_id and random.random()<0.20:
             await self.db.add_rpg_item(ctx.guild.id,ctx.author.id,loot_id,1)
+            from rpg.expansion import assign_affixes
+            await assign_affixes(self.db,ctx.guild.id,ctx.author.id,loot_id)
             loot_text=f" · 🌟 **{loot_id}**"
         else: loot_text=""
         await ctx.send(f"🎁 World-boss reward: **{coins:,} coins + {xp:,} XP** · Damage **{damage:,}**{loot_text}.")
