@@ -141,9 +141,9 @@ async def board(db, guild_id, user_id):
     now_bucket = int(time.time() // 3600)
 
     contracts = []
-    for index in range(min(3, len(targets))):
-        enemy_id = _seeded_choice(targets, f"{guild_id}:{user_id}:{region_id}:{now_bucket}:{index}")
-        tier = ("elite", "rare", "champion")[index] if index == 2 else ("elite" if index == 1 else "common")
+    for index in range(4):
+        enemy_id = targets[index % len(targets)]
+        tier = ("common", "elite", "rare", "champion")[index]
         target = build_hunt_target(enemy_id, player["level"], region_id, tier)
         if target:
             target["contract_id"] = f"{enemy_id}:{tier}"
