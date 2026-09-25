@@ -749,6 +749,9 @@ class Games(commands.Cog):
         if bet <= 0:
             await ctx.send("❌ Bet must be positive.")
             return
+        if bet > MAX_BET:
+            await ctx.send(f"❌ Maximum bet is **{MAX_BET:,} coins**.")
+            return
 
         user = await self.db.get_user(ctx.guild.id, ctx.author.id)
         if user["balance"] < bet:
@@ -800,6 +803,9 @@ class Games(commands.Cog):
         """Play slot machine! Usage: !slots <bet>"""
         if bet <= 0:
             await ctx.send("❌ Bet must be positive.")
+            return
+        if bet > MAX_BET:
+            await ctx.send(f"❌ Maximum bet is **{MAX_BET:,} coins**.")
             return
 
         user = await self.db.get_user(ctx.guild.id, ctx.author.id)
@@ -866,6 +872,9 @@ class Games(commands.Cog):
         """Play Blackjack! Usage: !blackjack <bet>"""
         if bet <= 0:
             await ctx.send("❌ Bet must be positive.")
+            return
+        if bet > MAX_BET:
+            await ctx.send(f"❌ Maximum bet is **{MAX_BET:,} coins**.")
             return
 
         user = await self.db.get_user(ctx.guild.id, ctx.author.id)
@@ -1417,7 +1426,7 @@ class Games(commands.Cog):
         if not ok:
             await ctx.send(f"❌ {result}")
             return
-        mine_positions = set(random.sample(range(25), 4))
+        mine_positions = set(random.sample(range(21), 4))
         revealed = set()
         multiplier = 1.0
         cog = self
@@ -1426,7 +1435,7 @@ class Games(commands.Cog):
             def __init__(view):
                 super().__init__(timeout=120)
                 view.done = False
-                for index in range(25):
+                for index in range(21):
                     button = discord.ui.Button(label="·", style=discord.ButtonStyle.secondary, row=index // 5)
                     async def reveal(interaction, idx=index, btn=button):
                         nonlocal multiplier
@@ -1441,7 +1450,7 @@ class Games(commands.Cog):
                             view.stop()
                             for child in view.children:
                                 child.disabled = True
-                            for pos, child in enumerate(view.children[:25]):
+                            for pos, child in enumerate(view.children[:21]):
                                 child.label = "💣" if pos in mine_positions else ("💎" if pos in revealed else "·")
                             balance = await cog._balance(ctx)
                             await interaction.response.edit_message(
@@ -1452,7 +1461,7 @@ class Games(commands.Cog):
                         btn.label = "💎"
                         btn.style = discord.ButtonStyle.success
                         multiplier = min(8.0, multiplier + 0.35)
-                        if len(revealed) == 21:
+                        if len(revealed) == 17:
                             view.done = True
                             view.stop()
                             for child in view.children:
@@ -1461,7 +1470,7 @@ class Games(commands.Cog):
                             text = f"All safe tiles cleared.\n\n🎉 {multiplier:.2f}x payout: {payout:,}\nBalance: {balance:,}"
                             color = discord.Color.gold()
                         else:
-                            text = f"Safe tiles: {len(revealed)}/21\nMultiplier: {multiplier:.2f}x\n\nCash out before a mine."
+                            text = f"Safe tiles: {len(revealed)}/17\nMultiplier: {multiplier:.2f}x\n\nCash out before a mine."
                             color = COLOR_PRIMARY
                         await interaction.response.edit_message(embed=cog._game_embed("💣 MINES", text, color), view=view)
 
