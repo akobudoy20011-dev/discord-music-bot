@@ -762,7 +762,7 @@ class RPG(commands.Cog):
             await ctx.send(
                 f"🕯️ **{run['dungeon_id'].upper()}** · {run['status'].upper()}\n"
                 f"Floor **{run['floor']}/{12}** · ❤️ {run['hp']} · "
-                f"💰 banked {run['gold']:,} · ✦ banked {run['xp']:,} XP"
+                f"💰 earned {run['gold']:,} · ✦ earned {run['xp']:,} XP"
             )
             return
         else:
@@ -805,13 +805,13 @@ class RPG(commands.Cog):
             elif result["result"] == "defeated":
                 lines.append("☠️ You were defeated. The delve is over.")
             else:
-                lines.append("Use !rpg dungeon advance to push deeper or !rpg dungeon retreat to bank your rewards.")
+                lines.append("Use !rpg dungeon advance to push deeper or !rpg dungeon retreat to end the delve.")
             await ctx.send("\n".join(lines))
         else:
             level_text = f" · ✦ +{result['xp']:,} XP" if result.get("xp") else ""
             await ctx.send(
                 f"↩️ **DUNGEON RETREAT** · Reached floor **{result['floor']}/{12}**\n"
-                f"Banked **+{result['gold']:,} gold**{level_text}"
+                f"Earned **+{result['gold']:,} gold**{level_text}"
                 + ("\n✦ **LEVEL UP**" if result.get("new_level", 0) > result.get("old_level", 0) else "")
             )
 
