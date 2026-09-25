@@ -679,6 +679,9 @@ class Games(commands.Cog):
         if bet <= 0:
             await ctx.send("❌ Bet must be positive.")
             return
+        if bet > MAX_BET:
+            await ctx.send(f"❌ Maximum bet is **{MAX_BET:,} coins**.")
+            return
 
         user = await self.db.get_user(ctx.guild.id, ctx.author.id)
         if user["balance"] < bet:
