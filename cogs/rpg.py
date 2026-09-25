@@ -800,6 +800,8 @@ class RPG(commands.Cog):
                 lines.append(f"🎁 Loot: {result['item']}")
             if result["result"] == "boss_cleared":
                 lines.append("🏆 **DUNGEON CLEARED** · daily completion recorded.")
+                if result.get("achievements"):
+                    lines.append("🏆 Achievement unlocked: " + ", ".join(result["achievements"]))
             elif result["result"] == "boss_failed":
                 lines.append("☠️ The boss overwhelmed you. The delve is over.")
             elif result["result"] == "defeated":
@@ -838,6 +840,7 @@ class RPG(commands.Cog):
             f"Found **{result['amount']}× {result['item_id']}**"
             f"{' · 💎 RARE' if result.get('rarity') == 'rare' else ''}\n"
             f"+{result['gained_xp']} gathering XP{level_text}"
+            + (f"\n🏆 Achievement unlocked: {', '.join(result['achievements'])}" if result.get("achievements") else "")
         )
 
     @rpg.command(name="collection", aliases=["collections", "collect"])
