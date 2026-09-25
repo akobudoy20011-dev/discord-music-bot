@@ -458,7 +458,10 @@ async def raid_advance(db,guild_id,user_id,raid_id):
     status="cleared" if hp==0 else "active"
     await db._conn.execute("UPDATE rpg_raid_runs SET phase=?,hp=?,status=? WHERE guild_id=? AND user_id=? AND raid_id=?",(phase,hp,status,str(guild_id),str(user_id),str(raid_id).lower())); await db._conn.commit()
     if status=="cleared":
-        await db.add_rpg_xp(guild_id,user_id,int(raid["reward_xp"])); await db.update_rpg_player(guild_id,user_id,gold=int((await db.get_rpg_player(guild_id,user_id))["gold"])+raid["reward_gold"]));
+        await db.add_rpg_xp(guild_id,user_id,int(raid["reward_xp"]))
+        current=await db.get_rpg_player(guild_id,user_id)
+        await db.update_rpg_player(guild_id,user_id,gold=int(current["gold"])+int(raid["reward_gold"]))
+        await season_points(db,guild_id,user_id,100 if raid_id=="mythic" else 250)
     return {"ok":True,"damage":damage,"hp":hp,"phase":phase,"status":status,"reward":raid if status=="cleared" else None}
 
 async def ascension(db,guild_id,user_id):
