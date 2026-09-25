@@ -24,6 +24,10 @@ async def smoke():
         assert prepared["ok"]
         assert prepared["target"]["monster_level"] >= 1
 
+        # The prepared hunt must retain the exact display name in persistence.
+        active_prepared = await db.get_rpg_hunt_active("hunt-guild", "hunt-user")
+        assert active_prepared["enemy_name"] == prepared["target"]["name"]
+
         battle = await start_battle(
             db,
             "hunt-guild",
@@ -32,6 +36,7 @@ async def smoke():
             hunt_mode=True,
         )
         assert battle["ok"]
+        assert battle["battle"]["enemy_name"] == prepared["target"]["name"]
 
         active = await db.get_rpg_hunt_active("hunt-guild", "hunt-user")
         assert active["enemy_id"] == prepared["target"]["id"]
