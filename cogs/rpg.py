@@ -85,7 +85,7 @@ RPG_HELP_PAGES = {
             "\`!rpg class\` → view/choose a class\n"
             "\`!rpg adventure\` → earn XP and RPG gold\n"
             "\`!rpg explore\` → discover the realm or enter encounters\n"
-            "\`!rpg battle\` → start a fight\n"
+            "\`!rpg hunt\` → hunt scaled monsters for Hunt XP and loot\n"            "\`!rpg battle\` → start a random encounter\n"
             "\`!rpg rest\` → restore HP and MP\n\n"
             "**FIRST STEPS**\n"
             "① Run \`!rpg class\` and choose a path.\n"
@@ -123,7 +123,7 @@ RPG_HELP_PAGES = {
         "title": "⚔️ ECLIPSE RPG · COMBAT",
         "description": (
             "**START & ACT**\n"
-            "\`!rpg battle\` — start a random battle\n"
+            "\`!rpg hunt\` — open the hunting board\n"            "\`!rpg hunt <target>\` — start a scaled monster hunt\n"            "\`!rpg battle\` — start a random battle\n"
             "\`!rpg attack\` — basic attack\n"
             "\`!rpg skill <id>\` — use an unlocked active skill\n"
             "\`!rpg special <id>\` — cast a class special\n"
