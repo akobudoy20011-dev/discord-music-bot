@@ -479,6 +479,46 @@ class RPG(commands.Cog):
         battle = result["battle"]
         await ctx.send(f"⚔️ **BATTLE BEGINS**\nEnemy: **{battle['enemy_name']}** · ❤️ {battle['enemy_hp']}/{battle['enemy_max_hp']} HP\nUse !rpg attack, !rpg skill <id>, or !rpg flee.")
 
+    @rpg.command(name="skills", aliases=["skillbook", "abilities"])
+    async def skills_command(self, ctx):
+        player = await get_player(self.db, ctx.guild.id, ctx.author.id)
+        owned = set(await self.db.get_rpg_skills(ctx.guild.id, ctx.author.id))
+        lines = []
+        for skill in get_skills(player["class_key"]):
+            if skill["id"] in owned:
+                state = "✦ READY"
+            elif player["level"] >= int(skill.get("level", 1)):
+                state = "○ AVAILABLE"
+            else:
+                state = f"🔒 Lv.{skill.get('level', 1)}"
+            cd = f" · {skill.get('cooldown', 0)}t CD" if skill.get("cooldown", 0) else ""
+            lines.append(
+                f"{state} · **{skill['name']}** · `{skill['id']}` · "
+                f"{skill['cost']} MP{cd}\n{skill['description']}"
+            )
+        await ctx.send(embed=discord.Embed(
+            title=f"⚔️ ECLIPSE · {player['class_key'].upper()} SKILLS",
+            description="\n\n".join(lines) or "No skills are defined for this class.",
+            color=COLOR_PRIMARY,
+        ))
+
+    @rpg.command(name="unlock", aliases=["learn", "learnskill"])
+    async def unlock_skill_command(self, ctx, skill_id: str = None):
+        if not skill_id:
+            await ctx.send("Use !rpg skills to see available skills, then !rpg unlock <skill_id>.")
+            return
+        player = await get_player(self.db, ctx.guild.id, ctx.author.id)
+        result = await unlock_skill(self.db, ctx.guild.id, ctx.author.id, player["class_key"], skill_id)
+        if not result["ok"]:
+            await ctx.send(f"❌ {result['message']}")
+            return
+        skill = result["skill"]
+        await ctx.send(
+            f"✦ **SKILL UNLOCKED** · {skill['name']}\n"
+            f"{skill['description']} · {skill['cost']} MP · "
+            f"Cooldown: {skill.get('cooldown', 0)} turns"
+        )
+
     @rpg.command(name="attack", aliases=["atk"])
     async def attack_command(self, ctx):
         result = await combat_attack(self.db, ctx.guild.id, ctx.author.id)
