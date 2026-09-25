@@ -363,7 +363,10 @@ async def use_consumable(db,guild_id,user_id,item_id):
     p=await db.get_rpg_player(guild_id,user_id)
     field="hp" if item["kind"]=="hp" else "mp"
     maximum="max_hp" if field=="hp" else "max_mp"
-    new=min(int(p[field])+item["amount"],int(p[maximum]))
+    from .equipment import equipment_stats
+    gear=await equipment_stats(db,guild_id,user_id)
+    effective_max=int(p[maximum])+int(gear.get(maximum,0))
+    new=min(int(p[field])+item["amount"],effective_max)
     await db.update_rpg_player(guild_id,user_id,**{field:new})
     await db._conn.execute("UPDATE rpg_consumables SET amount=amount-1 WHERE guild_id=? AND user_id=? AND item_id=?",(str(guild_id),str(user_id),item_id))
     await db._conn.commit()
