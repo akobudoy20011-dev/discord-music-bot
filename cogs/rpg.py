@@ -694,25 +694,27 @@ class RPG(commands.Cog):
     @commands.has_permissions(manage_guild=True)
     async def special_access_command(self, ctx, member: discord.Member = None):
         target = member or ctx.author
-        owned = await self.db.get_rpg_specials(ctx.guild.id, target.id)
-        if not owned:
-            await ctx.send(f"✦ **{target.display_name}** has no unlocked specials.")
-            return
         lines = []
-        for sid in owned:
+        for sid in SPECIALS:
+            record = await self.db.get_rpg_special(ctx.guild.id, target.id, sid)
+            if not record:
+                continue
             data = get_special(sid)
             if not data:
                 continue
-            record = await self.db.get_rpg_special(ctx.guild.id, target.id, sid)
-            source = record.get("source", "unlock") if record else "unlock"
-            lines.append(f"{data['icon']} **{data['name']}** · `{sid}` · `{source}`")
-        await ctx.send(
-            embed=discord.Embed(
-                title=f"✦ SPECIAL ACCESS · {target.display_name}",
-                description="\n".join(lines) or "No valid specials found.",
-                color=COLOR_PRIMARY,
-            )
-        )
+            if int(record.get("unlocked", 1)) == 0 and record.get("source") == "admin_revoke":
+                lines.append(f"⛔ **REVOKED** · {data['icon']} **{data['name']}** · `{sid}`")
+            elif int(record.get("unlocked", 1)) == 1:
+                source = record.get("source", "unlock")
+                lines.append(f"✦ **GRANTED** · {data['icon']} **{data['name']}** · `{sid}` · `{source}`")
+        if not lines:
+            await ctx.send(f"✦ **{target.display_name}** has no explicit special grants or revocations.")
+            return
+        await ctx.send(embed=discord.Embed(
+            title=f"✦ SPECIAL ACCESS · {target.display_name}",
+            description="\n".join(lines),
+            color=COLOR_PRIMARY,
+        ))
 
     @rpg.group(name="faction", aliases=["factions", "rep"], invoke_without_command=True)
     async def faction_command(self, ctx):
