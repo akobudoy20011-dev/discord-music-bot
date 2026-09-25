@@ -2319,7 +2319,7 @@ class Database:
         allowed = {
             "class_key", "level", "xp", "hp", "max_hp",
             "mp", "max_mp", "strength", "defense",
-            "magic", "agility", "gold", "last_adventure", "region", "travel_until"
+            "magic", "agility", "gold", "last_adventure", "region", "travel_until", "travel_destination"
         }
         fields = {k: v for k, v in fields.items() if k in allowed}
 
