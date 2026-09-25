@@ -19,7 +19,7 @@ from rpg.crafting import MATERIALS, list_recipes, craft, salvage
 from rpg.dungeons import list_dungeons, start as start_dungeon, status as dungeon_status, advance as advance_dungeon, retreat as retreat_dungeon
 from rpg.gathering import RESOURCE_NODES, profile as gathering_profile, gather as gather_resource, collections as gathering_collections
 from rpg.achievements import ACHIEVEMENTS, check as check_achievements, list_unlocked as unlocked_achievements
-from rpg.expansion import FACTIONS, SUBCLASSES, HOUSING, CONSUMABLES, DAILY_POOL, faction_rows, rep_rank, choose_subclass, get_subclass, buy_house, get_house, pvp_rating, create_pvp, resolve_pvp, daily_quest, claim_daily, buy_consumable, use_consumable, enchant, RELATIONSHIPS, relationship_rows, affinity_rank, gift_npc
+from rpg.expansion import FACTIONS, SUBCLASSES, HOUSING, CONSUMABLES, DAILY_POOL, faction_rows, rep_rank, choose_subclass, get_subclass, buy_house, get_house, pvp_rating, create_pvp, resolve_pvp, daily_quest, daily_progress, claim_daily, buy_consumable, use_consumable, enchant, RELATIONSHIPS, relationship_rows, affinity_rank, gift_npc
 
 
 def xp_bar(current, maximum, length=14):
@@ -731,6 +731,137 @@ class RPG(commands.Cog):
             f = FACTIONS[row["faction_id"]]
             lines.append(f"{f['icon']} **{f['name']}** · {rep_rank(row['reputation'])} · {row['reputation']:,} REP")
         await ctx.send(embed=discord.Embed(title="🌙 ECLIPSE · FACTIONS", description="\n".join(lines), color=COLOR_PRIMARY))
+
+    @rpg.group(name="dungeon", aliases=["dungeons", "delve"], invoke_without_command=True)
+    async def dungeon_command(self, ctx, action: str = None, dungeon_id: str = None):
+        if not action:
+            rows = list_dungeons()
+            lines = [
+                f"{d['icon']} {did} · **{d['name']}** · Lv.{d['min_level']} · {d['region'].replace('_', ' ').title()}"
+                for did, d in rows
+            ]
+            await ctx.send(
+                "🕯️ **DUNGEON DELVES**\n\n"
+                + "\n".join(lines)
+                + "\n\nUse !rpg dungeon start <id>, status, advance, or retreat."
+            )
+            return
+
+        action = str(action).lower()
+        if action == "start":
+            result = await start_dungeon(self.db, ctx.guild.id, ctx.author.id, dungeon_id or "")
+        elif action in {"advance", "attack", "next"}:
+            result = await advance_dungeon(self.db, ctx.guild.id, ctx.author.id)
+        elif action == "retreat":
+            result = await retreat_dungeon(self.db, ctx.guild.id, ctx.author.id)
+        elif action in {"status", "check"}:
+            run = await dungeon_status(self.db, ctx.guild.id, ctx.author.id)
+            if not run:
+                await ctx.send("🕯️ No dungeon run is active.")
+                return
+            await ctx.send(
+                f"🕯️ **{run['dungeon_id'].upper()}** · {run['status'].upper()}\n"
+                f"Floor **{run['floor']}/{12}** · ❤️ {run['hp']} · "
+                f"💰 banked {run['gold']:,} · ✦ banked {run['xp']:,} XP"
+            )
+            return
+        else:
+            await ctx.send("Use !rpg dungeon, start <id>, status, advance, or retreat.")
+            return
+
+        if not result["ok"]:
+            await ctx.send(f"❌ {result['message']}")
+            return
+
+        if action == "start":
+            d = result["dungeon"]
+            await ctx.send(
+                f"{d['icon']} **{d['name']} DELVE STARTED**\n"
+                f"Region: **{d['region'].replace('_', ' ').title()}** · "
+                f"Minimum level: **{d['min_level']}**\n"
+                "Use !rpg dungeon advance to enter the next room."
+            )
+        elif action in {"advance", "attack", "next"}:
+            result_name = {
+                "treasure": "TREASURE ROOM",
+                "elite": "ELITE ENCOUNTER",
+                "room": "DUNGEON ROOM",
+                "boss_cleared": "BOSS DEFEATED",
+                "boss_failed": "BOSS DEFEAT",
+                "defeated": "DEFEATED",
+            }.get(result["result"], result["result"].upper())
+            lines = [
+                f"🕯️ **{result_name}** · Floor **{result['floor']}/{12}**",
+                f"❤️ Damage taken: **{result['damage']}**",
+            ]
+            if result.get("gold") is not None:
+                lines.append(f"💰 +{result['gold']:,} gold · ✦ +{result['xp']:,} XP")
+            if result.get("item"):
+                lines.append(f"🎁 Loot: {result['item']}")
+            if result["result"] == "boss_cleared":
+                lines.append("🏆 **DUNGEON CLEARED** · daily completion recorded.")
+            elif result["result"] == "boss_failed":
+                lines.append("☠️ The boss overwhelmed you. The delve is over.")
+            elif result["result"] == "defeated":
+                lines.append("☠️ You were defeated. The delve is over.")
+            else:
+                lines.append("Use !rpg dungeon advance to push deeper or !rpg dungeon retreat to bank your rewards.")
+            await ctx.send("\n".join(lines))
+        else:
+            level_text = f" · ✦ +{result['xp']:,} XP" if result.get("xp") else ""
+            await ctx.send(
+                f"↩️ **DUNGEON RETREAT** · Reached floor **{result['floor']}/{12}**\n"
+                f"Banked **+{result['gold']:,} gold**{level_text}"
+                + ("\n✦ **LEVEL UP**" if result.get("new_level", 0) > result.get("old_level", 0) else "")
+            )
+
+    @rpg.group(name="gather", aliases=["gathering", "harvest"], invoke_without_command=True)
+    async def gather_command(self, ctx, skill_id: str = None):
+        if not skill_id:
+            lines = [
+                f"{data['icon']} {sid} · **{data['name']}**"
+                for sid, data in RESOURCE_NODES.items()
+            ]
+            await ctx.send(
+                "🌿 **GATHERING**\n\n"
+                + "\n".join(lines)
+                + "\n\nUse !rpg gather <skill>."
+            )
+            return
+        result = await gather_resource(self.db, ctx.guild.id, ctx.author.id, skill_id)
+        if not result["ok"]:
+            await ctx.send(f"❌ {result['message']}")
+            return
+        level_text = f" · ✦ Level **{result['level']}**" if result.get("level") else ""
+        await ctx.send(
+            f"{result['skill']['icon']} **{result['skill']['name']}** · "
+            f"Found **{result['amount']}× {result['item_id']}**"
+            f"{' · 💎 RARE' if result.get('rarity') == 'rare' else ''}\n"
+            f"+{result['gained_xp']} gathering XP{level_text}"
+        )
+
+    @rpg.command(name="collection", aliases=["collections", "collect"])
+    async def collection_command(self, ctx):
+        rows = await gathering_collections(self.db, ctx.guild.id, ctx.author.id)
+        if not rows:
+            await ctx.send("📚 Your resource collection is empty.")
+            return
+        lines = [f"• {row['collection_id']} ×{row['amount']}" for row in rows]
+        await ctx.send("📚 **RESOURCE COLLECTION**\n\n" + "\n".join(lines))
+
+    @rpg.command(name="achievements", aliases=["achievement", "achieve"])
+    async def achievements_command(self, ctx):
+        unlocked = await unlocked_achievements(self.db, ctx.guild.id, ctx.author.id)
+        unlocked_map = {row["achievement_id"]: row for row in unlocked}
+        lines = []
+        for aid, (icon, name, description, reward) in ACHIEVEMENTS.items():
+            state = "✦ UNLOCKED" if aid in unlocked_map else "○ LOCKED"
+            lines.append(f"{state} {icon} **{name}** · +{reward} gold\n{description}")
+        await ctx.send(embed=discord.Embed(
+            title="🏆 ECLIPSE · ACHIEVEMENTS",
+            description="\n\n".join(lines),
+            color=COLOR_GOLD,
+        ))
 
     @faction_command.command(name="info")
     async def faction_info_command(self, ctx, faction_id: str = None):
