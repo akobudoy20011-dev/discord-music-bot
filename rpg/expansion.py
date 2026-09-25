@@ -11,6 +11,8 @@ consumables, and gear enchantments.
 import random
 import time
 
+from .items import ITEMS
+
 FACTIONS = {
     "veilkeepers": {"name":"Veilkeepers","icon":"🌙","description":"Keepers of the Veil and its forbidden memories.","regions":["moonlit_vale"],"rewards":[("Moonlit Reputation","Access to Veilkeeper contracts")]},
     "rootbound": {"name":"Rootbound","icon":"🌿","description":"Ancient wardens who protect the living forest.","regions":["whispering_wood"],"rewards":[("Rootbound Reputation","Access to forest contracts")]},
@@ -151,8 +153,17 @@ async def gift_npc(db,guild_id,user_id,npc_id,item_id):
     if item_id not in npc["gift"]:return {"ok":False,"message":f"{npc['name']} does not value that item."}
     rows=await db.get_rpg_items(guild_id,user_id)
     owned=next((r for r in rows if r["item_id"]==item_id and int(r["amount"])>0),None)
-    if not owned:return {"ok":False,"message":"You do not own that item."}
-    await db._conn.execute("UPDATE rpg_items SET amount=amount-1 WHERE guild_id=? AND user_id=? AND item_id=?",(str(guild_id),str(user_id),item_id))
+    source="item"
+    if not owned:
+        materials=await db.get_rpg_materials(guild_id,user_id)
+        owned=next((r for r in materials if r["material_id"]==item_id and int(r["amount"])>0),None)
+        source="material"
+    if not owned:return {"ok":False,"message":"You do not own that gift."}
+    if source=="item":
+        consumed=await db.remove_rpg_item(guild_id,user_id,item_id,1)
+    else:
+        consumed=await db.remove_rpg_material(guild_id,user_id,item_id,1)
+    if not consumed:return {"ok":False,"message":"The gift was no longer available."}
     await db._conn.execute("UPDATE rpg_relationships SET affinity=MIN(1000,affinity+75) WHERE guild_id=? AND user_id=? AND npc_id=?",(str(guild_id),str(user_id),npc_id))
     await db._conn.commit()
     cur=await db._conn.execute("SELECT affinity FROM rpg_relationships WHERE guild_id=? AND user_id=? AND npc_id=?",(str(guild_id),str(user_id),npc_id))
@@ -419,14 +430,54 @@ async def assign_affixes(db,guild_id,user_id,item_id):
     await db._conn.commit()
     return affixes
 
+SET_ITEMS={
+    "eclipse":{"legendary_eclipse_blade","legendary_void_crown"},
+    "starfall":{"starfall_staff","starweave","leviathan_eye"},
+    "sovereign":{"legendary_celestial_aegis","legendary_sovereign_relic","worldboss_sovereign_heart","worldboss_void_core"},
+}
+
 async def affix_stats(db,guild_id,user_id):
     await _endgame_schema(db)
-    cur=await db._conn.execute("SELECT affix_id,value FROM rpg_affixes WHERE guild_id=? AND user_id=?",(str(guild_id),str(user_id)))
+    cur=await db._conn.execute(
+        """SELECT a.affix_id,a.value
+           FROM rpg_affixes a
+           JOIN rpg_equipment e
+             ON e.guild_id=a.guild_id AND e.user_id=a.user_id AND e.item_id=a.item_id
+           WHERE a.guild_id=? AND a.user_id=?""",
+        (str(guild_id),str(user_id)),
+    )
     totals={k:0 for k in ("strength","defense","magic","agility","max_hp","max_mp")}
     for row in await cur.fetchall():
         a=AFFIXES.get(row["affix_id"])
         if a:totals[a[0]]+=int(row["value"])
     return totals
+
+async def set_bonus_stats(db,guild_id,user_id):
+    await _endgame_schema(db)
+    cur=await db._conn.execute(
+        "SELECT item_id FROM rpg_equipment WHERE guild_id=? AND user_id=?",
+        (str(guild_id),str(user_id)),
+    )
+    equipped={str(r["item_id"]) for r in await cur.fetchall()}
+    totals={k:0 for k in ("strength","defense","magic","agility","max_hp","max_mp")}
+    for set_id,data in SET_BONUSES.items():
+        pieces=len(equipped & SET_ITEMS.get(set_id,set()))
+        if pieces>=int(data["pieces"]):
+            for key,value in data["bonus"].items():
+                totals[key]+=int(value)
+    return totals
+
+async def ascension_bonuses(db,guild_id,user_id):
+    state=await ascension(db,guild_id,user_id)
+    n=int(state.get("ascension",0))
+    return {
+        "strength":n,
+        "defense":n,
+        "magic":n,
+        "agility":n,
+        "max_hp":n*10,
+        "max_mp":n*5,
+    }
 
 async def raid_status(db,guild_id,user_id,raid_id):
     await _endgame_schema(db)
@@ -483,8 +534,38 @@ async def season_status(db,guild_id,user_id):
     await _endgame_schema(db); now=time.time()
     cur=await db._conn.execute("SELECT * FROM rpg_seasons WHERE guild_id=?",(str(guild_id),)); row=await cur.fetchone()
     if not row:
-        await db._conn.execute("INSERT INTO rpg_seasons VALUES(?,?,?,?)",(str(guild_id),1,now,now+SEASON_LENGTH*86400)); await db._conn.commit(); row={"season":1,"started_at":now,"ends_at":now+SEASON_LENGTH*86400}
-    cur=await db._conn.execute("SELECT user_id,points FROM rpg_season_stats WHERE guild_id=? AND season=? ORDER BY points DESC LIMIT 10",(str(guild_id),int(row["season"]))); leaderboard=[dict(x) for x in await cur.fetchall()]
+        await db._conn.execute("INSERT INTO rpg_seasons VALUES(?,?,?,?)",(str(guild_id),1,now,now+SEASON_LENGTH*86400))
+        await db._conn.commit()
+        row={"season":1,"started_at":now,"ends_at":now+SEASON_LENGTH*86400}
+    elif float(row["ends_at"])<=now:
+        old_season=int(row["season"])
+        cur=await db._conn.execute(
+            "SELECT user_id,points FROM rpg_season_stats WHERE guild_id=? AND season=? ORDER BY points DESC",
+            (str(guild_id),old_season),
+        )
+        winners=[dict(x) for x in await cur.fetchall()]
+        for rank,entry in enumerate(winners[:3],1):
+            reward={1:(10000,1000),2:(6000,600),3:(3000,300)}[rank]
+            player=await db.get_rpg_player(guild_id,int(entry["user_id"]))
+            if player:
+                await db.update_rpg_player(
+                    guild_id,int(entry["user_id"]),
+                    gold=int(player["gold"])+reward[0],
+                )
+                await db.add_rpg_xp(guild_id,int(entry["user_id"]),reward[1])
+        new_season=old_season+1
+        await db._conn.execute(
+            "DELETE FROM rpg_season_stats WHERE guild_id=? AND season=?",
+            (str(guild_id),old_season),
+        )
+        await db._conn.execute(
+            "UPDATE rpg_seasons SET season=?,started_at=?,ends_at=? WHERE guild_id=?",
+            (new_season,now,now+SEASON_LENGTH*86400,str(guild_id)),
+        )
+        await db._conn.commit()
+        row={"season":new_season,"started_at":now,"ends_at":now+SEASON_LENGTH*86400}
+    cur=await db._conn.execute("SELECT user_id,points FROM rpg_season_stats WHERE guild_id=? AND season=? ORDER BY points DESC LIMIT 10",(str(guild_id),int(row["season"])))
+    leaderboard=[dict(x) for x in await cur.fetchall()]
     return {"season":int(row["season"]),"ends_at":float(row["ends_at"]),"leaderboard":leaderboard}
 
 async def season_points(db,guild_id,user_id,points):
