@@ -61,6 +61,7 @@ jobs:
               "rpg.skills_service",
               "rpg.enemies",
               "rpg.combat",
+              "rpg.hunting",
               "rpg.quests",
               "rpg.loot",
               "rpg.world",
@@ -150,6 +151,9 @@ jobs:
 
       - name: Exercise RPG special subsystem
         run: python tests/rpg_specials_smoke.py
+
+      - name: Exercise RPG hunting subsystem
+        run: python tests/rpg_hunting_smoke.py
 
       - name: Exercise arcade tournament lifecycle
         run: python tests/arcade_tournament_smoke.py
