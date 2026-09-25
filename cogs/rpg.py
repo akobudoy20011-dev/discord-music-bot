@@ -254,7 +254,7 @@ class RPG(commands.Cog):
         await ensure_class_skills(self.db, ctx.guild.id, ctx.author.id, key.lower())
         await ctx.send(f"{chosen['icon']} **{ctx.author.display_name}** is now a **{chosen['name']}**.\n{chosen['description']}\n\n🎒 Starter gear and your first skill have been unlocked.")
 
-    @rpg.command(name="adventure",aliases=["hunt"])
+    @rpg.command(name="adventure")
     @commands.cooldown(1,ADVENTURE_COOLDOWN,commands.BucketType.user)
     async def adventure_command(self,ctx):
         result=await adventure(self.db,ctx.guild.id,ctx.author.id)
@@ -405,6 +405,27 @@ class RPG(commands.Cog):
                 return
         await ctx.send(f"🪽 **{ctx.author.display_name}** rests beneath the ECLIPSE.\n❤️ HP restored to **{result['hp']}** · 💠 MP restored to **{result['mp']}**")
 
+    @rpg.command(name="hunt", aliases=["monster", "hunting"])
+    async def hunt_command(self, ctx):
+        result = await start_battle(self.db, ctx.guild.id, ctx.author.id)
+        if not result["ok"]:
+            if result.get("battle"):
+                battle = result["battle"]
+                await ctx.send(
+                    f"⚔️ **HUNT IN PROGRESS**\\n"
+                    f"Monster: **{battle['enemy_name']}** · ❤️ {battle['enemy_hp']}/{battle['enemy_max_hp']} HP\\n"
+                    "Use !rpg attack, !rpg skill <id>, or !rpg special <id> to finish the hunt."
+                )
+            else:
+                await ctx.send(f"❌ {result.get('message', 'You cannot hunt right now.')}")
+            return
+        battle = result["battle"]
+        await ctx.send(
+            f"🏹 **MONSTER HUNT**\\n"
+            f"Target: **{battle['enemy_name']}** · ❤️ {battle['enemy_hp']}/{battle['enemy_max_hp']} HP\\n"
+            "The hunt is active. Defeat the monster to claim XP, RPG gold, loot, and possible level-up rewards."
+        )
+
     @rpg.command(name="battle", aliases=["fight"])
     async def battle_command(self, ctx):
         result = await start_battle(self.db, ctx.guild.id, ctx.author.id)
@@ -425,7 +446,16 @@ class RPG(commands.Cog):
             await ctx.send(f"❌ {result['message']}")
             return
         if result.get("victory"):
-            await ctx.send(f"🏆 **VICTORY** · {result['damage']} damage · +{result['xp']} XP · +{result['gold']} gold" + ("\n✦ **LEVEL UP**" if result["level_up"] else ""))
+            level_text = ""
+            if result.get("level_up"):
+                level_text = f"\n✦ **LEVEL UP** · Lv.{result['old_level']} → **Lv.{result['new_level']}**\n❤️ +{result['hp_gain']} Max HP · 💠 +{result['mp_gain']} Max MP"
+            loot_text = f"\n🎁 **Loot:** {result['loot_name']}" if result.get("loot_name") else ""
+            await ctx.send(
+                f"☠️ **MONSTER DEFEATED** · **{result['enemy_name']}**\n"
+                f"💥 {result['damage']} damage · ✦ +{result['xp']} XP · 💰 +{result['gold']} gold"
+                f"{loot_text}{level_text}\n"
+                "🏁 **HUNT COMPLETE** — the monster has been defeated."
+            )
         elif result.get("defeat"):
             await ctx.send(f"☠️ **DEFEATED** · You dealt {result['damage']} damage, but the enemy struck for {result['incoming']}.")
         else:
@@ -441,7 +471,16 @@ class RPG(commands.Cog):
             await ctx.send(f"❌ {result['message']}")
             return
         if result.get("victory"):
-            await ctx.send(f"✨ **SKILL VICTORY** · {result['damage']} damage · +{result['xp']} XP · +{result['gold']} gold")
+            level_text = ""
+            if result.get("level_up"):
+                level_text = f"\n✦ **LEVEL UP** · Lv.{result['old_level']} → **Lv.{result['new_level']}**\n❤️ +{result['hp_gain']} Max HP · 💠 +{result['mp_gain']} Max MP"
+            loot_text = f"\n🎁 **Loot:** {result['loot_name']}" if result.get("loot_name") else ""
+            await ctx.send(
+                f"☠️ **MONSTER DEFEATED** · **{result['enemy_name']}**\n"
+                f"✨ Skill dealt {result['damage']} damage · ✦ +{result['xp']} XP · 💰 +{result['gold']} gold"
+                f"{loot_text}{level_text}\n"
+                "🏁 **HUNT COMPLETE** — the monster has been defeated."
+            )
         elif result.get("defeat"):
             await ctx.send(f"☠️ **DEFEATED** · Skill dealt {result['damage']} damage.")
         else:
@@ -512,7 +551,18 @@ class RPG(commands.Cog):
             await ctx.send(f"❌ {result['message']}")
             return
         if result.get("victory"):
-            await ctx.send(f"{result['special_icon']} **{result['special_name'].upper()}**\n{result['special_message']}\n\n💥 **{result['damage']} damage** · 🏆 **VICTORY** · +{result['xp']} XP · +{result['gold']} gold")
+            level_text = ""
+            if result.get("level_up"):
+                level_text = f"\n✦ **LEVEL UP** · Lv.{result['old_level']} → **Lv.{result['new_level']}**\n❤️ +{result['hp_gain']} Max HP · 💠 +{result['mp_gain']} Max MP"
+            loot_text = f"\n🎁 **Loot:** {result['loot_name']}" if result.get("loot_name") else ""
+            await ctx.send(
+                f"{result['special_icon']} **{result['special_name'].upper()}**\n"
+                f"{result['special_message']}\n\n"
+                f"☠️ **MONSTER DEFEATED** · **{result['enemy_name']}**\n"
+                f"💥 **{result['damage']} damage** · ✦ +{result['xp']} XP · 💰 +{result['gold']} gold"
+                f"{loot_text}{level_text}\n"
+                "🏁 **HUNT COMPLETE** — the monster has been defeated."
+            )
             return
         if result.get("defeat"):
             await ctx.send(f"{result['special_icon']} **{result['special_name'].upper()}**\n{result['special_message']}\n\n☠️ The enemy survives the cast and defeats you.")
@@ -998,137 +1048,3 @@ class RPG(commands.Cog):
         await ctx.send(
             f"🕯️ {run['dungeon_id'].upper()} · {run['status'].upper()}\n"
             f"Floor: {run['floor']}/12 · Rooms: {run['rooms']}\n"
-            f"Run gold: {run['gold']:,} · Run XP: {run['xp']:,}"
-        )
-
-    @dungeon_command.command(name="advance", aliases=["next", "enter"])
-    async def dungeon_advance_command(self, ctx):
-        result = await advance_dungeon(self.db, ctx.guild.id, ctx.author.id)
-        if not result["ok"]:
-            await ctx.send(f"❌ {result['message']}")
-            return
-        d = result["dungeon"]
-        result_name = result["result"]
-        if result_name == "boss_cleared":
-            await ctx.send(
-                f"👑 DUNGEON CLEARED — {d['name']}\n"
-                f"Boss: {d['boss']}\n"
-                f"💰 +{result['gold']:,} RPG gold · ✦ +{result['xp']} XP\n"
-                f"🎁 {result['item']} dropped."
-            )
-        elif result_name in {"boss_failed", "defeated"}:
-            await ctx.send(
-                f"💀 THE DELVE ENDS — {d['name']}\n"
-                f"You reached floor {result['floor']} and took {result['damage']} damage."
-            )
-        else:
-            await ctx.send(
-                f"{d['icon']} Floor {result['floor']}/12 · {result_name.title()}\n"
-                f"❤️ Damage: {result['damage']} · 💰 +{result['gold']:,} · ✦ +{result['xp']} XP"
-            )
-        unlocked = await check_achievements(self.db, ctx.guild.id, ctx.author.id)
-        if unlocked:
-            names = ", ".join(ACHIEVEMENTS[a][1] for a in unlocked)
-            await ctx.send(f"🏆 Achievement unlocked: {names}")
-
-    @dungeon_command.command(name="retreat", aliases=["leave", "exit"])
-    async def dungeon_retreat_command(self, ctx):
-        result = await retreat_dungeon(self.db, ctx.guild.id, ctx.author.id)
-        if not result["ok"]:
-            await ctx.send(f"❌ {result['message']}")
-            return
-        await ctx.send(
-            f"↩️ You retreated from floor {result['floor']}/12.\n"
-            f"Your run kept {result['gold']:,} gold and {result['xp']:,} XP."
-        )
-
-    @rpg.command(name="gather", aliases=["harvest"])
-    async def gather_command(self, ctx, skill_id: str = None):
-        if not skill_id:
-            rows = await gathering_profile(self.db, ctx.guild.id, ctx.author.id)
-            levels = {r["skill_id"]: f"Lv.{r['level']} ({r['xp']} XP)" for r in rows}
-            lines = [
-                f"{data['icon']} {sid} — {data['name']} · {levels.get(sid, 'Lv.1')}"
-                for sid, data in RESOURCE_NODES.items()
-            ]
-            await ctx.send("🌿 GATHERING\n" + "\n".join(lines) + "\n\nUse !rpg gather <skill>.")
-            return
-        result = await gather_resource(self.db, ctx.guild.id, ctx.author.id, skill_id)
-        if not result["ok"]:
-            await ctx.send(f"❌ {result['message']}")
-            return
-        skill = result["skill"]
-        rare = " ✨ RARE YIELD" if result["rarity"] == "rare" else ""
-        await ctx.send(
-            f"{skill['icon']} {skill['name']} · {result['region'].replace('_', ' ').title()}\n"
-            f"Found {result['item_id']} ×{result['amount']}.{rare}\n"
-            f"Skill: Lv.{result['level']} · +{result['gained_xp']} XP"
-        )
-        unlocked = await check_achievements(self.db, ctx.guild.id, ctx.author.id)
-        if unlocked:
-            names = ", ".join(ACHIEVEMENTS[a][1] for a in unlocked)
-            await ctx.send(f"🏆 Achievement unlocked: {names}")
-
-    @rpg.command(name="gathering", aliases=["professions"])
-    async def gathering_command(self, ctx):
-        rows = await gathering_profile(self.db, ctx.guild.id, ctx.author.id)
-        known = {r["skill_id"]: r for r in rows}
-        lines = [
-            f"{data['icon']} {data['name']} · Level {known.get(sid, {}).get('level', 1)} · XP {known.get(sid, {}).get('xp', 0)}"
-            for sid, data in RESOURCE_NODES.items()
-        ]
-        await ctx.send(embed=discord.Embed(title="🌿 ECLIPSE · PROFESSIONS", description="\n".join(lines), color=COLOR_PRIMARY))
-
-    @rpg.command(name="collection", aliases=["collections", "collect"])
-    async def collection_command(self, ctx):
-        rows = await gathering_collections(self.db, ctx.guild.id, ctx.author.id)
-        if not rows:
-            await ctx.send("📚 Your resource collection is empty. Use !rpg gather.")
-            return
-        lines = [f"{row['collection_id']} × {row['amount']}" for row in rows]
-        await ctx.send(embed=discord.Embed(title="📚 ECLIPSE · COLLECTION", description="\n".join(lines), color=COLOR_PRIMARY))
-
-    @rpg.command(name="achievements", aliases=["badges"])
-    async def achievements_command(self, ctx):
-        rows = await unlocked_achievements(self.db, ctx.guild.id, ctx.author.id)
-        if not rows:
-            await ctx.send("🏆 No RPG achievements unlocked yet. Explore, gather, and clear dungeons.")
-            return
-        lines = []
-        for row in rows:
-            data = ACHIEVEMENTS.get(row["achievement_id"])
-            if data:
-                lines.append(f"{data[0]} {data[1]} — {data[2]}")
-        await ctx.send(embed=discord.Embed(title="🏆 ECLIPSE · RPG ACHIEVEMENTS", description="\n".join(lines), color=COLOR_GOLD))
-
-    @rpg.command(name="skills")
-    async def skills_command(self, ctx):
-        player = await get_player(self.db, ctx.guild.id, ctx.author.id)
-        owned = await ensure_class_skills(self.db, ctx.guild.id, ctx.author.id, player["class_key"])
-        available = get_skills(player["class_key"])
-        lines = []
-        for skill in available:
-            state = "✦ UNLOCKED" if skill["id"] in owned else "○ LOCKED"
-            lines.append(f"{state} **{skill['name']}** · {skill['cost']} MP\n{skill['description']}")
-        await ctx.send(embed=discord.Embed(
-            title="♡ ECLIPSE · SKILLS ♡",
-            description="\n\n".join(lines),
-            color=COLOR_PRIMARY
-        ))
-
-    @rpg.command(name="unlock")
-    async def unlock_command(self, ctx, skill_id: str = None):
-        if not skill_id:
-            await ctx.send("Use `!rpg skills` to see available skills.")
-            return
-        player = await get_player(self.db, ctx.guild.id, ctx.author.id)
-        skill, owned = await unlock_skill(
-            self.db, ctx.guild.id, ctx.author.id,
-            player["class_key"], skill_id
-        )
-        if skill is None:
-            await ctx.send("❌ That skill does not belong to your current class.")
-            return
-        await ctx.send(f"✦ **{skill['name']}** unlocked. MP cost: **{skill['cost']}**.")
-
-async def setup(bot): await bot.add_cog(RPG(bot))
