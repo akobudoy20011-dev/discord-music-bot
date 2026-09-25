@@ -10,6 +10,8 @@ from __future__ import annotations
 import random
 import time
 
+from .items import get_item
+
 DAILY_COOLDOWN = 20 * 60 * 60
 MAX_FLOOR = 12
 
