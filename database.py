@@ -3527,13 +3527,22 @@ class Database:
         row = await cur.fetchone()
         return dict(row) if row else None
 
-    async def resolve_arcade_match(self, match_id, winner_id):
+    async def resolve_arcade_match(self, match_id, winner_id, guild_id=None):
         cur = await self._conn.execute(
             "SELECT * FROM arcade_tournament_matches WHERE match_id=?",
             (int(match_id),)
         )
         m = await cur.fetchone()
         if not m or m["status"] not in ("ready", "playing"):
+            return False, None
+        if guild_id is not None:
+            cur = await self._conn.execute(
+                "SELECT guild_id FROM arcade_tournaments WHERE tournament_id=?",
+                (int(m["tournament_id"]),),
+            )
+            tournament = await cur.fetchone()
+            if not tournament or str(tournament["guild_id"]) != str(guild_id):
+                return False, None
             return False, None
         if str(winner_id) not in {str(m["player_a"]), str(m["player_b"])}:
             return False, None
