@@ -25,107 +25,6 @@ except ImportError:
 
 MAX_BET = 1_000_000
 
-TRIVIA_QUESTIONS = [
-    {
-        "q": "Which element has the chemical symbol 'O'?",
-        "options": ["Gold", "Oxygen", "Osmium", "Silver"],
-        "answer": 1,
-        "reward": 250
-    },
-    {
-        "q": "How many sides does a hexagon have?",
-        "options": ["5", "6", "7", "8"],
-        "answer": 1,
-        "reward": 200
-    },
-    {
-        "q": "What year was Discord officially released?",
-        "options": ["2013", "2015", "2017", "2019"],
-        "answer": 1,
-        "reward": 300
-    },
-    {
-        "q": "Which planet in our solar system is known as the Red Planet?",
-        "options": ["Venus", "Jupiter", "Mars", "Saturn"],
-        "answer": 2,
-        "reward": 200
-    },
-    {
-        "q": "In gaming, what does 'NPC' stand for?",
-        "options": ["Non-Playable Character", "New Player Character", "Next Level Player", "Non-Point Character"],
-        "answer": 0,
-        "reward": 150
-    }
-]
-
-
-class TriviaView(discord.ui.View):
-    def __init__(self, cog, ctx, question_data):
-        super().__init__(timeout=30)
-        self.cog = cog
-        self.ctx = ctx
-        self.qdata = question_data
-        self.answered = False
-
-        labels = ["A", "B", "C", "D"]
-        for idx, option in enumerate(question_data["options"]):
-            button = discord.ui.Button(
-                label=f"{labels[idx]}: {option}",
-                style=discord.ButtonStyle.primary,
-                custom_id=str(idx)
-            )
-            button.callback = self.make_callback(idx)
-            self.add_item(button)
-
-    def make_callback(self, chosen_idx):
-        async def callback(interaction: discord.Interaction):
-            if interaction.user.id != self.ctx.author.id:
-                await interaction.response.send_message("❌ This trivia isn't for you!", ephemeral=True)
-                return
-
-            if self.answered:
-                return
-
-            self.answered = True
-            self.stop()
-
-            correct_idx = self.qdata["answer"]
-
-            for item in self.children:
-                item.disabled = True
-                if int(item.custom_id) == correct_idx:
-                    item.style = discord.ButtonStyle.green
-                elif int(item.custom_id) == chosen_idx:
-                    item.style = discord.ButtonStyle.red
-
-            if chosen_idx == correct_idx:
-                reward = self.qdata["reward"]
-                new_bal = await self.cog.db.add_balance(self.ctx.guild.id, self.ctx.author.id, reward)
-                embed = discord.Embed(
-                    title="🎉 Correct Answer!",
-                    description=(
-                        f"**Question:** {self.qdata['q']}\n"
-                        f"✅ You picked: **{self.qdata['options'][chosen_idx]}**\n\n"
-                        f"💰 Earned: **+{reward:,} coins**\n"
-                        f"💳 Balance: **{new_bal:,}**"
-                    ),
-                    color=discord.Color.green()
-                )
-            else:
-                embed = discord.Embed(
-                    title="❌ Wrong Answer!",
-                    description=(
-                        f"**Question:** {self.qdata['q']}\n"
-                        f"❌ You picked: {self.qdata['options'][chosen_idx]}\n"
-                        f"✅ Correct answer: **{self.qdata['options'][correct_idx]}**"
-                    ),
-                    color=discord.Color.red()
-                )
-
-            await interaction.response.edit_message(embed=embed, view=self)
-
-        return callback
-
 
 class RPSView(discord.ui.View):
     def __init__(self, cog, ctx, bet: int = 0):
@@ -500,20 +399,6 @@ class Games(commands.Cog):
             embed=build_games_home_embed(),
             view=GamesHubView(author_id=ctx.author.id),
         )
-
-    @commands.command(name="trivia")
-    @commands.cooldown(1, 10, commands.BucketType.user)
-    async def trivia(self, ctx):
-        """Play a random trivia question for coins."""
-        qdata = random.choice(TRIVIA_QUESTIONS)
-        view = TriviaView(self, ctx, qdata)
-
-        embed = discord.Embed(
-            title="🧠 Trivia Challenge",
-            description=f"**{qdata['q']}**\n\n*Select your answer below within 30 seconds!*",
-            color=COLOR_PRIMARY
-        )
-        await ctx.send(embed=embed, view=view)
 
     @commands.command(name="rps")
     @commands.cooldown(1, 3, commands.BucketType.user)
