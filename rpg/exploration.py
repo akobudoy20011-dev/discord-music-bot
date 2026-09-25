@@ -20,6 +20,13 @@ async def travel(db, guild_id, user_id, region_id):
     if target is None:
         return {"ok":False,"message":"That realm does not exist."}
     player = await db.get_rpg_player(guild_id,user_id)
+    try:
+        from .dungeons import _get_run
+        dungeon_run = await _get_run(db, guild_id, user_id)
+        if dungeon_run and dungeon_run.get("status") == "active":
+            return {"ok":False,"message":"You cannot begin travel from inside an active dungeon."}
+    except Exception:
+        pass
     now = time.time()
     travel_until = float(player.get("travel_until") or 0)
     if travel_until > now:
