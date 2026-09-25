@@ -145,7 +145,11 @@ async def _victory_rewards(db, guild_id, user_id, battle, player, damage):
     )
 
     region = get_region(player.get("region")) or REGIONS["moonlit_vale"]
-    loot = roll_loot(battle["enemy_id"], region.get("loot_bonus", 0))
+    loot_bonus = float(region.get("loot_bonus", 0))
+    if hunt_active:
+        from .hunting import HUNT_TIERS
+        loot_bonus += float(HUNT_TIERS.get(hunt_active.get("tier", "common"), HUNT_TIERS["common"]).get("loot_bonus", 0))
+    loot = roll_loot(battle["enemy_id"], loot_bonus)
     guardian_regions = {
         r.get("guardian"): rid for rid, r in REGIONS.items() if r.get("guardian")
     }
