@@ -6,6 +6,7 @@ from .world import (
     get_event, get_discovery, roll_world_event, roll_discovery
 )
 from .enemies import ENEMIES
+from .manager import get_player
 
 TRAVEL_LOCK_SECONDS = 15
 EVENT_CHANCE = 0.08
@@ -19,7 +20,7 @@ async def travel(db, guild_id, user_id, region_id):
     target = get_region(region_id)
     if target is None:
         return {"ok":False,"message":"That realm does not exist."}
-    player = await db.get_rpg_player(guild_id,user_id)
+    player = await get_player(db,guild_id,user_id)
     try:
         from .dungeons import _get_run
         dungeon_run = await _get_run(db, guild_id, user_id)
@@ -56,7 +57,7 @@ async def _world_event(db,guild_id,world):
     return event
 
 async def explore(db, guild_id, user_id):
-    player = await db.get_rpg_player(guild_id,user_id)
+    player = await get_player(db,guild_id,user_id)
     now = time.time()
     travel_until = float(player.get("travel_until") or 0)
     if travel_until > now:
