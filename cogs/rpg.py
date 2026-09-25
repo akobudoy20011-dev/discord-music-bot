@@ -494,7 +494,7 @@ class RPG(commands.Cog):
                 f"☠️ **MONSTER DEFEATED** · **{result['enemy_name']}**\n"
                 f"💥 {result['damage']} damage · ✦ +{result['xp']} XP · 💰 +{result['gold']} gold"
                 f"{loot_text}{level_text}\n"
-                "🏁 **HUNT COMPLETE** — the monster has been defeated."
+                "🏁 **HUNT COMPLETE** — the monster has been defeated." + (f"\n🏹 Hunt Lv.{result['hunt']['hunt_level']} · +{result['hunt']['hunt_xp']} Hunt XP · 🔥 Streak {result['hunt']['streak']}" if result.get("hunt", {}).get("active") else "")
             )
         elif result.get("defeat"):
             await ctx.send(f"☠️ **DEFEATED** · You dealt {result['damage']} damage, but the enemy struck for {result['incoming']}.")
@@ -519,7 +519,7 @@ class RPG(commands.Cog):
                 f"☠️ **MONSTER DEFEATED** · **{result['enemy_name']}**\n"
                 f"✨ Skill dealt {result['damage']} damage · ✦ +{result['xp']} XP · 💰 +{result['gold']} gold"
                 f"{loot_text}{level_text}\n"
-                "🏁 **HUNT COMPLETE** — the monster has been defeated."
+                "🏁 **HUNT COMPLETE** — the monster has been defeated." + (f"\n🏹 Hunt Lv.{result['hunt']['hunt_level']} · +{result['hunt']['hunt_xp']} Hunt XP · 🔥 Streak {result['hunt']['streak']}" if result.get("hunt", {}).get("active") else "")
             )
         elif result.get("defeat"):
             await ctx.send(f"☠️ **DEFEATED** · Skill dealt {result['damage']} damage.")
@@ -601,7 +601,7 @@ class RPG(commands.Cog):
                 f"☠️ **MONSTER DEFEATED** · **{result['enemy_name']}**\n"
                 f"💥 **{result['damage']} damage** · ✦ +{result['xp']} XP · 💰 +{result['gold']} gold"
                 f"{loot_text}{level_text}\n"
-                "🏁 **HUNT COMPLETE** — the monster has been defeated."
+                "🏁 **HUNT COMPLETE** — the monster has been defeated." + (f"\n🏹 Hunt Lv.{result['hunt']['hunt_level']} · +{result['hunt']['hunt_xp']} Hunt XP · 🔥 Streak {result['hunt']['streak']}" if result.get("hunt", {}).get("active") else "")
             )
             return
         if result.get("defeat"):
