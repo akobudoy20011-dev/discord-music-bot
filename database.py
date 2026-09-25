@@ -4223,7 +4223,17 @@ class Database:
             "INSERT INTO rpg_specials "
             "(guild_id,user_id,special_id,unlocked,unlocked_at,source) VALUES (?,?,?,?,?,?) "
             "ON CONFLICT(guild_id,user_id,special_id) DO UPDATE SET "
-            "unlocked=1, unlocked_at=excluded.unlocked_at, source=excluded.source",
+            "unlocked=CASE "
+            "WHEN rpg_specials.unlocked=0 AND rpg_specials.source='admin_revoke' "
+            "AND excluded.source NOT LIKE 'admin:%' THEN 0 ELSE 1 END, "
+            "unlocked_at=CASE "
+            "WHEN rpg_specials.unlocked=0 AND rpg_specials.source='admin_revoke' "
+            "AND excluded.source NOT LIKE 'admin:%' THEN rpg_specials.unlocked_at "
+            "ELSE excluded.unlocked_at END, "
+            "source=CASE "
+            "WHEN rpg_specials.unlocked=0 AND rpg_specials.source='admin_revoke' "
+            "AND excluded.source NOT LIKE 'admin:%' THEN rpg_specials.source "
+            "ELSE excluded.source END",
             (str(guild_id), str(user_id), str(special_id), 1, time.time(), str(source))
         )
         await self._conn.commit()
