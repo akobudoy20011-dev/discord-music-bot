@@ -14,6 +14,8 @@ from .crafting import MATERIALS
 from .items import get_item
 from .hunting import complete_hunt
 
+BATTLE_TIMEOUT = 30 * 60
+
 
 def _json_loads(value, fallback):
     try:
@@ -326,6 +328,14 @@ async def attack(db, guild_id, user_id, skill_id=None):
     battle = await db.get_rpg_battle(guild_id, user_id)
     if not battle:
         return {"ok": False, "message": "No active battle."}
+    if time.time() - float(battle.get("created_at") or time.time()) > BATTLE_TIMEOUT:
+        await db.delete_rpg_battle(guild_id, user_id)
+        hunt_active = await db.get_rpg_hunt_active(guild_id, user_id)
+        if hunt_active:
+            from .hunting import break_hunt_streak
+            await db.delete_rpg_hunt_active(guild_id, user_id)
+            await break_hunt_streak(db, guild_id, user_id)
+        return {"ok": False, "message": "The battle expired after 30 minutes. Start a new hunt or encounter."}
 
     player, gear, stats = await _effective_stats(db, guild_id, user_id)
     effects = _json_loads(battle.get("effects"), {})
@@ -412,6 +422,14 @@ async def special(db, guild_id, user_id, special_id):
     battle = await db.get_rpg_battle(guild_id, user_id)
     if not battle:
         return {"ok": False, "message": "No active battle."}
+    if time.time() - float(battle.get("created_at") or time.time()) > BATTLE_TIMEOUT:
+        await db.delete_rpg_battle(guild_id, user_id)
+        hunt_active = await db.get_rpg_hunt_active(guild_id, user_id)
+        if hunt_active:
+            from .hunting import break_hunt_streak
+            await db.delete_rpg_hunt_active(guild_id, user_id)
+            await break_hunt_streak(db, guild_id, user_id)
+        return {"ok": False, "message": "The battle expired after 30 minutes. Start a new hunt or encounter."}
 
     player, gear, stats = await _effective_stats(db, guild_id, user_id)
     await _sync_special_unlocks(db, guild_id, user_id, player)
