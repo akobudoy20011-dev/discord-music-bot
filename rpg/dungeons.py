@@ -173,9 +173,15 @@ async def advance(db, guild_id, user_id):
             from .expansion import assign_affixes
             await assign_affixes(db, guild_id, user_id, item_id)
         await _finish(db, guild_id, user_id, "cleared", floor)
+        achievements = []
+        try:
+            from .achievements import check
+            achievements = await check(db, guild_id, user_id)
+        except Exception:
+            achievements = []
         return {"ok": True, "result": "boss_cleared", "dungeon": dungeon, "floor": floor,
                 "damage": damage, "gold": reward_gold, "xp": reward_xp, "item": item_id,
-                "old_level": old, "new_level": new}
+                "old_level": old, "new_level": new, "achievements": achievements}
     await db._conn.execute(
         "UPDATE rpg_dungeon_runs SET floor=?,hp=?,gold=gold+?,xp=xp+?,rooms=rooms+1 WHERE guild_id=? AND user_id=?",
         (floor, hp, reward_gold, reward_xp, str(guild_id), str(user_id)),
