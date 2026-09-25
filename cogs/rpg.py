@@ -9,6 +9,7 @@ from rpg.skills import get_skills
 from rpg.specials import SPECIALS, get_special, get_specials_for_class
 from rpg.skills_service import ensure_class_skills, unlock_skill
 from rpg.combat import start as start_battle, attack as combat_attack, special as combat_special, flee as flee_battle
+from rpg.hunting import board as hunting_board, start_hunt, recent_kills
 from rpg.quests import ensure_quests, list_quests, claim as claim_quest, NPCS, npc_view
 from rpg.world import list_regions, get_region, list_events, get_event
 from rpg.exploration import world_status, travel, explore
@@ -405,26 +406,65 @@ class RPG(commands.Cog):
                 return
         await ctx.send(f"🪽 **{ctx.author.display_name}** rests beneath the ECLIPSE.\n❤️ HP restored to **{result['hp']}** · 💠 MP restored to **{result['mp']}**")
 
-    @rpg.command(name="hunt", aliases=["monster", "hunting"])
-    async def hunt_command(self, ctx):
-        result = await start_battle(self.db, ctx.guild.id, ctx.author.id)
-        if not result["ok"]:
-            if result.get("battle"):
-                battle = result["battle"]
-                await ctx.send(
-                    f"⚔️ **HUNT IN PROGRESS**\n"
-                    f"Monster: **{battle['enemy_name']}** · ❤️ {battle['enemy_hp']}/{battle['enemy_max_hp']} HP\n"
-                    "Use !rpg attack, !rpg skill <id>, or !rpg special <id> to finish the hunt."
-                )
-            else:
-                await ctx.send(f"❌ {result.get('message', 'You cannot hunt right now.')}")
+    @rpg.group(name="hunt", aliases=["monster", "hunting"], invoke_without_command=True)
+    async def hunt_command(self, ctx, target_id: str = None):
+        if target_id:
+            prepared = await start_hunt(self.db, ctx.guild.id, ctx.author.id, target_id)
+            if not prepared["ok"]:
+                if prepared.get("battle"):
+                    battle = prepared["battle"]
+                    await ctx.send(f"⚔️ **HUNT IN PROGRESS** · {battle['enemy_name']} · ❤️ {battle['enemy_hp']}/{battle['enemy_max_hp']}")
+                else:
+                    await ctx.send(f"❌ {prepared.get('message', 'You cannot hunt right now.')}")
+                return
+            result = await start_battle(
+                self.db, ctx.guild.id, ctx.author.id,
+                enemy_override=prepared["target"], hunt_mode=True
+            )
+            if not result["ok"]:
+                await self.db.delete_rpg_hunt_active(ctx.guild.id, ctx.author.id)
+                await ctx.send(f"❌ {result.get('message', 'The hunt could not begin.')}")
+                return
+            target = prepared["target"]
+            await ctx.send(
+                f"{target['icon']} **HUNT STARTED** · **{target['name']}**\n"
+                f"Lv.{target['monster_level']} · ❤️ {target['hp']}/{target['hp']} HP · ⚔️ {target['attack']} ATK\n"
+                "Use !rpg attack, !rpg skill <id>, or !rpg special <id> to finish the hunt."
+            )
             return
-        battle = result["battle"]
+
+        result = await hunting_board(self.db, ctx.guild.id, ctx.author.id)
+        contracts = result["contracts"]
+        profile = result["profile"]
+        if not contracts:
+            await ctx.send("🏹 No hunt targets are available in this realm.")
+            return
+        lines = [
+            f"{t['icon']} `{t['contract_id']}` · **{t['name']}** · Lv.{t['monster_level']} · "
+            f"❤️ {t['hp']} · ✦ {t['xp']} XP · 💰 {t['gold']} gold"
+            for t in contracts
+        ]
+        need = profile["hunt_level"] * 500
         await ctx.send(
-            f"🏹 **MONSTER HUNT**\n"
-            f"Target: **{battle['enemy_name']}** · ❤️ {battle['enemy_hp']}/{battle['enemy_max_hp']} HP\n"
-            "The hunt is active. Defeat the monster to claim XP, RPG gold, loot, and possible level-up rewards."
+            f"🏹 **MONSTER HUNTING BOARD**\n"
+            f"Hunt Level **{profile['hunt_level']}** · {profile['hunt_xp']}/{need} Hunt XP · "
+            f"🔥 Streak **{profile['streak']}** · Best **{profile['best_streak']}**\n\n"
+            + "\n".join(lines)
+            + "\n\nStart with `!rpg hunt <contract_id>` or hunt a base monster ID."
         )
+
+    @hunt_command.command(name="history", aliases=["log", "kills"])
+    async def hunt_history_command(self, ctx):
+        rows = await recent_kills(self.db, ctx.guild.id, ctx.author.id)
+        if not rows:
+            await ctx.send("🏹 No completed hunts yet.")
+            return
+        lines = [
+            f"{row['tier'].title()} · **{row['enemy_name']}** Lv.{row['monster_level']} · "
+            f"+{row['xp']} Hunt XP · +{row['gold']} Hunt gold"
+            for row in rows
+        ]
+        await ctx.send("🏹 **HUNT HISTORY**\n\n" + "\n".join(lines))
 
     @rpg.command(name="battle", aliases=["fight"])
     async def battle_command(self, ctx):
