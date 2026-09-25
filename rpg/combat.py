@@ -65,6 +65,8 @@ def _status_text(effects):
         bits.append(f"🌸 bloom {effects['player_bloom_turns']}t")
     if effects.get("player_evasion_turns", 0):
         bits.append(f"🫥 evasion {effects['player_evasion_turns']}t")
+    if effects.get("player_power_buff_turns", 0):
+        bits.append(f"🔥 power {effects['player_power_buff_turns']}t")
     return " · ".join(bits)
 
 
@@ -285,7 +287,7 @@ async def _finish_turn(db, guild_id, user_id, battle, player, stats, effects, co
         effects["enemy_stagger_turns"] = staggered - 1
 
     # Player-side duration ticks happen after the turn resolves.
-    for key in ("player_guard_turns", "player_blessing_turns", "player_bloom_turns", "player_evasion_turns"):
+    for key in ("player_guard_turns", "player_blessing_turns", "player_bloom_turns", "player_evasion_turns", "player_power_buff_turns"):
         if effects.get(key, 0) > 0:
             effects[key] = max(0, int(effects[key]) - 1)
 
@@ -424,6 +426,9 @@ async def attack(db, guild_id, user_id, skill_id=None):
                 guild_id, user_id,
                 hp=min(stats["max_hp"], int(player["hp"]) + heal),
             )
+
+        if effects.get("player_power_buff_turns", 0) > 0 and skill["id"] != "reaver_frenzy" and damage > 0:
+            damage = max(1, int(damage * 1.25))
 
         skill_cd = int(skill.get("cooldown", 0))
         if skill_cd > 0:
