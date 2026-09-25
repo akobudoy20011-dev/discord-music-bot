@@ -367,6 +367,44 @@ CREATE TABLE IF NOT EXISTS rpg_specials (
 );
 
 
+CREATE TABLE IF NOT EXISTS rpg_hunt_profiles (
+    guild_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    hunt_level INTEGER NOT NULL DEFAULT 1,
+    hunt_xp INTEGER NOT NULL DEFAULT 0,
+    total_kills INTEGER NOT NULL DEFAULT 0,
+    streak INTEGER NOT NULL DEFAULT 0,
+    best_streak INTEGER NOT NULL DEFAULT 0,
+    total_gold INTEGER NOT NULL DEFAULT 0,
+    total_xp INTEGER NOT NULL DEFAULT 0,
+    last_hunt REAL,
+    PRIMARY KEY (guild_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS rpg_hunt_active (
+    guild_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    enemy_id TEXT NOT NULL,
+    enemy_name TEXT NOT NULL,
+    tier TEXT NOT NULL DEFAULT 'common',
+    monster_level INTEGER NOT NULL DEFAULT 1,
+    started_at REAL NOT NULL,
+    PRIMARY KEY (guild_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS rpg_hunt_records (
+    guild_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    kill_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    enemy_id TEXT NOT NULL,
+    enemy_name TEXT NOT NULL,
+    tier TEXT NOT NULL,
+    monster_level INTEGER NOT NULL,
+    xp INTEGER NOT NULL DEFAULT 0,
+    gold INTEGER NOT NULL DEFAULT 0,
+    created_at REAL NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS eclipse_world_events (
     guild_id TEXT PRIMARY KEY,
     event_id TEXT NOT NULL,
@@ -3032,6 +3070,46 @@ class Database:
 
     async def delete_rpg_battle(self, guild_id, user_id):
         await self._conn.execute("DELETE FROM rpg_battles WHERE guild_id=? AND user_id=?", (str(guild_id),str(user_id)))
+        await self._conn.commit()
+
+    async def get_rpg_hunt_active(self, guild_id, user_id):
+        cur = await self._conn.execute(
+            "SELECT * FROM rpg_hunt_active WHERE guild_id=? AND user_id=?",
+            (str(guild_id), str(user_id)),
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def set_rpg_hunt_active(self, guild_id, user_id, **fields):
+        allowed = {"enemy_id", "enemy_name", "tier", "monster_level", "started_at"}
+        fields = {k: v for k, v in fields.items() if k in allowed}
+        if not fields:
+            return await self.get_rpg_hunt_active(guild_id, user_id)
+        values = (
+            str(guild_id), str(user_id),
+            str(fields.get("enemy_id", "")),
+            str(fields.get("enemy_name", "")),
+            str(fields.get("tier", "common")),
+            int(fields.get("monster_level", 1)),
+            float(fields.get("started_at", time.time())),
+        )
+        await self._conn.execute(
+            """INSERT INTO rpg_hunt_active
+               (guild_id,user_id,enemy_id,enemy_name,tier,monster_level,started_at)
+               VALUES(?,?,?,?,?,?,?)
+               ON CONFLICT(guild_id,user_id) DO UPDATE SET
+               enemy_id=excluded.enemy_id, enemy_name=excluded.enemy_name,
+               tier=excluded.tier, monster_level=excluded.monster_level,
+               started_at=excluded.started_at""",
+            values,
+        )
+        await self._conn.commit()
+
+    async def delete_rpg_hunt_active(self, guild_id, user_id):
+        await self._conn.execute(
+            "DELETE FROM rpg_hunt_active WHERE guild_id=? AND user_id=?",
+            (str(guild_id), str(user_id)),
+        )
         await self._conn.commit()
 
     async def get_rpg_items(self, guild_id, user_id):
