@@ -135,6 +135,13 @@ async def equipment_stats(db, guild_id, user_id):
         for key in totals:
             totals[key] += int(round(float(item.get(key, 0)) * scale))
 
+    # Endgame affixes are folded into the same aggregate used by combat/profile.
+    from .expansion import get_house, affix_stats
+    affixes = await affix_stats(db, guild_id, user_id)
+    for key, value in affixes.items():
+        if key in totals:
+            totals[key] += int(value)
+
     # Housing bonuses are folded into the same aggregate used by combat/profile.
     from .expansion import get_house
     house = await get_house(db, guild_id, user_id)
