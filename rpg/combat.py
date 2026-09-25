@@ -242,6 +242,11 @@ async def _finish_turn(db, guild_id, user_id, battle, player, stats, effects, co
 
     if hp <= 0:
         await db.delete_rpg_battle(guild_id, user_id)
+        hunt_active = await db.get_rpg_hunt_active(guild_id, user_id)
+        if hunt_active:
+            from .hunting import break_hunt_streak
+            await db.delete_rpg_hunt_active(guild_id, user_id)
+            await break_hunt_streak(db, guild_id, user_id)
         return {
             "ok": True,
             "defeat": True,
