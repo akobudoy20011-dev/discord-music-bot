@@ -296,3 +296,7 @@ class Watchdog(commands.Cog):
 
         except Exception as exc:
             self.last_error = f"{type(exc).__name__}: {exc}"
+
+
+async def setup(bot):
+    await bot.add_cog(Watchdog(bot))
