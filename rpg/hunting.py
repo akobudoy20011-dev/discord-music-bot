@@ -209,12 +209,20 @@ async def complete_hunt(db, guild_id, user_id, enemy_id, base_xp, base_gold):
     bonus_gold = int(base_gold * (0.15 + streak_bonus))
 
     total_hunt_xp = int(profile["hunt_xp"]) + bonus_xp
-    level = int(profile["hunt_level"])
+    old_hunt_level = int(profile["hunt_level"])
+    level = old_hunt_level
     level_ups = 0
     while total_hunt_xp >= level * HUNT_XP_PER_LEVEL:
         total_hunt_xp -= level * HUNT_XP_PER_LEVEL
         level += 1
         level_ups += 1
+
+    level_reward_gold = sum(100 * new_level for new_level in range(old_hunt_level + 1, level + 1))
+    if level_reward_gold:
+        player = await db.get_rpg_player(guild_id, user_id)
+        await db.update_rpg_player(
+            guild_id, user_id, gold=int(player["gold"]) + level_reward_gold
+        )
 
     await db._conn.execute(
         """UPDATE rpg_hunt_profiles
@@ -251,6 +259,7 @@ async def complete_hunt(db, guild_id, user_id, enemy_id, base_xp, base_gold):
         "hunt_level": level,
         "hunt_xp_current": total_hunt_xp,
         "hunt_level_ups": level_ups,
+        "level_reward_gold": level_reward_gold,
     }
 
 
