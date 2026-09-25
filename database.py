@@ -4222,7 +4222,8 @@ class Database:
         await self._conn.execute(
             "INSERT INTO rpg_specials "
             "(guild_id,user_id,special_id,unlocked,unlocked_at,source) VALUES (?,?,?,?,?,?) "
-            "ON CONFLICT(guild_id,user_id,special_id) DO UPDATE SET unlocked=1",
+            "ON CONFLICT(guild_id,user_id,special_id) DO UPDATE SET "
+            "unlocked=1, unlocked_at=excluded.unlocked_at, source=excluded.source",
             (str(guild_id), str(user_id), str(special_id), 1, time.time(), str(source))
         )
         await self._conn.commit()
