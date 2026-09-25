@@ -12,7 +12,7 @@ from .world import REGIONS, get_region
 from .equipment import equipment_stats
 from .crafting import MATERIALS
 from .items import get_item
-from .hunting import complete_hunt
+from .hunting import complete_hunt, build_hunt_target
 
 BATTLE_TIMEOUT = 30 * 60
 
@@ -107,8 +107,6 @@ async def start(db, guild_id, user_id, enemy_override=None, hunt_mode=False):
         "ok": True,
         "battle": await db.get_rpg_battle(guild_id, user_id),
         "player": player,
-        "hunt": hunt_result,
-        "achievements": achievement_unlocks,
     }
 
 
@@ -124,13 +122,15 @@ async def _victory_rewards(db, guild_id, user_id, battle, player, damage):
     # Hunting variants use their scaled reward values; ordinary battles keep
     # the original enemy table rewards.
     if hunt_active:
-        from .hunting import HUNT_TIERS, build_hunt_target
+        from .hunting import HUNT_TIERS
         region_id = player.get("region")
         scaled = build_hunt_target(
             battle["enemy_id"],
             player["level"],
             region_id,
             hunt_active.get("tier", "common"),
+            hunt_level=1,
+            forced_level=int(hunt_active.get("monster_level", 1)),
         )
         xp_reward = int(scaled["xp"]) if scaled else ENEMIES_REWARD(battle["enemy_id"], "xp")
         gold_reward = int(scaled["gold"]) if scaled else ENEMIES_REWARD(battle["enemy_id"], "gold")
