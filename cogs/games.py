@@ -1426,7 +1426,7 @@ class Games(commands.Cog):
         if not ok:
             await ctx.send(f"❌ {result}")
             return
-        mine_positions = set(random.sample(range(21), 4))
+        mine_positions = set(random.sample(range(20), 4))
         revealed = set()
         multiplier = 1.0
         cog = self
@@ -1435,7 +1435,7 @@ class Games(commands.Cog):
             def __init__(view):
                 super().__init__(timeout=120)
                 view.done = False
-                for index in range(21):
+                for index in range(20):
                     button = discord.ui.Button(label="·", style=discord.ButtonStyle.secondary, row=index // 5)
                     async def reveal(interaction, idx=index, btn=button):
                         nonlocal multiplier
@@ -1450,7 +1450,7 @@ class Games(commands.Cog):
                             view.stop()
                             for child in view.children:
                                 child.disabled = True
-                            for pos, child in enumerate(view.children[:21]):
+                            for pos, child in enumerate(view.children[:20]):
                                 child.label = "💣" if pos in mine_positions else ("💎" if pos in revealed else "·")
                             balance = await cog._balance(ctx)
                             await interaction.response.edit_message(
@@ -1461,7 +1461,7 @@ class Games(commands.Cog):
                         btn.label = "💎"
                         btn.style = discord.ButtonStyle.success
                         multiplier = min(8.0, multiplier + 0.35)
-                        if len(revealed) == 17:
+                        if len(revealed) == 16:
                             view.done = True
                             view.stop()
                             for child in view.children:
@@ -1470,7 +1470,7 @@ class Games(commands.Cog):
                             text = f"All safe tiles cleared.\n\n🎉 {multiplier:.2f}x payout: {payout:,}\nBalance: {balance:,}"
                             color = discord.Color.gold()
                         else:
-                            text = f"Safe tiles: {len(revealed)}/17\nMultiplier: {multiplier:.2f}x\n\nCash out before a mine."
+                            text = f"Safe tiles: {len(revealed)}/16\nMultiplier: {multiplier:.2f}x\n\nCash out before a mine."
                             color = COLOR_PRIMARY
                         await interaction.response.edit_message(embed=cog._game_embed("💣 MINES", text, color), view=view)
 
