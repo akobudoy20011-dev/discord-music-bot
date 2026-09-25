@@ -10,6 +10,11 @@ ACHIEVEMENTS = {
     "gather_500": ("⛏️", "Master Gatherer", "Gather 500 resources.", 350),
     "collection_10": ("📚", "Collector", "Discover 10 different resources.", 200),
     "collection_20": ("🌌", "Curator of the Veil", "Discover 20 different resources.", 500),
+    "first_hunt": ("🏹", "First Hunt", "Complete your first monster hunt.", 100),
+    "hunt_25": ("☠️", "Seasoned Hunter", "Defeat 25 monsters through hunting.", 250),
+    "hunt_100": ("👑", "Master Hunter", "Defeat 100 monsters through hunting.", 500),
+    "hunt_streak_10": ("🔥", "Unbroken Trail", "Reach a 10-kill hunting streak.", 300),
+    "hunt_champion": ("💎", "Champion Hunter", "Defeat a Champion-tier monster.", 750),
 }
 
 async def _schema(db):
@@ -61,6 +66,22 @@ async def check(db, guild_id, user_id):
     total=int((await row.fetchone())["total"])
     for a,need in (("gather_100",100),("gather_500",500)):
         if total>=need and a not in owned and await unlock(db,guild_id,user_id,a): unlocked.append(a)
+    hunt = None
+    try:
+        from .hunting import get_profile, recent_kills
+        hunt = await get_profile(db,guild_id,user_id)
+        if int(hunt["total_kills"]) >= 1 and "first_hunt" not in owned and await unlock(db,guild_id,user_id,"first_hunt"): unlocked.append("first_hunt")
+        if int(hunt["total_kills"]) >= 25 and "hunt_25" not in owned and await unlock(db,guild_id,user_id,"hunt_25"): unlocked.append("hunt_25")
+        if int(hunt["total_kills"]) >= 100 and "hunt_100" not in owned and await unlock(db,guild_id,user_id,"hunt_100"): unlocked.append("hunt_100")
+        if int(hunt["best_streak"]) >= 10 and "hunt_streak_10" not in owned and await unlock(db,guild_id,user_id,"hunt_streak_10"): unlocked.append("hunt_streak_10")
+        if "hunt_champion" not in owned:
+            champion = await db._conn.execute(
+                "SELECT 1 FROM rpg_hunt_records WHERE guild_id=? AND user_id=? AND tier='champion' LIMIT 1",
+                (str(guild_id),str(user_id)))
+            if await champion.fetchone() and await unlock(db,guild_id,user_id,"hunt_champion"):
+                unlocked.append("hunt_champion")
+    except Exception:
+        pass
     cols=await collections(db,guild_id,user_id)
     for a,need in (("collection_10",10),("collection_20",20)):
         if len(cols)>=need and a not in owned and await unlock(db,guild_id,user_id,a): unlocked.append(a)
