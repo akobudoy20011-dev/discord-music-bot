@@ -3590,26 +3590,46 @@ class Database:
         await self._conn.commit()
         return True, await self.get_user(guild_id, user_id)
 
-    async def apply_bank_interest(self, guild_id, user_id, rate=0.01, period=86400):
-        user = await self.get_user(guild_id, user_id)
-        now = time.time()
-        last = user["last_bank_interest"]
-        if last is None:
-            last = now
-        periods = int(max(0, now - float(last)) // period)
-        if periods <= 0:
-            return 0, user
-        balance = int(user["bank_balance"])
-        if balance <= 0:
-            await self.update_user(guild_id, user_id, last_bank_interest=now)
-            return 0, await self.get_user(guild_id, user_id)
-        interest = int(balance * rate * periods)
-        await self._conn.execute(
-            "UPDATE users SET bank_balance=bank_balance+?, last_bank_interest=? WHERE guild_id=? AND user_id=?",
-            (interest, now, str(guild_id), str(user_id))
-        )
-        await self._conn.commit()
-        return interest, await self.get_user(guild_id, user_id)
+    async def apply_bank_interest(self, guild_id, user_id, rate=0.01, period=86400, now=None):
+        """Apply elapsed bank interest atomically, using the active implementation."""
+        guild_id, user_id = str(guild_id), str(user_id)
+        now = float(now if now is not None else time.time())
+        period = max(1.0, float(period))
+        rate = max(0.0, float(rate))
+        await self.get_user(guild_id, user_id)
+        await self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            cur = await self._conn.execute(
+                "SELECT bank_balance,last_bank_interest FROM users WHERE guild_id=? AND user_id=?",
+                (guild_id, user_id),
+            )
+            row = await cur.fetchone()
+            balance = int(row["bank_balance"])
+            last = row["last_bank_interest"]
+            if balance <= 0:
+                await self._conn.execute(
+                    "UPDATE users SET last_bank_interest=? WHERE guild_id=? AND user_id=?",
+                    (now, guild_id, user_id),
+                )
+                await self._conn.commit()
+                return 0, await self.get_user(guild_id, user_id)
+            if last is None:
+                periods = 1
+            else:
+                periods = int(max(0.0, now - float(last)) // period)
+            if periods <= 0:
+                await self._conn.rollback()
+                return 0, await self.get_user(guild_id, user_id)
+            interest = max(1, int(balance * rate * periods))
+            await self._conn.execute(
+                "UPDATE users SET bank_balance=bank_balance+?,last_bank_interest=? WHERE guild_id=? AND user_id=?",
+                (interest, now, guild_id, user_id),
+            )
+            await self._conn.commit()
+            return interest, await self.get_user(guild_id, user_id)
+        except Exception:
+            await self._conn.rollback()
+            raise
 
     async def get_music_config(self, guild_id):
         config = await self.get_guild_config(guild_id)
