@@ -46,6 +46,13 @@ SUBCLASSES = {
     },
 }
 
+RELATIONSHIPS = {
+    "lyra":{"name":"Lyra","icon":"🌙","gift":["moon_seal","moonstone"]},
+    "oren":{"name":"Oren","icon":"🌿","gift":["root_token","thorn_fiber"]},
+    "vestra":{"name":"Vestra","icon":"🔥","gift":["ashen_seal","ash_core"]},
+    "cael":{"name":"Cael","icon":"🌠","gift":["star_key","star_fragment"]},
+}
+
 HOUSING = {
     "camp":{"name":"Traveler's Camp","icon":"⛺","cost":0,"level":1,"bonus":{"max_hp":5,"max_mp":2},"description":"A humble camp beneath the stars."},
     "cottage":{"name":"Moonlit Cottage","icon":"🏡","cost":5000,"level":5,"bonus":{"max_hp":20,"max_mp":10,"defense":2},"description":"A quiet home with a small training yard."},
@@ -106,8 +113,51 @@ async def _schema(db):
         enchant_id TEXT NOT NULL, level INTEGER NOT NULL DEFAULT 1,
         PRIMARY KEY(guild_id,user_id,item_id,enchant_id)
     );
+    CREATE TABLE IF NOT EXISTS rpg_relationships (
+        guild_id TEXT NOT NULL, user_id TEXT NOT NULL, npc_id TEXT NOT NULL,
+        affinity INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(guild_id,user_id,npc_id)
+    );
     """)
     await db._conn.commit()
+
+async def relationship_rows(db,guild_id,user_id):
+    await _schema(db)
+    for npc_id in RELATIONSHIPS:
+        await db._conn.execute(
+            "INSERT OR IGNORE INTO rpg_relationships(guild_id,user_id,npc_id) VALUES(?,?,?)",
+            (str(guild_id),str(user_id),npc_id),
+        )
+    await db._conn.commit()
+    cur=await db._conn.execute(
+        "SELECT * FROM rpg_relationships WHERE guild_id=? AND user_id=? ORDER BY affinity DESC",
+        (str(guild_id),str(user_id)),
+    )
+    return [dict(r) for r in await cur.fetchall()]
+
+def affinity_rank(value):
+    value=int(value)
+    if value>=1000:return "Soulbound"
+    if value>=600:return "Trusted"
+    if value>=300:return "Friend"
+    if value>=100:return "Acquainted"
+    return "Stranger"
+
+async def gift_npc(db,guild_id,user_id,npc_id,item_id):
+    await relationship_rows(db,guild_id,user_id)
+    npc_id=str(npc_id).lower()
+    item_id=str(item_id).lower()
+    npc=RELATIONSHIPS.get(npc_id)
+    if not npc:return {"ok":False,"message":"Unknown NPC."}
+    if item_id not in npc["gift"]:return {"ok":False,"message":f"{npc['name']} does not value that item."}
+    rows=await db.get_rpg_items(guild_id,user_id)
+    owned=next((r for r in rows if r["item_id"]==item_id and int(r["amount"])>0),None)
+    if not owned:return {"ok":False,"message":"You do not own that item."}
+    await db._conn.execute("UPDATE rpg_items SET amount=amount-1 WHERE guild_id=? AND user_id=? AND item_id=?",(str(guild_id),str(user_id),item_id))
+    await db._conn.execute("UPDATE rpg_relationships SET affinity=MIN(1000,affinity+75) WHERE guild_id=? AND user_id=? AND npc_id=?",(str(guild_id),str(user_id),npc_id))
+    await db._conn.commit()
+    cur=await db._conn.execute("SELECT affinity FROM rpg_relationships WHERE guild_id=? AND user_id=? AND npc_id=?",(str(guild_id),str(user_id),npc_id))
+    row=await cur.fetchone()
+    return {"ok":True,"npc":npc,"affinity":int(row["affinity"])}
 
 async def faction_rows(db,guild_id,user_id):
     await _schema(db)
