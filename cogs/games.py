@@ -388,7 +388,7 @@ class Games(commands.Cog):
 
         # Setup AI client for intelligent 8ball answers if API key exists
         self.ai_client = None
-        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("ANTHROPIC_API_KEY")
+        api_key = os.getenv("GEMINI_API_KEY")
         if HAS_GENAI and api_key:
             self.ai_client = genai.Client(api_key=api_key)
 
