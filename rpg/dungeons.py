@@ -189,23 +189,17 @@ async def retreat(db, guild_id, user_id):
     run = await _get_run(db, guild_id, user_id)
     if not run or run["status"] != "active":
         return {"ok": False, "message": "No active dungeon."}
+    # Room rewards are granted immediately during advance(); the run totals are
+    # a ledger, so retreat must not award them a second time.
     player = await db.get_rpg_player(guild_id, user_id)
-    bank_gold = max(0, int(run["gold"]))
-    bank_xp = max(0, int(run["xp"]))
-    old_level, new_level, player = await db.add_rpg_xp(guild_id, user_id, bank_xp) if bank_xp else (
-        int(player["level"]), int(player["level"]), player
-    )
-    player = await db.update_rpg_player(
-        guild_id, user_id, gold=int(player["gold"]) + bank_gold
-    ) if bank_gold else player
     await _finish(db, guild_id, user_id, "retreated", int(run["floor"]))
     return {
         "ok": True,
         "floor": int(run["floor"]),
-        "gold": bank_gold,
-        "xp": bank_xp,
-        "old_level": old_level,
-        "new_level": new_level,
+        "gold": max(0, int(run["gold"])),
+        "xp": max(0, int(run["xp"])),
+        "old_level": int(player["level"]),
+        "new_level": int(player["level"]),
         "player": player,
     }
 
