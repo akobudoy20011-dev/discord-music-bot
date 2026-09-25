@@ -62,6 +62,11 @@ async def adventure(db, guild_id, user_id):
     hp=max(1,min(int(player["max_hp"]),int(player["hp"])+random.randint(-8,6)))
     player=await db.update_rpg_player(guild_id,user_id,gold=max(0,int(player["gold"])+gold),hp=hp,last_adventure=now)
     await quest_progress(db,guild_id,user_id,"adventures",1)
+    try:
+        from .expansion import daily_progress
+        await daily_progress(db, guild_id, user_id, "adventures", 1)
+    except Exception:
+        pass
     return {"ok":True,"event":name,"narrative":narrative,"gold":gold,"xp":xp,"old_level":old_level,"new_level":new_level,"player":player}
 
 async def rest(db,guild_id,user_id):
