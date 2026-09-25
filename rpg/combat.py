@@ -212,6 +212,7 @@ async def _victory_rewards(db, guild_id, user_id, battle, player, damage):
         "hp_gain": hp_gain,
         "mp_gain": mp_gain,
         "player": player,
+        "hunt": hunt_result,
     }
 
 
