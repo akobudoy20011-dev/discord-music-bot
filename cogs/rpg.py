@@ -244,6 +244,10 @@ class RPG(commands.Cog):
         if not key:
             lines=[f"{d['icon']} **{d['name']}** — {d['description']}" for d in CLASSES.values()]
             await ctx.send(embed=discord.Embed(title="♡ ECLIPSE · CLASSES ♡",description="\n\n".join(lines)+"\n\nUse !rpg class <name> to choose.",color=COLOR_PRIMARY)); return
+        existing_subclass = await get_subclass(self.db, ctx.guild.id, ctx.author.id)
+        if existing_subclass:
+            await ctx.send("❌ Your class is locked after choosing a subclass. Subclasses are permanent and cannot be transferred between classes.")
+            return
         chosen,_=await choose_class(self.db,ctx.guild.id,ctx.author.id,key)
         if chosen is None: await ctx.send("❌ Unknown class. Use !rpg class to see the available paths."); return
         await grant_starter_gear(self.db, ctx.guild.id, ctx.author.id, key.lower())
@@ -577,8 +581,18 @@ class RPG(commands.Cog):
             await ctx.send("Use !rpg faction or !rpg faction info <id>.")
             return
         f = FACTIONS[faction_id.lower()]
-        await ctx.send(embed=discord.Embed(title=f"{f['icon']} {f['name']}", description=f"{f['description']}\n\nRegions: {
-.join(f['regions'])}\nReward track: {f['rewards'][0][0]}", color=COLOR_PRIMARY))
+        regions = ", ".join(f["regions"])
+        await ctx.send(
+            embed=discord.Embed(
+                title=f"{f['icon']} {f['name']}",
+                description=(
+                    f"{f['description']}\n\n"
+                    f"Regions: {regions}\n"
+                    f"Reward track: {f['rewards'][0][0]}"
+                ),
+                color=COLOR_PRIMARY,
+            )
+        )
 
     @rpg.group(name="subclass", aliases=["subclasses"], invoke_without_command=True)
     async def subclass_command(self, ctx):
