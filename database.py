@@ -2031,32 +2031,41 @@ class Database:
         return await self.get_world_event(guild_id)
 
     async def contribute_world_event(self, guild_id, user_id, amount):
-        event = await self.get_world_event(guild_id)
-        if not event or event["completed"] or float(event["ends_at"]) <= time.time():
-            return False, "inactive"
+        guild_id, user_id = str(guild_id), str(user_id)
         amount = int(amount)
         if amount <= 0:
             return False, "amount"
-        user = await self.get_user(guild_id, user_id)
-        if int(user["balance"]) < amount:
-            return False, "balance"
-        await self._conn.execute(
-            "UPDATE users SET balance=balance-? WHERE guild_id=? AND user_id=?",
-            (amount, str(guild_id), str(user_id))
-        )
-        await self._conn.execute(
-            "INSERT INTO eclipse_world_contributors(guild_id,event_id,user_id,contribution,rewarded) "
-            "VALUES(?,?,?, ?,0) ON CONFLICT(guild_id,event_id,user_id) DO UPDATE SET contribution=contribution+excluded.contribution",
-            (str(guild_id), event["event_id"], str(user_id), amount)
-        )
-        new_progress=min(int(event["target"]), int(event["progress"])+amount)
-        completed=1 if new_progress>=int(event["target"]) else 0
-        await self._conn.execute(
-            "UPDATE eclipse_world_events SET progress=?, completed=? WHERE guild_id=?",
-            (new_progress, completed, str(guild_id))
-        )
-        await self._conn.commit()
-        return True, await self.get_world_event(guild_id)
+        await self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            event = await self.get_world_event(guild_id)
+            if not event or event["completed"] or float(event["ends_at"]) <= time.time():
+                await self._conn.rollback()
+                return False, "inactive"
+            await self.get_user(guild_id, user_id)
+            cur = await self._conn.execute(
+                "UPDATE users SET balance=balance-? WHERE guild_id=? AND user_id=? AND balance>=?",
+                (amount, guild_id, user_id, amount),
+            )
+            if cur.rowcount != 1:
+                await self._conn.rollback()
+                return False, "balance"
+            await self._conn.execute(
+                "INSERT INTO eclipse_world_contributors(guild_id,event_id,user_id,contribution,rewarded) "
+                "VALUES(?,?,?, ?,0) ON CONFLICT(guild_id,event_id,user_id) "
+                "DO UPDATE SET contribution=contribution+excluded.contribution",
+                (guild_id, event["event_id"], user_id, amount),
+            )
+            await self._conn.execute(
+                "UPDATE eclipse_world_events SET progress=MIN(target,progress+?), "
+                "completed=CASE WHEN MIN(target,progress+?)>=target THEN 1 ELSE 0 END "
+                "WHERE guild_id=? AND completed=0",
+                (amount, amount, guild_id),
+            )
+            await self._conn.commit()
+            return True, await self.get_world_event(guild_id)
+        except Exception:
+            await self._conn.rollback()
+            raise
 
     async def reward_world_event_contributors(self, guild_id):
         event = await self.get_world_event(guild_id)
@@ -3496,32 +3505,41 @@ class Database:
         return await self.get_world_event(guild_id)
 
     async def contribute_world_event(self, guild_id, user_id, amount):
-        event = await self.get_world_event(guild_id)
-        if not event or event["completed"] or float(event["ends_at"]) <= time.time():
-            return False, "inactive"
+        guild_id, user_id = str(guild_id), str(user_id)
         amount = int(amount)
         if amount <= 0:
             return False, "amount"
-        user = await self.get_user(guild_id, user_id)
-        if int(user["balance"]) < amount:
-            return False, "balance"
-        await self._conn.execute(
-            "UPDATE users SET balance=balance-? WHERE guild_id=? AND user_id=?",
-            (amount, str(guild_id), str(user_id))
-        )
-        await self._conn.execute(
-            "INSERT INTO eclipse_world_contributors(guild_id,event_id,user_id,contribution,rewarded) "
-            "VALUES(?,?,?, ?,0) ON CONFLICT(guild_id,event_id,user_id) DO UPDATE SET contribution=contribution+excluded.contribution",
-            (str(guild_id), event["event_id"], str(user_id), amount)
-        )
-        new_progress=min(int(event["target"]), int(event["progress"])+amount)
-        completed=1 if new_progress>=int(event["target"]) else 0
-        await self._conn.execute(
-            "UPDATE eclipse_world_events SET progress=?, completed=? WHERE guild_id=?",
-            (new_progress, completed, str(guild_id))
-        )
-        await self._conn.commit()
-        return True, await self.get_world_event(guild_id)
+        await self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            event = await self.get_world_event(guild_id)
+            if not event or event["completed"] or float(event["ends_at"]) <= time.time():
+                await self._conn.rollback()
+                return False, "inactive"
+            await self.get_user(guild_id, user_id)
+            cur = await self._conn.execute(
+                "UPDATE users SET balance=balance-? WHERE guild_id=? AND user_id=? AND balance>=?",
+                (amount, guild_id, user_id, amount),
+            )
+            if cur.rowcount != 1:
+                await self._conn.rollback()
+                return False, "balance"
+            await self._conn.execute(
+                "INSERT INTO eclipse_world_contributors(guild_id,event_id,user_id,contribution,rewarded) "
+                "VALUES(?,?,?, ?,0) ON CONFLICT(guild_id,event_id,user_id) "
+                "DO UPDATE SET contribution=contribution+excluded.contribution",
+                (guild_id, event["event_id"], user_id, amount),
+            )
+            await self._conn.execute(
+                "UPDATE eclipse_world_events SET progress=MIN(target,progress+?), "
+                "completed=CASE WHEN MIN(target,progress+?)>=target THEN 1 ELSE 0 END "
+                "WHERE guild_id=? AND completed=0",
+                (amount, amount, guild_id),
+            )
+            await self._conn.commit()
+            return True, await self.get_world_event(guild_id)
+        except Exception:
+            await self._conn.rollback()
+            raise
 
     async def reward_world_event_contributors(self, guild_id):
         event = await self.get_world_event(guild_id)
