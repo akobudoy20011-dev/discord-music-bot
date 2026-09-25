@@ -755,6 +755,17 @@ class Database:
         if "achievements" in fields:
             fields["achievements"] = json.dumps(fields["achievements"])
 
+        allowed = {
+            "balance", "last_daily", "last_work", "daily_streak", "messages",
+            "wins", "games", "xp", "level", "achievements", "bank_balance",
+            "last_bank_interest", "equipped_title", "arcade_plays", "arcade_wins",
+            "arcade_wagered", "arcade_net", "arcade_best_streak",
+            "tournament_wins", "tournament_entries",
+        }
+        fields = {k: v for k, v in fields.items() if k in allowed}
+        if not fields:
+            return
+
         set_clause = ", ".join(f"{k} = ?" for k in fields)
         values = list(fields.values()) + [guild_id, user_id]
 
