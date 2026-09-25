@@ -135,6 +135,29 @@ async def equipment_stats(db, guild_id, user_id):
         for key in totals:
             totals[key] += int(round(float(item.get(key, 0)) * scale))
 
+    # Housing bonuses are folded into the same aggregate used by combat/profile.
+    from .expansion import get_house
+    house = await get_house(db, guild_id, user_id)
+    for key, value in house.get("bonus", {}).items():
+        if key in totals:
+            totals[key] += int(value)
+
+    # Enchantments are additive per enchantment level.
+    cur = await db._conn.execute(
+        "SELECT enchant_id, level FROM rpg_enchants WHERE guild_id=? AND user_id=?",
+        (str(guild_id), str(user_id)),
+    )
+    enchant_values = {
+        "flame": ("strength", 2),
+        "ward": ("defense", 2),
+        "arcane": ("magic", 2),
+        "swift": ("agility", 2),
+    }
+    for row in await cur.fetchall():
+        effect = enchant_values.get(str(row["enchant_id"]).lower())
+        if effect and effect[0] in totals:
+            totals[effect[0]] += effect[1] * int(row["level"])
+
     # Active companion bonuses are folded into the same aggregate used by
     # combat.py, so companions become genuine RPG stat passives without
     # changing the finished combat engine.
