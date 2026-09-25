@@ -22,7 +22,18 @@ async def choose_class(db, guild_id, user_id, key):
 
 async def adventure(db, guild_id, user_id):
     player = await get_player(db,guild_id,user_id)
-    now=time.time(); last=player.get("last_adventure")
+    now=time.time()
+    travel_until = float(player.get("travel_until") or 0)
+    if travel_until > now:
+        return {"ok":False,"message":f"You are still traveling. {travel_until-now:.0f}s remain.","remaining":travel_until-now,"player":player}
+    try:
+        from .dungeons import _get_run
+        dungeon_run = await _get_run(db, guild_id, user_id)
+        if dungeon_run and dungeon_run.get("status") == "active":
+            return {"ok":False,"message":"You are inside an active dungeon. Advance or retreat before taking an adventure.","remaining":0,"player":player}
+    except Exception:
+        pass
+    last=player.get("last_adventure")
     if last is not None and now-last < ADVENTURE_COOLDOWN:
         return {"ok":False,"remaining":ADVENTURE_COOLDOWN-(now-last),"player":player}
     events=[("A ruined caravan",55,25,"You recover supplies from an abandoned caravan."),("A moonlit shrine",40,35,"A forgotten shrine answers your presence with a quiet blessing."),("A hostile beast",-18,70,"A wild creature attacks. You survive and claim its bounty."),("A hidden cache",90,50,"You uncover a sealed cache beneath the earth."),("A wandering scholar",25,80,"A wandering scholar rewards your curiosity with knowledge.")]
