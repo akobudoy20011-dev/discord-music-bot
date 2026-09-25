@@ -275,6 +275,7 @@ CREATE TABLE IF NOT EXISTS rpg_players (
     last_adventure REAL,
     region TEXT NOT NULL DEFAULT 'moonlit_vale',
     travel_until REAL NOT NULL DEFAULT 0,
+    travel_destination TEXT,
     PRIMARY KEY (guild_id, user_id)
 );
 
@@ -630,6 +631,8 @@ class Database:
             await self._conn.execute("ALTER TABLE rpg_players ADD COLUMN region TEXT NOT NULL DEFAULT 'moonlit_vale'")
         if "travel_until" not in columns:
             await self._conn.execute("ALTER TABLE rpg_players ADD COLUMN travel_until REAL NOT NULL DEFAULT 0")
+        if "travel_destination" not in columns:
+            await self._conn.execute("ALTER TABLE rpg_players ADD COLUMN travel_destination TEXT")
 
         battle_cur = await self._conn.execute("PRAGMA table_info(rpg_battles)")
         battle_columns = {row["name"] for row in await battle_cur.fetchall()}
