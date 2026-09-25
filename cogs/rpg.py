@@ -693,6 +693,36 @@ class RPG(commands.Cog):
         if not result["ok"]: await ctx.send(f"❌ {result['message']}"); return
         await ctx.send(f"{result['npc']['icon']} **{result['npc']['name']}** appreciated the gift. Affinity: **{result['affinity']}/1000** · {affinity_rank(result['affinity'])}")
 
+    @rpg.group(name="endgame", aliases=["end", "mythic"], invoke_without_command=True)
+    async def endgame_command(self, ctx):
+        a=await ascension(self.db,ctx.guild.id,ctx.author.id)
+        s=await season_status(self.db,ctx.guild.id,ctx.author.id)
+        await ctx.send(f"🌌 **ECLIPSE ENDGAME**\nAscension: **{a['ascension']}/10** · Ascension Points: **{a['points']}**\nSeason: **{s['season']}** · Ends <t:{int(s['ends_at'])}:R>\n\nRaids: **Mythic Lv.20** · **Celestial Lv.30**\nAscend at level 50 with \`!rpg endgame ascend\`.")
+
+    @endgame_command.command(name="raid")
+    async def endgame_raid_command(self, ctx, action: str = "status", raid_id: str = "mythic"):
+        action=str(action).lower(); raid_id=str(raid_id).lower()
+        if action=="start": result=await raid_start(self.db,ctx.guild.id,ctx.author.id,raid_id)
+        elif action in ("advance","attack"): result=await raid_advance(self.db,ctx.guild.id,ctx.author.id,raid_id)
+        else: result=await raid_status(self.db,ctx.guild.id,ctx.author.id,raid_id)
+        if not result["ok"]: await ctx.send(f"❌ {result['message']}"); return
+        if action=="status":
+            run=result["run"]; await ctx.send(f"🌌 **{raid_id.upper()} RAID**\n{run['status'] if run else 'No active run'}" + (f" · Phase {run['phase']} · {run['hp']:,} HP" if run else "")); return
+        if action=="start": await ctx.send(f"🌌 **{raid_id.upper()} RAID STARTED** · {result['raid']['phases']} phases."); return
+        await ctx.send(f"⚔️ Raid strike dealt **{result['damage']:,}** damage. Phase **{result['phase']}** · Boss HP **{result['hp']:,}**." + ("\n🏆 **RAID CLEARED** · Rewards granted." if result["status"]=="cleared" else ""))
+
+    @endgame_command.command(name="ascend")
+    async def endgame_ascend_command(self, ctx):
+        result=await ascend(self.db,ctx.guild.id,ctx.author.id)
+        if not result["ok"]: await ctx.send(f"❌ {result['message']}"); return
+        await ctx.send(f"🌌 **ASCENSION {result['ascension']}** unlocked. +{result['points']} Ascension Points.")
+
+    @endgame_command.command(name="season")
+    async def endgame_season_command(self, ctx):
+        s=await season_status(self.db,ctx.guild.id,ctx.author.id)
+        lines=[f"<@{x['user_id']}> · **{x['points']:,}** pts" for x in s["leaderboard"]]
+        await ctx.send(f"🏆 **RPG SEASON {s['season']}** · Ends <t:{int(s['ends_at'])}:R>\n" + ("\n".join(lines) if lines else "No points yet."))
+
     @rpg.command(name="npc", aliases=["npcs", "talk"])
     async def npc_command(self, ctx, npc_id: str = None):
         if not npc_id:
