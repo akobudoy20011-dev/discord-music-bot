@@ -548,7 +548,10 @@ class Guilds(commands.Cog):
         if not ok:
             await ctx.send("❌ Relic unavailable or the guild treasury is too low.")
             return
-        await self.db.add_rpg_item(ctx.guild.id, ctx.author.id, f"legendary_{equipment_id}", 1)
+        item_id = f"legendary_{equipment_id}"
+        await self.db.add_rpg_item(ctx.guild.id, ctx.author.id, item_id, 1)
+        from rpg.expansion import assign_affixes
+        await assign_affixes(self.db, ctx.guild.id, ctx.author.id, item_id)
         await ctx.send(f"🌌 **{label}** acquired for the guild and bound to {ctx.author.mention}.")
 
     @guild.command(name="relics")
