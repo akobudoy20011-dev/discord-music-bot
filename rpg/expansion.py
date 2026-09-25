@@ -172,7 +172,16 @@ async def buy_house(db,guild_id,user_id,house_id):
     if int(p["level"])<h["level"]:return {"ok":False,"message":f"Level {h['level']} required."}
     cur=await db._conn.execute("SELECT house_id FROM rpg_housing WHERE guild_id=? AND user_id=?",(str(guild_id),str(user_id)))
     old=await cur.fetchone()
-    if old:return {"ok":False,"message":"You already own a home. Housing upgrades will be available through future expansion tiers."}
+    if old:
+        current=HOUSING.get(str(old["house_id"]).lower())
+        if current and int(h["level"])<=int(current["level"]):
+            return {"ok":False,"message":"That home is not an upgrade."}
+        price=max(0,int(h["cost"])-(int(current["cost"]) if current else 0))
+        if price>int(p["gold"]): return {"ok":False,"message":f"You need {price:,} more RPG gold for that upgrade."}
+        await db.update_rpg_player(guild_id,user_id,gold=int(p["gold"])-price)
+        await db._conn.execute("UPDATE rpg_housing SET house_id=?,purchased_at=? WHERE guild_id=? AND user_id=?",(hid,time.time(),str(guild_id),str(user_id)))
+        await db._conn.commit()
+        return {"ok":True,"house":h,"upgrade":True,"cost":price}
     if int(h["cost"])>int(p["gold"]):return {"ok":False,"message":"Not enough RPG gold."}
     await db.update_rpg_player(guild_id,user_id,gold=int(p["gold"])-int(h["cost"]))
     await db._conn.execute("INSERT INTO rpg_housing VALUES(?,?,?,?)",(str(guild_id),str(user_id),hid,time.time()))
@@ -198,6 +207,11 @@ async def pvp_rating(db,guild_id,user_id):
 async def create_pvp(db,guild_id,challenger_id,opponent_id):
     await _schema(db)
     if str(challenger_id)==str(opponent_id):return {"ok":False,"message":"You cannot challenge yourself."}
+    cur=await db._conn.execute(
+        "SELECT 1 FROM rpg_pvp_matches WHERE guild_id=? AND challenger_id=? AND opponent_id=? AND status='pending'",
+        (str(guild_id),str(challenger_id),str(opponent_id)),
+    )
+    if await cur.fetchone(): return {"ok":False,"message":"That challenge is already pending."}
     await pvp_rating(db,guild_id,challenger_id); await pvp_rating(db,guild_id,opponent_id)
     await db._conn.execute("INSERT INTO rpg_pvp_matches(guild_id,challenger_id,opponent_id,created_at) VALUES(?,?,?,?)",(str(guild_id),str(challenger_id),str(opponent_id),time.time()))
     await db._conn.commit()
@@ -205,6 +219,16 @@ async def create_pvp(db,guild_id,challenger_id,opponent_id):
 
 async def resolve_pvp(db,guild_id,challenger_id,opponent_id):
     await _schema(db)
+    cur=await db._conn.execute(
+        "SELECT match_id,created_at FROM rpg_pvp_matches WHERE guild_id=? AND challenger_id=? AND opponent_id=? AND status='pending' ORDER BY match_id DESC LIMIT 1",
+        (str(guild_id),str(challenger_id),str(opponent_id)),
+    )
+    match=await cur.fetchone()
+    if not match: return {"ok":False,"message":"No pending challenge from that player."}
+    if time.time()-float(match["created_at"])>900:
+        await db._conn.execute("UPDATE rpg_pvp_matches SET status='expired' WHERE match_id=?",(int(match["match_id"]),))
+        await db._conn.commit()
+        return {"ok":False,"message":"That challenge expired."}
     a=await db.get_rpg_player(guild_id,challenger_id); b=await db.get_rpg_player(guild_id,opponent_id)
     if not a or not b:return {"ok":False,"message":"Both players need RPG characters."}
     ra=await pvp_rating(db,guild_id,challenger_id); rb=await pvp_rating(db,guild_id,opponent_id)
