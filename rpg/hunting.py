@@ -4,7 +4,6 @@ Hunting is a progression layer on top of the persistent PvE combat engine.
 It adds monster tiers, scaling, hunt XP, streaks, contracts, and kill records
 without creating a second battle system.
 """
-import hashlib
 import random
 import time
 
@@ -125,12 +124,6 @@ def build_hunt_target(enemy_id, player_level, region_id, tier=None, hunt_level=1
     }
 
 
-def _seeded_choice(values, seed_text):
-    if not values:
-        return None
-    digest = hashlib.sha256(seed_text.encode("utf-8")).hexdigest()
-    return values[int(digest[:8], 16) % len(values)]
-
 
 async def board(db, guild_id, user_id):
     player = await db.get_rpg_player(guild_id, user_id)
@@ -138,8 +131,6 @@ async def board(db, guild_id, user_id):
     region_id = player.get("region") or START_REGION
     region = get_region(region_id) or REGIONS[START_REGION]
     targets = REGION_TARGETS.get(region_id, region.get("enemies", []))
-    now_bucket = int(time.time() // 3600)
-
     contracts = []
     for index in range(4):
         enemy_id = targets[index % len(targets)]
