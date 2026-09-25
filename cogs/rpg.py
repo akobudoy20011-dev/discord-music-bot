@@ -412,8 +412,8 @@ class RPG(commands.Cog):
             if result.get("battle"):
                 battle = result["battle"]
                 await ctx.send(
-                    f"⚔️ **HUNT IN PROGRESS**\\n"
-                    f"Monster: **{battle['enemy_name']}** · ❤️ {battle['enemy_hp']}/{battle['enemy_max_hp']} HP\\n"
+                    f"⚔️ **HUNT IN PROGRESS**\n"
+                    f"Monster: **{battle['enemy_name']}** · ❤️ {battle['enemy_hp']}/{battle['enemy_max_hp']} HP\n"
                     "Use !rpg attack, !rpg skill <id>, or !rpg special <id> to finish the hunt."
                 )
             else:
@@ -421,8 +421,8 @@ class RPG(commands.Cog):
             return
         battle = result["battle"]
         await ctx.send(
-            f"🏹 **MONSTER HUNT**\\n"
-            f"Target: **{battle['enemy_name']}** · ❤️ {battle['enemy_hp']}/{battle['enemy_max_hp']} HP\\n"
+            f"🏹 **MONSTER HUNT**\n"
+            f"Target: **{battle['enemy_name']}** · ❤️ {battle['enemy_hp']}/{battle['enemy_max_hp']} HP\n"
             "The hunt is active. Defeat the monster to claim XP, RPG gold, loot, and possible level-up rewards."
         )
 
@@ -998,53 +998,3 @@ class RPG(commands.Cog):
             return
         item = result["item"]
         yields = " · ".join(
-            f"{MATERIALS[mid]['icon']} {MATERIALS[mid]['name']} ×{amount}"
-            for mid, amount in result["yields"].items()
-        )
-        await ctx.send(f"♻️ **SALVAGED** · {item['icon']} **{item['name']}**\nRecovered: {yields}")
-
-
-    @rpg.group(name="dungeon", aliases=["delve", "dungeons"], invoke_without_command=True)
-    async def dungeon_command(self, ctx):
-        await ctx.send(
-            "🕯️ ECLIPSE DUNGEONS\n\n"
-            + "\n".join(
-                f"{d['icon']} {d['name']} · Level {d['min_level']}+ · 12 floors · Boss: {d['boss']}"
-                for _, d in list_dungeons()
-            )
-            + "\n\nUse !rpg dungeon start <id> → advance → retreat."
-        )
-
-    @dungeon_command.command(name="list")
-    async def dungeon_list_command(self, ctx):
-        lines = [
-            f"{did} · {d['icon']} {d['name']} · Level {d['min_level']}+ · {d['boss']}"
-            for did, d in list_dungeons()
-        ]
-        await ctx.send("🕯️ DUNGEON CODEX\n" + "\n".join(lines))
-
-    @dungeon_command.command(name="start")
-    async def dungeon_start_command(self, ctx, dungeon_id: str = None):
-        if not dungeon_id:
-            await ctx.send("Use !rpg dungeon list or !rpg dungeon start <id>.")
-            return
-        result = await start_dungeon(self.db, ctx.guild.id, ctx.author.id, dungeon_id)
-        if not result["ok"]:
-            await ctx.send(f"❌ {result['message']}")
-            return
-        d = result["dungeon"]
-        await ctx.send(
-            f"{d['icon']} {d['name']} BEGINS\n"
-            f"12 floors stand between you and {d['boss']}.\n"
-            "Use !rpg dungeon advance to enter the next room."
-        )
-
-    @dungeon_command.command(name="status")
-    async def dungeon_status_command(self, ctx):
-        run = await dungeon_status(self.db, ctx.guild.id, ctx.author.id)
-        if not run:
-            await ctx.send("🕯️ No dungeon run has been started.")
-            return
-        await ctx.send(
-            f"🕯️ {run['dungeon_id'].upper()} · {run['status'].upper()}\n"
-            f"Floor: {run['floor']}/12 · Rooms: {run['rooms']}\n"
