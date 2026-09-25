@@ -403,8 +403,11 @@ class RPG(commands.Cog):
     async def battle_command(self, ctx):
         result = await start_battle(self.db, ctx.guild.id, ctx.author.id)
         if not result["ok"]:
-            battle = result["battle"]
-            await ctx.send(f"⚔️ Already fighting **{battle['enemy_name']}**. Use !rpg attack.")
+            if result.get("battle"):
+                battle = result["battle"]
+                await ctx.send(f"⚔️ Already fighting **{battle['enemy_name']}**. Use !rpg attack.")
+            else:
+                await ctx.send(f"❌ {result.get('message', 'You cannot start a battle right now.')}")
             return
         battle = result["battle"]
         await ctx.send(f"⚔️ **BATTLE BEGINS**\nEnemy: **{battle['enemy_name']}** · ❤️ {battle['enemy_hp']}/{battle['enemy_max_hp']} HP\nUse !rpg attack, !rpg skill <id>, or !rpg flee.")
