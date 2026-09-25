@@ -23,7 +23,7 @@ STORY_QUESTS = {
     "veil_echoes":{"name":"Echoes in the Veil","npc":"lyra","chapter":2,"requires":"veil_letter","description":"Defeat 3 enemies touched by the Veil.","goal":3,"kind":"kills","xp":250,"gold":200,"item":"echo_fragment","dialogue":"The echoes are multiplying. Break three of their vessels and bring me what remains."},
     "rootbound_oath":{"name":"The Rootbound Oath","npc":"oren","chapter":3,"requires":"veil_echoes","description":"Complete 2 adventures in the Whispering Wood.","goal":2,"kind":"adventures","region":"whispering_wood","xp":325,"gold":300,"item":"root_token","dialogue":"The forest does not need heroes. It needs someone willing to keep an oath when no one is watching."},
     "ashen_seal":{"name":"Seal of Cinders","npc":"vestra","chapter":4,"requires":"rootbound_oath","description":"Defeat an Ash Drake in the Ashen Crown.","goal":1,"kind":"ash_drake","region":"ashen_crown","xp":450,"gold":425,"item":"ashen_seal","dialogue":"The drakes guard the last seal because they remember the Crown. Take it from one of them, and the ruins will open."},
-    "starfall_key":{"name":"The Starfall Key","npc":"cael","chapter":5,"requires":"ashen_seal","description":"Complete 3 adventures on the Starfall Coast.","goal":3,"kind":"adventures","region":"starfall_coast","xp":650,"gold":650,"item":"star_key","dialogue":"Three journeys beneath the falling stars. Return alive and I will give you the key to the observatory."},
+    "starfall_key":{"name":"The Starfall Key","npc":"cael","chapter":5,"requires":"ashen_seal","description":"Complete 3 adventures on the Starfall Coast.","goal":3,"kind":"adventures","region":"starfall_coast","xp":650,"gold":650,"item":"star_key","special":"celestial_tempest","dialogue":"Three journeys beneath the falling stars. Return alive and I will give you the key to the observatory."},
 }
 
 ALL_QUESTS = {**QUESTS, **STORY_QUESTS}
@@ -69,9 +69,16 @@ async def claim(db,guild_id,user_id,quest_id):
     old,new,player=await db.add_rpg_xp(guild_id,user_id,q["xp"])
     player=await db.update_rpg_player(guild_id,user_id,gold=player["gold"]+q["gold"])
     if q.get("item"): await db.add_rpg_item(guild_id,user_id,q["item"],1)
+    special_unlocked = None
+    if q.get("special"):
+        from .specials import get_special
+        special = get_special(q["special"])
+        if special:
+            await db.unlock_rpg_special(guild_id,user_id,q["special"],source=f"quest:{quest_id}")
+            special_unlocked = q["special"]
     await db.set_rpg_quest(guild_id,user_id,quest_id,row["progress"],1,1)
     next_quest=next((qid for qid,data in STORY_QUESTS.items() if data.get("requires")==quest_id),None)
-    return {"ok":True,"quest":q,"level_up":new>old,"next_quest":next_quest}
+    return {"ok":True,"quest":q,"level_up":new>old,"next_quest":next_quest,"special_unlocked":special_unlocked}
 
 async def npc_view(db,guild_id,user_id,npc_id):
     npc=get_npc(npc_id)
