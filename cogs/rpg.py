@@ -1230,3 +1230,7 @@ class RPG(commands.Cog):
             f"♻️ **SALVAGED** · {item['icon']} **{item['name']}**\n"
             f"Materials recovered: {yield_text}"
         )
+
+
+async def setup(bot):
+    await bot.add_cog(RPG(bot))
