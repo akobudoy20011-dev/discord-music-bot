@@ -93,14 +93,19 @@ def _monster_level(player_level, danger, tier):
     return base + {"common": 0, "elite": 1, "rare": 2, "champion": 4}[tier]
 
 
-def build_hunt_target(enemy_id, player_level, region_id, tier=None, hunt_level=1):
+def build_hunt_target(enemy_id, player_level, region_id, tier=None, hunt_level=1, forced_level=None):
     base = ENEMIES.get(str(enemy_id))
     if not base:
         return None
     region = get_region(region_id) or REGIONS[START_REGION]
     tier = tier or _tier_roll()
     tier_data = HUNT_TIERS[tier]
-    level = _monster_level(player_level, region["danger"], tier) + max(0, int(hunt_level) - 1) // 5
+    level = (
+        int(forced_level)
+        if forced_level is not None
+        else _monster_level(player_level, region["danger"], tier)
+        + max(0, int(hunt_level) - 1) // 5
+    )
 
     # Small level scaling prevents late-game hunts from becoming irrelevant
     # while keeping the original enemy identities and loot IDs intact.
@@ -152,7 +157,14 @@ async def start_hunt(db, guild_id, user_id, target_id=None):
 
     existing = await db.get_rpg_battle(guild_id, user_id)
     if existing:
-        return {"ok": False, "battle": existing, "message": "You already have an active hunt."}
+        return {"ok": False, "battle": existing, "message": "You already have an active battle."}
+
+    prepared = await db.get_rpg_hunt_active(guild_id, user_id)
+    if prepared:
+        return {
+            "ok": False,
+            "message": "You already have a prepared hunt. Finish it or flee before choosing another target.",
+        }
 
     targets = REGION_TARGETS.get(region_id, region.get("enemies", []))
     if not targets:
@@ -179,6 +191,7 @@ async def start_hunt(db, guild_id, user_id, target_id=None):
         guild_id,
         user_id,
         enemy_id=enemy_id,
+        enemy_name=target["name"],
         tier=tier,
         monster_level=target["monster_level"],
         started_at=time.time(),
