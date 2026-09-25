@@ -3214,20 +3214,31 @@ class Database:
             raise
 
     async def claim_world_boss_reward(self, guild_id, user_id):
-        boss=await self.get_world_boss(guild_id)
-        if not boss or boss["status"]!="defeated":
-            return None,"inactive"
-        cur=await self._conn.execute("SELECT damage,rewarded FROM world_boss_contributors WHERE guild_id=? AND boss_id=? AND user_id=?",(str(guild_id),boss["boss_id"],str(user_id)))
-        row=await cur.fetchone()
-        if not row or int(row["damage"])<=0:
+        cur=await self._conn.execute(
+            """SELECT b.*, c.damage, c.rewarded
+               FROM world_bosses b
+               JOIN world_boss_contributors c
+                 ON c.guild_id=b.guild_id AND c.boss_id=b.boss_id
+               WHERE b.guild_id=? AND c.user_id=? AND b.status='defeated' AND c.damage>0 AND c.rewarded=0
+               ORDER BY b.created_at DESC LIMIT 1""",
+            (str(guild_id),str(user_id)),
+        )
+        boss=await cur.fetchone()
+        if not boss:
             return None,"none"
-        if int(row["rewarded"]):
-            return None,"claimed"
-        await self._conn.execute("UPDATE world_boss_contributors SET rewarded=1 WHERE guild_id=? AND boss_id=? AND user_id=?",(str(guild_id),boss["boss_id"],str(user_id)))
+        await self._conn.execute(
+            "UPDATE world_boss_contributors SET rewarded=1 WHERE guild_id=? AND boss_id=? AND user_id=? AND rewarded=0",
+            (str(guild_id),boss["boss_id"],str(user_id)),
+        )
         await self._conn.commit()
-        damage=int(row["damage"])
+        damage=int(boss["damage"])
         scale=min(2.0,0.5+damage/max(1,int(boss["max_hp"])))
-        return (int(int(boss["reward_coins"])*scale),int(int(boss["reward_xp"])*scale),damage),"ok"
+        return (
+            int(int(boss["reward_coins"])*scale),
+            int(int(boss["reward_xp"])*scale),
+            damage,
+            str(boss["boss_id"]),
+        ),"ok"
 
     async def add_world_boss_effect(self, guild_id, boss_id, user_id, effect_id, multiplier, uses=2, duration=120):
         now=time.time()
