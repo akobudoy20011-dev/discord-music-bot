@@ -377,7 +377,7 @@ async def enchant(db,guild_id,user_id,item_id,enchant_id):
     allowed={"flame":{"name":"Flame","stat":"strength","amount":2,"cost":1000},"ward":{"name":"Ward","stat":"defense","amount":2,"cost":1000},"arcane":{"name":"Arcane","stat":"magic","amount":2,"cost":1200},"swift":{"name":"Swift","stat":"agility","amount":2,"cost":1000}}
     e=allowed.get(str(enchant_id).lower())
     if not e:return {"ok":False,"message":"Unknown enchant. Use flame, ward, arcane, or swift."}
-    cur=await db._conn.execute("SELECT item_id FROM rpg_equipment WHERE guild_id=? AND user_id=? AND item_id=?",(str(guild_id),str(user_id),str(item_id).lower()))
+    cur=await db._conn.execute("SELECT item_id FROM rpg_items WHERE guild_id=? AND user_id=? AND equipped=1 AND item_id=?",(str(guild_id),str(user_id),str(item_id).lower()))
     if not await cur.fetchone():return {"ok":False,"message":"That item must be equipped before enchanting."}
     p=await db.get_rpg_player(guild_id,user_id)
     if int(p["gold"])<e["cost"]:return {"ok":False,"message":"Not enough RPG gold."}
@@ -444,8 +444,9 @@ async def affix_stats(db,guild_id,user_id):
     cur=await db._conn.execute(
         """SELECT a.affix_id,a.value
            FROM rpg_affixes a
-           JOIN rpg_equipment e
+           JOIN rpg_items e
              ON e.guild_id=a.guild_id AND e.user_id=a.user_id AND e.item_id=a.item_id
+            AND e.equipped=1
            WHERE a.guild_id=? AND a.user_id=?""",
         (str(guild_id),str(user_id)),
     )
