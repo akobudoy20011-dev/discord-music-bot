@@ -679,6 +679,20 @@ class RPG(commands.Cog):
         if not result["ok"]: await ctx.send(f"❌ {result['message']}"); return
         await ctx.send(f"✨ **ENCHANTED** · {result['enchant']['name']} enchant applied to {item_id}.")
 
+    @rpg.group(name="relationship", aliases=["relationships", "affinity"], invoke_without_command=True)
+    async def relationship_command(self, ctx):
+        rows=await relationship_rows(self.db,ctx.guild.id,ctx.author.id)
+        lines=[f"{RELATIONSHIPS[r['npc_id']]['icon']} **{RELATIONSHIPS[r['npc_id']]['name']}** · {affinity_rank(r['affinity'])} · {r['affinity']}/1000" for r in rows]
+        await ctx.send(embed=discord.Embed(title="♡ ECLIPSE · NPC RELATIONSHIPS ♡",description="\n".join(lines),color=COLOR_PRIMARY))
+
+    @relationship_command.command(name="gift")
+    async def relationship_gift_command(self, ctx, npc_id: str = None, item_id: str = None):
+        if not npc_id or not item_id:
+            await ctx.send("Use !rpg relationship gift <npc_id> <item_id>."); return
+        result=await gift_npc(self.db,ctx.guild.id,ctx.author.id,npc_id,item_id)
+        if not result["ok"]: await ctx.send(f"❌ {result['message']}"); return
+        await ctx.send(f"{result['npc']['icon']} **{result['npc']['name']}** appreciated the gift. Affinity: **{result['affinity']}/1000** · {affinity_rank(result['affinity'])}")
+
     @rpg.command(name="npc", aliases=["npcs", "talk"])
     async def npc_command(self, ctx, npc_id: str = None):
         if not npc_id:
