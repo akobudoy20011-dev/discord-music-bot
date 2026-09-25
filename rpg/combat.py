@@ -108,6 +108,7 @@ async def start(db, guild_id, user_id, enemy_override=None, hunt_mode=False):
         "battle": await db.get_rpg_battle(guild_id, user_id),
         "player": player,
         "hunt": hunt_result,
+        "achievements": achievement_unlocks,
     }
 
 
@@ -195,6 +196,12 @@ async def _victory_rewards(db, guild_id, user_id, battle, player, damage):
     await quest_progress(
         db, guild_id, user_id, "kills", 1, battle["enemy_id"]
     )
+    achievement_unlocks = []
+    try:
+        from .achievements import check
+        achievement_unlocks = await check(db, guild_id, user_id)
+    except Exception:
+        achievement_unlocks = []
     return {
         "ok": True,
         "victory": True,
