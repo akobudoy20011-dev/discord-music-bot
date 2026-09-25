@@ -473,8 +473,10 @@ class RPG(commands.Cog):
             shown = set()
             for sid, data in available:
                 shown.add(sid)
-                if sid in unlocked:
-                    record = await self.db.get_rpg_special(ctx.guild.id, ctx.author.id, sid)
+                record = await self.db.get_rpg_special(ctx.guild.id, ctx.author.id, sid)
+                if record and int(record.get("unlocked", 1)) == 0 and record.get("source") == "admin_revoke":
+                    state = "⛔ REVOKED"
+                elif sid in unlocked:
                     source = record.get("source", "unlock") if record else "unlock"
                     state = "✦ GRANTED" if source.startswith(("admin:", "quest:")) else "✦ READY"
                 elif player["level"] >= data["level"]:
@@ -520,7 +522,7 @@ class RPG(commands.Cog):
         status = f"\n**Status:** {result['status']}" if result.get("status") else ""
         await ctx.send(f"{result['special_icon']} **{result['special_name'].upper()}**\n{result['special_message']}\n\n💥 **{result['damage']} damage** · Enemy ❤️ {result['enemy_hp']}/{result['enemy_max_hp']}\n💢 Incoming damage: **{incoming}**{enemy_state}{status}")
 
-    @rpg.command(name="specialgrant", aliases=["grantspecial", "givespecial"])
+    @rpg.command(name="specialgrant", aliases=["grantspecial", "givespecial", "grant-special", "grant_special"])
     @commands.has_permissions(manage_guild=True)
     async def special_grant_command(self, ctx, member: discord.Member = None, special_id: str = None):
         if not member or not special_id:
@@ -538,7 +540,7 @@ class RPG(commands.Cog):
             "Class restrictions and level requirements are bypassed for this grant."
         )
 
-    @rpg.command(name="specialrevoke", aliases=["revokespecial", "removespecial"])
+    @rpg.command(name="specialrevoke", aliases=["revokespecial", "removespecial", "revoke-special", "revoke_special"])
     @commands.has_permissions(manage_guild=True)
     async def special_revoke_command(self, ctx, member: discord.Member = None, special_id: str = None):
         if not member or not special_id:
@@ -556,7 +558,7 @@ class RPG(commands.Cog):
             "Normal class/level unlocks are also blocked until access is granted again."
         )
 
-    @rpg.command(name="specialaccess", aliases=["specialgrants", "specialowners"])
+    @rpg.command(name="specialaccess", aliases=["specialgrants", "specialowners", "special-access", "special_access"])
     @commands.has_permissions(manage_guild=True)
     async def special_access_command(self, ctx, member: discord.Member = None):
         target = member or ctx.author
