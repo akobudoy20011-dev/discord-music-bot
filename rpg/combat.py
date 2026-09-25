@@ -402,17 +402,28 @@ async def attack(db, guild_id, user_id, skill_id=None):
             damage = max(1, int((stats["strength"] + gear["power"]) * skill["power"]))
 
         if skill["kind"] == "guard":
+            damage = 0
             effects["player_guard_turns"] = max(2, int(effects.get("player_guard_turns", 0)))
         elif skill["kind"] == "restore":
+            damage = 0
             player = await db.update_rpg_player(
                 guild_id, user_id,
                 mp=min(stats["max_mp"], int(player["mp"]) - mp_cost + max(8, int(stats["magic"] * 0.55)))
             )
             mp_cost = 0
         elif skill["kind"] == "evasion":
+            damage = 0
             effects["player_evasion_turns"] = max(2, int(effects.get("player_evasion_turns", 0)))
         elif skill["kind"] == "buff":
-            damage = int(damage * 1.25)
+            damage = 0
+            effects["player_power_buff_turns"] = max(3, int(effects.get("player_power_buff_turns", 0)))
+
+        if skill["id"] == "blood_slash":
+            heal = max(2, int(damage * 0.20))
+            player = await db.update_rpg_player(
+                guild_id, user_id,
+                hp=min(stats["max_hp"], int(player["hp"]) + heal),
+            )
 
         skill_cd = int(skill.get("cooldown", 0))
         if skill_cd > 0:
