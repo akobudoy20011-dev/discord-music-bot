@@ -1,6 +1,7 @@
 """ECLIPSE RPG towns, services, merchants, and shrines."""
 from .world import get_region
 from .items import get_item
+from .manager import get_player
 
 TOWNS = {
     "moonlit_vale": {
@@ -32,7 +33,16 @@ def get_town(region_id): return TOWNS.get(str(region_id).lower())
 def list_towns(): return list(TOWNS.items())
 
 async def town_status(db,guild_id,user_id):
-    player=await db.get_rpg_player(guild_id,user_id)
+    player=await get_player(db,guild_id,user_id)
+    if float(player.get("travel_until") or 0)>__import__("time").time():
+        return {"ok":False,"message":"You cannot use town services while traveling."}
+    try:
+        from .dungeons import _get_run
+        dungeon_run=await _get_run(db,guild_id,user_id)
+        if dungeon_run and dungeon_run.get("status")=="active":
+            return {"ok":False,"message":"You cannot use town services from inside a dungeon."}
+    except Exception:
+        pass
     region_id=player.get("region") or "moonlit_vale"
     town=get_town(region_id)
     if not town: return {"ok":False,"message":"There is no settlement in this realm yet."}
@@ -43,8 +53,10 @@ async def inn(db,guild_id,user_id):
     if not s["ok"]: return s
     ok,_=await db.spend_rpg_gold(guild_id,user_id,INN_COST)
     if not ok: return {"ok":False,"message":f"You need **{INN_COST} RPG gold** for a room."}
-    p=await db.get_rpg_player(guild_id,user_id)
-    p=await db.update_rpg_player(guild_id,user_id,hp=p["max_hp"],mp=p["max_mp"])
+    p=await get_player(db,guild_id,user_id)
+    from .equipment import equipment_stats
+    gear=await equipment_stats(db,guild_id,user_id)
+    p=await db.update_rpg_player(guild_id,user_id,hp=int(p["max_hp"])+int(gear["max_hp"]),mp=int(p["max_mp"])+int(gear["max_mp"]))
     return {"ok":True,"player":p,"town":s["town"],"cost":INN_COST}
 
 async def shrine(db,guild_id,user_id):
@@ -60,8 +72,10 @@ async def alchemist(db,guild_id,user_id):
     if not s["ok"]: return s
     ok,_=await db.spend_rpg_gold(guild_id,user_id,ALCHEMIST_COST)
     if not ok: return {"ok":False,"message":f"You need **{ALCHEMIST_COST} RPG gold** for a draught."}
-    p=await db.get_rpg_player(guild_id,user_id)
-    p=await db.update_rpg_player(guild_id,user_id,mp=p["max_mp"])
+    p=await get_player(db,guild_id,user_id)
+    from .equipment import equipment_stats
+    gear=await equipment_stats(db,guild_id,user_id)
+    p=await db.update_rpg_player(guild_id,user_id,mp=int(p["max_mp"])+int(gear["max_mp"]))
     return {"ok":True,"cost":ALCHEMIST_COST,"player":p,"town":s["town"]}
 
 async def buy(db,guild_id,user_id,item_id):
