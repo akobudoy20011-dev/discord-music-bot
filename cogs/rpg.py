@@ -9,7 +9,7 @@ from rpg.skills import get_skills
 from rpg.specials import SPECIALS, get_special, get_specials_for_class
 from rpg.skills_service import ensure_class_skills, unlock_skill
 from rpg.combat import start as start_battle, attack as combat_attack, special as combat_special, flee as flee_battle
-from rpg.hunting import board as hunting_board, start_hunt, recent_kills
+from rpg.hunting import board as hunting_board, start_hunt, recent_kills, get_profile as get_hunt_profile
 from rpg.quests import ensure_quests, list_quests, claim as claim_quest, NPCS, npc_view
 from rpg.world import list_regions, get_region, list_events, get_event
 from rpg.exploration import world_status, travel, explore
@@ -238,6 +238,8 @@ class RPG(commands.Cog):
         embed.add_field(name="♡ REALM",value=f"{get_region(player.get('region'))['icon']} {get_region(player.get('region'))['name']}" if get_region(player.get("region")) else "Unknown",inline=False)
         embed.add_field(name="♡ VITALS",value=f"❤️ {player['hp']}/{player['max_hp'] + gear['max_hp']} HP\n💠 {player['mp']}/{player['max_mp'] + gear['max_mp']} MP\n💰 {player['gold']:,} RPG gold",inline=True)
         embed.add_field(name="♡ STATS",value=f"⚔️ {player['strength'] + gear['strength']} STR\n🛡️ {player['defense'] + gear['defense']} DEF\n🔮 {player['magic'] + gear['magic']} MAG\n🪽 {player['agility'] + gear['agility']} AGI\n⚔️ +{gear['power']} weapon power",inline=True)
+        hunt = await get_hunt_profile(self.db, ctx.guild.id, ctx.author.id)
+        embed.add_field(name="🏹 HUNTING",value=f"Lv. **{hunt['hunt_level']}** · {hunt['hunt_xp']}/{hunt['hunt_level']*500} Hunt XP\n🔥 Streak **{hunt['streak']}** · Best **{hunt['best_streak']}**\n☠️ {hunt['total_kills']:,} kills",inline=False)
         embed.set_thumbnail(url=ctx.author.display_avatar.url); embed.set_footer(text="୨୧ !rpg class · !rpg adventure · !rpg rest"); await ctx.send(embed=embed)
 
     @rpg.command(name="class",aliases=["choose"])
