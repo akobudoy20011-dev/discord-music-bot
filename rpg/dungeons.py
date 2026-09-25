@@ -76,6 +76,10 @@ async def start(db, guild_id, user_id, dungeon_id):
     if not dungeon:
         return {"ok": False, "message": "Unknown dungeon."}
     player = await db.get_rpg_player(guild_id, user_id)
+    now = time.time()
+    travel_until = float(player.get("travel_until") or 0)
+    if travel_until > now:
+        return {"ok": False, "message": f"You are still traveling. {travel_until - now:.0f}s remain."}
     if int(player["level"]) < dungeon["min_level"]:
         return {"ok": False, "message": f"You need RPG Level {dungeon['min_level']}."}
     cur = await db._conn.execute("SELECT last_completed FROM rpg_dungeon_daily WHERE guild_id=? AND user_id=?", (str(guild_id), str(user_id)))
@@ -107,6 +111,9 @@ async def advance(db, guild_id, user_id):
     if not run or run["status"] != "active":
         return {"ok": False, "message": "No active dungeon. Use !rpg dungeon start <id>."}
     player = await db.get_rpg_player(guild_id, user_id)
+    travel_until = float(player.get("travel_until") or 0)
+    if travel_until > time.time():
+        return {"ok": False, "message": f"You are still traveling. {travel_until - time.time():.0f}s remain."}
     dungeon = DUNGEONS[run["dungeon_id"]]
     floor = min(MAX_FLOOR, int(run["floor"]) + 1)
     threat = dungeon["base_enemy"] + floor * 8 + max(0, int(player["level"]) - dungeon["min_level"]) * 3
@@ -153,6 +160,10 @@ async def advance(db, guild_id, user_id):
     if boss:
         item_id = random.choice(dungeon["loot"])
         await db.add_rpg_item(guild_id, user_id, item_id, 1)
+        item = __import__("rpg.items", fromlist=["get_item"]).get_item(item_id)
+        if item and item.get("rarity") in {"rare", "epic", "legendary", "relic"}:
+            from .expansion import assign_affixes
+            await assign_affixes(db, guild_id, user_id, item_id)
         await _finish(db, guild_id, user_id, "cleared", floor)
         return {"ok": True, "result": "boss_cleared", "dungeon": dungeon, "floor": floor,
                 "damage": damage, "gold": reward_gold, "xp": reward_xp, "item": item_id,
