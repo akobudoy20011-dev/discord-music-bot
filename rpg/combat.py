@@ -196,6 +196,11 @@ async def _victory_rewards(db, guild_id, user_id, battle, player, damage):
     await quest_progress(
         db, guild_id, user_id, "kills", 1, battle["enemy_id"]
     )
+    try:
+        from .expansion import daily_progress
+        await daily_progress(db, guild_id, user_id, "kills", 1)
+    except Exception:
+        pass
     achievement_unlocks = []
     try:
         from .achievements import check
