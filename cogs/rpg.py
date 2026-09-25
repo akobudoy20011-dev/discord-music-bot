@@ -18,7 +18,7 @@ from rpg.crafting import MATERIALS, list_recipes, craft, salvage
 from rpg.dungeons import list_dungeons, start as start_dungeon, status as dungeon_status, advance as advance_dungeon, retreat as retreat_dungeon
 from rpg.gathering import RESOURCE_NODES, profile as gathering_profile, gather as gather_resource, collections as gathering_collections
 from rpg.achievements import ACHIEVEMENTS, check as check_achievements, list_unlocked as unlocked_achievements
-from rpg.expansion import FACTIONS, SUBCLASSES, HOUSING, CONSUMABLES, DAILY_POOL, faction_rows, rep_rank, choose_subclass, get_subclass, buy_house, get_house, pvp_rating, create_pvp, resolve_pvp, daily_quest, claim_daily, buy_consumable, use_consumable, enchant
+from rpg.expansion import FACTIONS, SUBCLASSES, HOUSING, CONSUMABLES, DAILY_POOL, faction_rows, rep_rank, choose_subclass, get_subclass, buy_house, get_house, pvp_rating, create_pvp, resolve_pvp, daily_quest, claim_daily, buy_consumable, use_consumable, enchant, RELATIONSHIPS, relationship_rows, affinity_rank, gift_npc
 
 
 def xp_bar(current, maximum, length=14):
