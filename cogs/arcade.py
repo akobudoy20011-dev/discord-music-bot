@@ -219,7 +219,7 @@ class Arcade(commands.Cog):
     @tournament.command(name="match")
     @commands.has_guild_permissions(manage_guild=True)
     async def tournament_match(self, ctx, match_id: int, winner: discord.Member):
-        ok, result = await self.db.resolve_arcade_match(match_id, winner.id)
+        ok, result = await self.db.resolve_arcade_match(match_id, winner.id, ctx.guild.id)
         if not ok:
             return await ctx.send("❌ Invalid match or winner.")
         if result and result.get("finished"):
