@@ -59,4 +59,21 @@ async def adventure(db, guild_id, user_id):
 
 async def rest(db,guild_id,user_id):
     player=await get_player(db,guild_id,user_id)
-    return await db.update_rpg_player(guild_id,user_id,hp=player["max_hp"],mp=player["max_mp"])
+    now=time.time()
+    travel_until=float(player.get("travel_until") or 0)
+    if travel_until>now:
+        return {"ok":False,"message":f"You are still traveling. {travel_until-now:.0f}s remain.","remaining":travel_until-now}
+    try:
+        from .dungeons import _get_run
+        dungeon_run=await _get_run(db,guild_id,user_id)
+        if dungeon_run and dungeon_run.get("status")=="active":
+            return {"ok":False,"message":"You are inside an active dungeon. Advance or retreat before resting."}
+    except Exception:
+        pass
+    from .equipment import equipment_stats
+    gear=await equipment_stats(db,guild_id,user_id)
+    return await db.update_rpg_player(
+        guild_id,user_id,
+        hp=int(player["max_hp"])+int(gear["max_hp"]),
+        mp=int(player["max_mp"])+int(gear["max_mp"]),
+    )
