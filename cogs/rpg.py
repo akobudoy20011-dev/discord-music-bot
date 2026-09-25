@@ -307,7 +307,10 @@ class RPG(commands.Cog):
             enemy = result["enemy"]
             battle = await start_battle(self.db, ctx.guild.id, ctx.author.id, enemy_override=enemy)
             if not battle["ok"]:
-                await ctx.send(f"⚔️ **{enemy['name']}** is already confronting you. Use !rpg attack.")
+                if battle.get("battle"):
+                    await ctx.send(f"⚔️ **{enemy['name']}** is already confronting you. Use !rpg attack.")
+                else:
+                    await ctx.send(f"❌ {battle.get('message', 'You cannot start this encounter right now.')}")
                 return
             await ctx.send(f"{region['icon']} **{region['name']}**\n\n👑 **REALM GUARDIAN**\n**{enemy['name']}** · ❤️ {enemy['hp']}/{enemy['hp']} HP\nDefeat it to change the history of this realm.")
             return
@@ -322,7 +325,10 @@ class RPG(commands.Cog):
             enemy = result["enemy"]
             battle = await start_battle(self.db, ctx.guild.id, ctx.author.id, enemy_override=enemy)
             if not battle["ok"]:
-                await ctx.send(f"⚔️ **{enemy['name']}** finds you before you can prepare. Use !rpg attack.")
+                if battle.get("battle"):
+                    await ctx.send(f"⚔️ **{enemy['name']}** finds you before you can prepare. Use !rpg attack.")
+                else:
+                    await ctx.send(f"❌ {battle.get('message', 'You cannot start this encounter right now.')}")
                 return
             await ctx.send(f"{region['icon']} **{region['name']}**\n\n⚔️ **AN ENCOUNTER**\n**{enemy['name']}** · ❤️ {enemy['hp']}/{enemy['hp']} HP\nThe realm has noticed you. Use !rpg attack, !rpg skill <id>, !rpg special <id>, or !rpg flee.")
             return
