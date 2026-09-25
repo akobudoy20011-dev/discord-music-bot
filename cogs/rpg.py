@@ -18,6 +18,7 @@ from rpg.crafting import MATERIALS, list_recipes, craft, salvage
 from rpg.dungeons import list_dungeons, start as start_dungeon, status as dungeon_status, advance as advance_dungeon, retreat as retreat_dungeon
 from rpg.gathering import RESOURCE_NODES, profile as gathering_profile, gather as gather_resource, collections as gathering_collections
 from rpg.achievements import ACHIEVEMENTS, check as check_achievements, list_unlocked as unlocked_achievements
+from rpg.expansion import FACTIONS, SUBCLASSES, HOUSING, CONSUMABLES, DAILY_POOL, faction_rows, rep_rank, choose_subclass, get_subclass, buy_house, get_house, pvp_rating, create_pvp, resolve_pvp, daily_quest, claim_daily, buy_consumable, use_consumable, enchant
 
 
 def xp_bar(current, maximum, length=14):
@@ -560,6 +561,123 @@ class RPG(commands.Cog):
                 color=COLOR_PRIMARY,
             )
         )
+
+    @rpg.group(name="faction", aliases=["factions", "rep"], invoke_without_command=True)
+    async def faction_command(self, ctx):
+        rows = await faction_rows(self.db, ctx.guild.id, ctx.author.id)
+        lines = []
+        for row in rows:
+            f = FACTIONS[row["faction_id"]]
+            lines.append(f"{f['icon']} **{f['name']}** · {rep_rank(row['reputation'])} · {row['reputation']:,} REP")
+        await ctx.send(embed=discord.Embed(title="🌙 ECLIPSE · FACTIONS", description="\n".join(lines), color=COLOR_PRIMARY))
+
+    @faction_command.command(name="info")
+    async def faction_info_command(self, ctx, faction_id: str = None):
+        if not faction_id or faction_id.lower() not in FACTIONS:
+            await ctx.send("Use !rpg faction or !rpg faction info <id>.")
+            return
+        f = FACTIONS[faction_id.lower()]
+        await ctx.send(embed=discord.Embed(title=f"{f['icon']} {f['name']}", description=f"{f['description']}\n\nRegions: {
+.join(f['regions'])}\nReward track: {f['rewards'][0][0]}", color=COLOR_PRIMARY))
+
+    @rpg.group(name="subclass", aliases=["subclasses"], invoke_without_command=True)
+    async def subclass_command(self, ctx):
+        player = await get_player(self.db, ctx.guild.id, ctx.author.id)
+        chosen = await get_subclass(self.db, ctx.guild.id, ctx.author.id)
+        if chosen:
+            data = SUBCLASSES[player["class_key"]][chosen["subclass_id"]]
+            await ctx.send(f"{data['icon']} **{data['name']}**\n{data['description']}\n\nBonuses: " + ", ".join(f"+{v} {k.upper()}" for k,v in data["bonus"].items()))
+            return
+        options = SUBCLASSES.get(player["class_key"], {})
+        lines = [f"{sid} · {d['icon']} **{d['name']}** · " + ", ".join(f"+{v} {k.upper()}" for k,v in d["bonus"].items()) for sid,d in options.items()]
+        await ctx.send(f"🧬 **{player['class_key'].title()} SUBCLASSES**\n\n" + "\n".join(lines) + "\n\nUnlocks at RPG level 20. Choose with !rpg subclass choose <id>.")
+
+    @subclass_command.command(name="choose")
+    async def subclass_choose_command(self, ctx, subclass_id: str = None):
+        result = await choose_subclass(self.db, ctx.guild.id, ctx.author.id, subclass_id or "")
+        if not result["ok"]:
+            await ctx.send(f"❌ {result['message']}")
+            return
+        d=result["subclass"]
+        await ctx.send(f"{d['icon']} **SUBCLASS ASCENSION**\nYou are now a **{d['name']}**.\n{d['description']}")
+
+    @rpg.group(name="housing", aliases=["house", "home"], invoke_without_command=True)
+    async def housing_command(self, ctx):
+        h=await get_house(self.db,ctx.guild.id,ctx.author.id)
+        await ctx.send(f"{h['icon']} **{h['name']}**\n{h['description']}\n\nBonuses: " + ", ".join(f"+{v} {k.upper()}" for k,v in h["bonus"].items()))
+
+    @housing_command.command(name="list")
+    async def housing_list_command(self, ctx):
+        lines=[f"{hid} · {h['icon']} **{h['name']}** · Lv.{h['level']} · {h['cost']:,} gold · " + ", ".join(f"+{v} {k.upper()}" for k,v in h["bonus"].items()) for hid,h in HOUSING.items()]
+        await ctx.send("🏠 **HOUSING CODEX**\n\n" + "\n".join(lines))
+
+    @housing_command.command(name="buy")
+    async def housing_buy_command(self, ctx, house_id: str = None):
+        result=await buy_house(self.db,ctx.guild.id,ctx.author.id,house_id or "")
+        if not result["ok"]:
+            await ctx.send(f"❌ {result['message']}"); return
+        h=result["house"]
+        await ctx.send(f"{h['icon']} **HOME ACQUIRED** · {h['name']}")
+
+    @rpg.group(name="pvp", aliases=["arena"], invoke_without_command=True)
+    async def pvp_command(self, ctx):
+        r=await pvp_rating(self.db,ctx.guild.id,ctx.author.id)
+        await ctx.send(f"⚔️ **PVP ARENA**\nRating: **{r['rating']}** · Wins: **{r['wins']}** · Losses: **{r['losses']}**\nUse !rpg pvp challenge @user.")
+
+    @pvp_command.command(name="challenge")
+    async def pvp_challenge_command(self, ctx, member: discord.Member = None):
+        if not member: await ctx.send("Use !rpg pvp challenge @user."); return
+        result=await create_pvp(self.db,ctx.guild.id,ctx.author.id,member.id)
+        if not result["ok"]: await ctx.send(f"❌ {result['message']}"); return
+        await ctx.send(f"⚔️ {member.mention}, {ctx.author.display_name} challenged you. Use !rpg pvp accept @challenger.")
+
+    @pvp_command.command(name="accept")
+    async def pvp_accept_command(self, ctx, member: discord.Member = None):
+        if not member: await ctx.send("Use !rpg pvp accept @challenger."); return
+        result=await resolve_pvp(self.db,ctx.guild.id,member.id,ctx.author.id)
+        if not result["ok"]: await ctx.send(f"❌ {result['message']}"); return
+        winner=ctx.guild.get_member(int(result["winner"])); loser=ctx.guild.get_member(int(result["loser"]))
+        await ctx.send(f"⚔️ **ARENA RESOLVED**\n🏆 Winner: {winner.mention if winner else result['winner']}\nDefeated: {loser.mention if loser else result['loser']}\n📈 +{result['gain']} / -{result['loss']} rating")
+
+    @pvp_command.command(name="rating")
+    async def pvp_rating_command(self, ctx, member: discord.Member = None):
+        target=member or ctx.author; r=await pvp_rating(self.db,ctx.guild.id,target.id)
+        await ctx.send(f"⚔️ **{target.display_name}** · {r['rating']} rating · {r['wins']}W/{r['losses']}L")
+
+    @rpg.group(name="daily", aliases=["dailyquest"], invoke_without_command=True)
+    async def daily_command(self, ctx):
+        row=await daily_quest(self.db,ctx.guild.id,ctx.author.id); q=next(x for x in DAILY_POOL if x[0]==row["quest_id"])
+        await ctx.send(f"📜 **DAILY QUEST**\n{q[1]} · **{row['progress']}/{row['goal']}**\nReward: +{q[4]} XP · +{q[5]} gold · +50 {FACTIONS[q[6]]['name']} REP\nUse !rpg daily claim when complete.")
+
+    @daily_command.command(name="claim")
+    async def daily_claim_command(self, ctx):
+        result=await claim_daily(self.db,ctx.guild.id,ctx.author.id)
+        if not result["ok"]: await ctx.send(f"❌ {result['message']}"); return
+        q=result["quest"]; await ctx.send(f"🏆 **DAILY COMPLETE** · +{q[4]} XP · +{q[5]} gold · +50 {FACTIONS[q[6]]['name']} REP")
+
+    @rpg.group(name="consumable", aliases=["consumables", "potion"], invoke_without_command=True)
+    async def consumable_command(self, ctx):
+        lines=[f"{i} · {x['icon']} **{x['name']}** · {x['cost']} gold · {x['description']}" for i,x in CONSUMABLES.items()]
+        await ctx.send("🧪 **CONSUMABLES**\n\n" + "\n".join(lines) + "\n\nBuy: !rpg consumable buy <id> · Use: !rpg consumable use <id>")
+
+    @consumable_command.command(name="buy")
+    async def consumable_buy_command(self, ctx, item_id: str = None):
+        result=await buy_consumable(self.db,ctx.guild.id,ctx.author.id,item_id or "")
+        if not result["ok"]: await ctx.send(f"❌ {result['message']}"); return
+        await ctx.send(f"🧪 Bought **{result['item']['name']}** for **{result['item']['cost']:,}** RPG gold.")
+
+    @consumable_command.command(name="use")
+    async def consumable_use_command(self, ctx, item_id: str = None):
+        result=await use_consumable(self.db,ctx.guild.id,ctx.author.id,item_id or "")
+        if not result["ok"]: await ctx.send(f"❌ {result['message']}"); return
+        await ctx.send(f"{result['item']['icon']} **{result['item']['name']}** used. New {result['item']['kind'].upper()}: **{result['new']}**.")
+
+    @rpg.command(name="enchant")
+    async def enchant_command(self, ctx, item_id: str = None, enchant_id: str = None):
+        if not item_id or not enchant_id: await ctx.send("Use !rpg enchant <equipped_item> <flame|ward|arcane|swift>."); return
+        result=await enchant(self.db,ctx.guild.id,ctx.author.id,item_id,enchant_id)
+        if not result["ok"]: await ctx.send(f"❌ {result['message']}"); return
+        await ctx.send(f"✨ **ENCHANTED** · {result['enchant']['name']} enchant applied to {item_id}.")
 
     @rpg.command(name="npc", aliases=["npcs", "talk"])
     async def npc_command(self, ctx, npc_id: str = None):
