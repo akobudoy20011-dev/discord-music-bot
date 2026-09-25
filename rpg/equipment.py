@@ -136,14 +136,23 @@ async def equipment_stats(db, guild_id, user_id):
             totals[key] += int(round(float(item.get(key, 0)) * scale))
 
     # Endgame affixes are folded into the same aggregate used by combat/profile.
-    from .expansion import get_house, affix_stats
+    from .expansion import get_house, affix_stats, set_bonus_stats, ascension_bonuses
     affixes = await affix_stats(db, guild_id, user_id)
     for key, value in affixes.items():
         if key in totals:
             totals[key] += int(value)
 
+    set_bonuses = await set_bonus_stats(db, guild_id, user_id)
+    for key, value in set_bonuses.items():
+        if key in totals:
+            totals[key] += int(value)
+
+    ascension = await ascension_bonuses(db, guild_id, user_id)
+    for key, value in ascension.items():
+        if key in totals:
+            totals[key] += int(value)
+
     # Housing bonuses are folded into the same aggregate used by combat/profile.
-    from .expansion import get_house
     house = await get_house(db, guild_id, user_id)
     for key, value in house.get("bonus", {}).items():
         if key in totals:
@@ -151,7 +160,11 @@ async def equipment_stats(db, guild_id, user_id):
 
     # Enchantments are additive per enchantment level.
     cur = await db._conn.execute(
-        "SELECT enchant_id, level FROM rpg_enchants WHERE guild_id=? AND user_id=?",
+        """SELECT en.enchant_id, en.level
+           FROM rpg_enchants en
+           JOIN rpg_equipment eq
+             ON eq.guild_id=en.guild_id AND eq.user_id=en.user_id AND eq.item_id=en.item_id
+           WHERE en.guild_id=? AND en.user_id=?""",
         (str(guild_id), str(user_id)),
     )
     enchant_values = {
