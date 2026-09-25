@@ -67,7 +67,7 @@ async def reset_arcade_match(self, match_id):
     return dict(row) if row else False
 
 
-async def resolve_arcade_match(self, match_id, winner_id):
+async def resolve_arcade_match(self, match_id, winner_id, guild_id=None):
     cur = await self._conn.execute(
         """
         SELECT m.*, t.guild_id, t.game_id, t.name AS tournament_name
@@ -82,6 +82,9 @@ async def resolve_arcade_match(self, match_id, winner_id):
         return False, None
 
     match = dict(row)
+    if guild_id is not None and str(match["guild_id"]) != str(guild_id):
+        return False, None
+
     winner_id = str(winner_id)
     if match["status"] not in ("ready", "playing"):
         return False, None
