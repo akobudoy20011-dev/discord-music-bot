@@ -392,7 +392,12 @@ class RPG(commands.Cog):
             await ctx.send(f"⚗️ **{result['town']['name']} ALCHEMIST**\nYour MP has been restored. · **-{result['cost']} gold**")
     @rpg.command(name="rest",aliases=["heal"])
     async def rest_command(self,ctx):
-        player=await rest(self.db,ctx.guild.id,ctx.author.id); await ctx.send(f"🪽 **{ctx.author.display_name}** rests beneath the ECLIPSE.\n❤️ HP restored to **{player['hp']}/{player['max_hp']}** · 💠 MP restored to **{player['mp']}/{player['max_mp']}**")
+        result=await rest(self.db,ctx.guild.id,ctx.author.id)
+        if not result.get("hp"):
+            if result.get("message"):
+                await ctx.send(f"❌ {result['message']}")
+                return
+        await ctx.send(f"🪽 **{ctx.author.display_name}** rests beneath the ECLIPSE.\n❤️ HP restored to **{result['hp']}** · 💠 MP restored to **{result['mp']}**")
 
     @rpg.command(name="battle", aliases=["fight"])
     async def battle_command(self, ctx):
