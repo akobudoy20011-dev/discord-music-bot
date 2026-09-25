@@ -3061,10 +3061,18 @@ class Database:
         await self._conn.execute(
             "INSERT INTO rpg_specials "
             "(guild_id,user_id,special_id,unlocked,unlocked_at,source) VALUES (?,?,?,?,?,?) "
-            "ON CONFLICT(guild_id,user_id,special_id) DO UPDATE SET unlocked=1",
+            "ON CONFLICT(guild_id,user_id,special_id) DO UPDATE SET unlocked=1, unlocked_at=excluded.unlocked_at, source=excluded.source",
             (str(guild_id), str(user_id), str(special_id), 1, time.time(), str(source))
         )
         await self._conn.commit()
+
+    async def get_rpg_special(self, guild_id, user_id, special_id):
+        cur = await self._conn.execute(
+            "SELECT * FROM rpg_specials WHERE guild_id=? AND user_id=? AND special_id=?",
+            (str(guild_id), str(user_id), str(special_id))
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
 
     async def has_rpg_special(self, guild_id, user_id, special_id):
         cur = await self._conn.execute(
@@ -3072,6 +3080,20 @@ class Database:
             (str(guild_id), str(user_id), str(special_id))
         )
         return await cur.fetchone() is not None
+
+    async def is_rpg_special_revoked(self, guild_id, user_id, special_id):
+        row = await self.get_rpg_special(guild_id, user_id, special_id)
+        return bool(row and int(row["unlocked"]) == 0 and row.get("source") == "admin_revoke")
+
+    async def revoke_rpg_special(self, guild_id, user_id, special_id):
+        await self._conn.execute(
+            "INSERT INTO rpg_specials "
+            "(guild_id,user_id,special_id,unlocked,unlocked_at,source) VALUES (?,?,?,?,?,?) "
+            "ON CONFLICT(guild_id,user_id,special_id) DO UPDATE SET unlocked=0, unlocked_at=excluded.unlocked_at, source=excluded.source",
+            (str(guild_id), str(user_id), str(special_id), 0, time.time(), "admin_revoke")
+        )
+        await self._conn.commit()
+        return True
 
     async def get_rpg_companions(self, guild_id, user_id):
         cur = await self._conn.execute(
