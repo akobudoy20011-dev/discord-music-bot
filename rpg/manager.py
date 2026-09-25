@@ -30,6 +30,13 @@ async def choose_class(db, guild_id, user_id, key):
         return None, await get_player(db, guild_id, user_id)
     stats = chosen["stats"]
     player = await get_player(db, guild_id, user_id)
+    if str(player.get("class_key") or "").lower() != key:
+        # Class-specific active skills must not leak between classes.
+        await db._conn.execute(
+            "DELETE FROM rpg_skills WHERE guild_id=? AND user_id=?",
+            (str(guild_id), str(user_id)),
+        )
+        await db._conn.commit()
     player = await db.update_rpg_player(guild_id,user_id,class_key=key,region=player.get("region") or START_REGION,max_hp=stats["max_hp"],hp=stats["max_hp"],max_mp=stats["max_mp"],mp=stats["max_mp"],strength=stats["strength"],defense=stats["defense"],magic=stats["magic"],agility=stats["agility"])
     return chosen, player
 
