@@ -96,8 +96,15 @@ async def gather(db, guild_id, user_id, skill_id):
         await daily_progress(db, guild_id, user_id, "gather", amount)
     except Exception:
         pass
+    achievements = []
+    try:
+        from .achievements import check
+        achievements = await check(db, guild_id, user_id)
+    except Exception:
+        achievements = []
     return {"ok":True,"skill":skill,"item_id":item_id,"amount":amount,"rarity":rarity,
-            "level":level,"xp":xp,"gained_xp":gained_xp,"region":region}
+            "level":level,"xp":xp,"gained_xp":gained_xp,"region":region,
+            "achievements":achievements}
 
 async def collections(db, guild_id, user_id):
     await _schema(db)
