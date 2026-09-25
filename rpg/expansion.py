@@ -371,3 +371,120 @@ async def enchant(db,guild_id,user_id,item_id,enchant_id):
     await db._conn.execute("INSERT INTO rpg_enchants VALUES(?,?,?,?,1) ON CONFLICT(guild_id,user_id,item_id,enchant_id) DO UPDATE SET level=level+1",(str(guild_id),str(user_id),str(item_id).lower(),str(enchant_id).lower()))
     await db._conn.commit()
     return {"ok":True,"enchant":e}
+
+
+# ------------------------- ENDGAME LAYER -------------------------
+RARITY_ORDER={"common":0,"uncommon":1,"rare":2,"epic":3,"legendary":4,"relic":5,"mythic":6,"celestial":7}
+AFFIXES={
+    "might":("strength",2,5),"bulwark":("defense",2,5),"arcane":("magic",2,5),"swiftness":("agility",2,5),
+    "vitality":("max_hp",8,20),"manaflow":("max_mp",5,15),
+}
+SET_BONUSES={
+    "eclipse":{"pieces":2,"bonus":{"strength":5,"magic":5},"name":"Eclipse Oath"},
+    "starfall":{"pieces":3,"bonus":{"magic":10,"max_mp":20},"name":"Starfall Constellation"},
+    "sovereign":{"pieces":4,"bonus":{"strength":10,"defense":10,"magic":10,"agility":10},"name":"Sovereign's Dominion"},
+}
+RAID_TIERS={
+    "mythic":{"min_level":20,"hp":2500,"attack":90,"phases":3,"reward_xp":2500,"reward_gold":15000},
+    "celestial":{"min_level":30,"hp":6000,"attack":150,"phases":4,"reward_xp":7500,"reward_gold":50000},
+}
+SEASON_LENGTH=28
+ASCENSION_MAX=10
+
+async def _endgame_schema(db):
+    await db._conn.executescript("""
+    CREATE TABLE IF NOT EXISTS rpg_affixes(guild_id TEXT NOT NULL,user_id TEXT NOT NULL,item_id TEXT NOT NULL,affix_id TEXT NOT NULL,value INTEGER NOT NULL,PRIMARY KEY(guild_id,user_id,item_id,affix_id));
+    CREATE TABLE IF NOT EXISTS rpg_raid_runs(guild_id TEXT NOT NULL,user_id TEXT NOT NULL,raid_id TEXT NOT NULL,phase INTEGER NOT NULL DEFAULT 1,hp INTEGER NOT NULL,started_at REAL NOT NULL,status TEXT NOT NULL DEFAULT 'active',PRIMARY KEY(guild_id,user_id,raid_id));
+    CREATE TABLE IF NOT EXISTS rpg_ascensions(guild_id TEXT NOT NULL,user_id TEXT NOT NULL,ascension INTEGER NOT NULL DEFAULT 0,points INTEGER NOT NULL DEFAULT 0,claimed INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(guild_id,user_id));
+    CREATE TABLE IF NOT EXISTS rpg_seasons(guild_id TEXT PRIMARY KEY,season INTEGER NOT NULL DEFAULT 1,started_at REAL NOT NULL,ends_at REAL NOT NULL);
+    CREATE TABLE IF NOT EXISTS rpg_season_stats(guild_id TEXT NOT NULL,season INTEGER NOT NULL,user_id TEXT NOT NULL,points INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(guild_id,season,user_id));
+    """)
+    await db._conn.commit()
+
+def roll_affixes(item_id, count=1):
+    item=ITEMS.get(str(item_id).lower(),{})
+    rarity=RARITY_ORDER.get(item.get("rarity","common"),0)
+    count=max(0,min(int(count),1+rarity//2))
+    pool=list(AFFIXES)
+    random.shuffle(pool)
+    return [(a,random.randint(AFFIXES[a][1],AFFIXES[a][2])) for a in pool[:count]]
+
+async def assign_affixes(db,guild_id,user_id,item_id):
+    await _endgame_schema(db)
+    item=ITEMS.get(str(item_id).lower())
+    if not item:return []
+    affixes=roll_affixes(item_id)
+    for aid,value in affixes:
+        await db._conn.execute("INSERT OR REPLACE INTO rpg_affixes VALUES(?,?,?,?,?)",(str(guild_id),str(user_id),str(item_id),aid,value))
+    await db._conn.commit()
+    return affixes
+
+async def affix_stats(db,guild_id,user_id):
+    await _endgame_schema(db)
+    cur=await db._conn.execute("SELECT affix_id,value FROM rpg_affixes WHERE guild_id=? AND user_id=?",(str(guild_id),str(user_id)))
+    totals={k:0 for k in ("strength","defense","magic","agility","max_hp","max_mp")}
+    for row in await cur.fetchall():
+        a=AFFIXES.get(row["affix_id"])
+        if a:totals[a[0]]+=int(row["value"])
+    return totals
+
+async def raid_status(db,guild_id,user_id,raid_id):
+    await _endgame_schema(db)
+    raid=RAID_TIERS.get(str(raid_id).lower())
+    if not raid:return {"ok":False,"message":"Unknown raid."}
+    player=await db.get_rpg_player(guild_id,user_id)
+    if int(player["level"])<raid["min_level"]:return {"ok":False,"message":f"You need level {raid['min_level']}."}
+    cur=await db._conn.execute("SELECT * FROM rpg_raid_runs WHERE guild_id=? AND user_id=? AND raid_id=?",(str(guild_id),str(user_id),str(raid_id).lower()))
+    row=await cur.fetchone()
+    return {"ok":True,"raid":raid,"run":dict(row) if row else None}
+
+async def raid_start(db,guild_id,user_id,raid_id):
+    info=await raid_status(db,guild_id,user_id,raid_id)
+    if not info["ok"]:return info
+    if info["run"] and info["run"]["status"]=="active":return {"ok":False,"message":"You already have an active raid run."}
+    raid_id=str(raid_id).lower(); raid=RAID_TIERS[raid_id]
+    await db._conn.execute("INSERT OR REPLACE INTO rpg_raid_runs VALUES(?,?,?,?,?,?,?)",(str(guild_id),str(user_id),raid_id,1,raid["hp"],time.time(),"active")); await db._conn.commit()
+    return {"ok":True,"raid":raid}
+
+async def raid_advance(db,guild_id,user_id,raid_id):
+    info=await raid_status(db,guild_id,user_id,raid_id)
+    if not info["ok"]:return info
+    run=info["run"]
+    if not run:return {"ok":False,"message":"Start the raid first."}
+    raid=info["raid"]; damage=random.randint(max(10,int(raid["attack"]*0.8)),max(20,int(raid["attack"]*1.4)))+int((await db.get_rpg_player(guild_id,user_id))["level"])*8
+    hp=max(0,int(run["hp"])-damage)
+    phase=int(run["phase"])
+    if hp==0 and phase<int(raid["phases"]): phase+=1; hp=raid["hp"]*(raid["phases"]-phase+1)//raid["phases"]
+    status="cleared" if hp==0 else "active"
+    await db._conn.execute("UPDATE rpg_raid_runs SET phase=?,hp=?,status=? WHERE guild_id=? AND user_id=? AND raid_id=?",(phase,hp,status,str(guild_id),str(user_id),str(raid_id).lower())); await db._conn.commit()
+    if status=="cleared":
+        await db.add_rpg_xp(guild_id,user_id,int(raid["reward_xp"])); await db.update_rpg_player(guild_id,user_id,gold=int((await db.get_rpg_player(guild_id,user_id))["gold"])+raid["reward_gold"]));
+    return {"ok":True,"damage":damage,"hp":hp,"phase":phase,"status":status,"reward":raid if status=="cleared" else None}
+
+async def ascension(db,guild_id,user_id):
+    await _endgame_schema(db)
+    cur=await db._conn.execute("SELECT * FROM rpg_ascensions WHERE guild_id=? AND user_id=?",(str(guild_id),str(user_id))); row=await cur.fetchone()
+    if not row:
+        await db._conn.execute("INSERT INTO rpg_ascensions(guild_id,user_id) VALUES(?,?)",(str(guild_id),str(user_id))); await db._conn.commit(); return {"ascension":0,"points":0}
+    return dict(row)
+
+async def ascend(db,guild_id,user_id):
+    state=await ascension(db,guild_id,user_id); player=await db.get_rpg_player(guild_id,user_id)
+    if state["ascension"]>=ASCENSION_MAX:return {"ok":False,"message":"Maximum ascension reached."}
+    if int(player["level"])<50:return {"ok":False,"message":"Ascension requires RPG level 50."}
+    new=int(state["ascension"])+1
+    await db._conn.execute("UPDATE rpg_ascensions SET ascension=?,points=points+5 WHERE guild_id=? AND user_id=?",(new,str(guild_id),str(user_id))); await db._conn.commit()
+    return {"ok":True,"ascension":new,"points":5}
+
+async def season_status(db,guild_id,user_id):
+    await _endgame_schema(db); now=time.time()
+    cur=await db._conn.execute("SELECT * FROM rpg_seasons WHERE guild_id=?",(str(guild_id),)); row=await cur.fetchone()
+    if not row:
+        await db._conn.execute("INSERT INTO rpg_seasons VALUES(?,?,?,?)",(str(guild_id),1,now,now+SEASON_LENGTH*86400)); await db._conn.commit(); row={"season":1,"started_at":now,"ends_at":now+SEASON_LENGTH*86400}
+    cur=await db._conn.execute("SELECT user_id,points FROM rpg_season_stats WHERE guild_id=? AND season=? ORDER BY points DESC LIMIT 10",(str(guild_id),int(row["season"]))); leaderboard=[dict(x) for x in await cur.fetchall()]
+    return {"season":int(row["season"]),"ends_at":float(row["ends_at"]),"leaderboard":leaderboard}
+
+async def season_points(db,guild_id,user_id,points):
+    s=await season_status(db,guild_id,user_id)
+    await db._conn.execute("INSERT INTO rpg_season_stats VALUES(?,?,?,?) ON CONFLICT(guild_id,season,user_id) DO UPDATE SET points=points+excluded.points",(str(guild_id),s["season"],str(user_id),int(points))); await db._conn.commit()
+    return s["season"]
