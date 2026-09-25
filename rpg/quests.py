@@ -43,6 +43,12 @@ async def ensure_quests(db,guild_id,user_id):
     return await db.get_rpg_quests(guild_id,user_id)
 
 async def progress(db,guild_id,user_id,kind,amount=1,enemy_id=None):
+    # Feed the separate daily objective layer without replacing the core quest system.
+    try:
+        from .expansion import daily_progress
+        await daily_progress(db, guild_id, user_id, kind, amount)
+    except Exception:
+        pass
     quests=await ensure_quests(db,guild_id,user_id)
     row_map={r["quest_id"]:r for r in quests}
     player=await db.get_rpg_player(guild_id,user_id)
