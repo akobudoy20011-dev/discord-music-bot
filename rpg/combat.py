@@ -113,6 +113,9 @@ async def _victory_rewards(db, guild_id, user_id, battle, player, damage):
     xp_reward = ENEMIES_REWARD(battle["enemy_id"], "xp")
     gold_reward = ENEMIES_REWARD(battle["enemy_id"], "gold")
     old, new, player = await db.add_rpg_xp(guild_id, user_id, xp_reward)
+    level_count = max(0, int(new) - int(old))
+    hp_gain = level_count * 12
+    mp_gain = level_count * 4
     player = await db.update_rpg_player(
         guild_id, user_id, gold=player["gold"] + gold_reward
     )
@@ -161,12 +164,21 @@ async def _victory_rewards(db, guild_id, user_id, battle, player, damage):
     return {
         "ok": True,
         "victory": True,
+        "defeated": True,
+        "status": "defeated",
+        "enemy_id": battle["enemy_id"],
+        "enemy_name": battle["enemy_name"],
         "damage": damage,
         "xp": xp_reward,
         "gold": gold_reward,
         "loot": loot,
         "loot_name": describe(loot) if loot else None,
         "level_up": new > old,
+        "old_level": old,
+        "new_level": new,
+        "level_count": level_count,
+        "hp_gain": hp_gain,
+        "mp_gain": mp_gain,
         "player": player,
     }
 
