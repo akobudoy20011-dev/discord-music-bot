@@ -44,16 +44,23 @@ async def _world_event(db,guild_id,world):
     return event
 
 async def explore(db, guild_id, user_id):
-    try:
-        from .expansion import daily_progress
-        await daily_progress(db, guild_id, user_id, "explore", 1)
-    except Exception:
-        pass
     player = await db.get_rpg_player(guild_id,user_id)
     now = time.time()
     travel_until = float(player.get("travel_until") or 0)
     if travel_until > now:
         return {"ok":False,"message":f"You cannot explore while traveling. **{travel_until-now:.0f}s** remain."}
+    try:
+        from .dungeons import _get_run
+        dungeon_run = await _get_run(db, guild_id, user_id)
+        if dungeon_run and dungeon_run.get("status") == "active":
+            return {"ok":False,"message":"You are inside an active dungeon. Advance or retreat before exploring."}
+    except Exception:
+        pass
+    try:
+        from .expansion import daily_progress
+        await daily_progress(db, guild_id, user_id, "explore", 1)
+    except Exception:
+        pass
 
     region_id = player.get("region") or START_REGION
     region = get_region(region_id) or REGIONS[START_REGION]
