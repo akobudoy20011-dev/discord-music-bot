@@ -56,6 +56,7 @@ COGS = [
     "cogs.leveling",
     "cogs.economy",
     "cogs.games",
+    "cogs.trivia",
     "cogs.arcade",
     "cogs.music",
     "cogs.watchdog",
