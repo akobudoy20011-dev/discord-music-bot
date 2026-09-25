@@ -23,6 +23,8 @@ try:
 except ImportError:
     HAS_GENAI = False
 
+MAX_BET = 1_000_000
+
 TRIVIA_QUESTIONS = [
     {
         "q": "Which element has the chemical symbol 'O'?",
@@ -524,6 +526,9 @@ class Games(commands.Cog):
         if bet < 0:
             await ctx.send("❌ Bet cannot be negative.")
             return
+        if bet > MAX_BET:
+            await ctx.send(f"❌ Maximum bet is **{MAX_BET:,} coins**.")
+            return
 
         if bet > 0:
             user = await self.db.get_user(ctx.guild.id, ctx.author.id)
@@ -608,8 +613,14 @@ class Games(commands.Cog):
         else:
             bet = arg1
 
+        if sides < 2:
+            await ctx.send("❌ Dice sides must be at least 2.")
+            return
         if bet <= 0:
-            await ctx.send("❌ Bet/Sides must be positive.")
+            await ctx.send("❌ Bet must be positive.")
+            return
+        if bet > MAX_BET:
+            await ctx.send(f"❌ Maximum bet is **{MAX_BET:,} coins**.")
             return
 
         user = await self.db.get_user(ctx.guild.id, ctx.author.id)
